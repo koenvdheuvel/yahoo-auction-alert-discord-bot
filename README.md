@@ -1,6 +1,10 @@
-# Yahoo Auction and Mercari Discord Bot
+# Yahoo Auction, Mercari, Surugaya Discord Bot
 
-This project is a Discord bot designed to find newly posted articles on Yahoo Auction and Mercari and alert the user on a Discord server. The bot employs an unofficial Google Translator API to translate the article names from Japanese, which can occasionally result in instability.
+This project is a Discord bot designed to find second hand items on Yahoo Auction, Mercari and Surugaya and alert the user on a Discord server.
+
+It's a rewrite from the original code by vlourme which you can find here https://github.com/vlourme/yahoo-auction-alert-discord-bot
+
+Currently this bot is very opinionated to my needs, but I'm planning to make it more configurable in the future.
 
 ## Installation
 
@@ -8,10 +12,10 @@ Before you start the installation process, ensure you have Python installed on y
 
 Follow these steps to install the project:
 
-1. Clone this repository to your local machine using `https://github.com/vlourme/yahoo-auction-alert-discord-bot.git`.
+1. Clone this repository to your local machine using `https://github.com/koenvdheuvel/yahoo-auction-alert-discord-bot.git`.
 
 ```bash
-git clone https://github.com/vlourme/yahoo-auction-alert-discord-bot.git
+git clone https://github.com/koenvdheuvel/yahoo-auction-alert-discord-bot.git
 ```
 
 2. Navigate to the project directory.
@@ -32,9 +36,10 @@ Create a `.env` file in the root directory of the project. This file will store 
 
 ```bash
 BOT_TOKEN=your-discord-token
-CHECK_INTERVAL=60
+CHECK_INTERVAL=1800
 ENABLE_YAHOO_AUCTION=true
 ENABLE_MERCARI=true
+ENABLE_SURUGAYA=true
 ```
 
 Replace `your-discord-token` with the actual Discord bot token.
@@ -51,11 +56,8 @@ The bot should now be running and scanning Yahoo Auction and Mercari for new art
 
 ## Important Notes
 
-1. The bot depends on an unofficial Google Translator API to translate the names of the articles from Japanese. Due to the unofficial nature of this API, it can be unstable at times. We are working on a more stable solution and appreciate your patience in the interim.
-
-2. This bot also relies on ZenMarket unofficial API to fetch items, any API change could break this bot.
-
-3. Make sure to keep your Discord token secure and never share it with anyone.
+1. This bot also relies on the https://zenmarket.jp and https://fromjapan.co.jp unofficial API's to fetch items, any API change could break this bot.
+2. Make sure to keep your Discord token secure and never share it with anyone.
 
 ## Contributing
 
@@ -68,5 +70,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contact
 
 If you encounter any issues or have questions, please open an issue on this GitHub repository. We will try our best to assist you.
-
-This readme was written (mostly) by ChatGPT because I'm lazy.

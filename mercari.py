@@ -1,45 +1,47 @@
-import requests, json
+from dataclasses import dataclass
 from logging import info
-from xml.dom.minidom import parseString
-from lightbulb import BotApp
-from hikari import Embed, Color
+from hikari import Color
+import math
+from storechecker import AlertChecker, AbstractItem
 
+@dataclass
+class MercariItem(AbstractItem):
+    id: str
+    stock: int = 0
+    price: int = 0
+    title: str = ''
+    image_url: str = ''
+    
+    @property
+    def url(self) -> str:
+        return f"https://jp.mercari.com/item/{self.id}"
 
-async def check_mercari(bot: BotApp, alert: dict) -> None:
-    res = requests.post(
-        f"https://zenmarket.jp/fr/mercari.aspx/getProducts?q={alert['name']}&sort=new&order=desc",
-        json={"page": 1},
-    )
+class MercariChecker(AlertChecker):
+    def get_embed_color(self) -> Color:
+        return Color(0xFF0000) # Red
+    
+    async def fetch_items(self, session) -> list:
+        async def fetch(url):
+            async with session.get(url, headers=self.headers) as response:
+                return await response.json()
+        
+        content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/mercari/search?keyword={self.alert['name']}&sort=score&hits=24&page=1")
+        if not content["items"]:
+            return []
+        
+        page_count = math.ceil(content["count"] / 24)
+        if page_count > 1:
+            for page in range(2, page_count + 1):
+                page_content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/mercari/search?keyword={self.alert['name']}&sort=score&hits=24&page={page}")
+                content["items"].extend(page_content["items"])
 
-    content = json.loads(res.json()["d"])
+        return content["items"]
 
-    for item in content["Items"]:
-        if bot.d.synced.find_one(name=item["ItemCode"]):
-            info("[mercari] already synced — up to date")
-            continue
-
-        embed = Embed()
-        embed.color = Color(0x09B1BA)
-        embed.title = item["ClearTitle"] or "Unknown"
-
-        if item["ItemCode"]:
-            embed.url = (
-                "https://zenmarket.jp/fr/mercariproduct.aspx?itemCode="
-                + item["ItemCode"]
-            )
-
-        if item["PreviewImageUrl"]:
-            embed.set_image(item["PreviewImageUrl"])
-
-        if item["PriceTextControl"]:
-            try:
-                dom = parseString(item["PriceTextControl"])
-                price = dom.getElementsByTagName("span")[0].getAttribute("data-eur")
-                embed.add_field("Price", price)
-            except:
-                pass
-
-        embed.set_footer(f"Source: Mercari — #{item['ItemCode']}")
-
-        await bot.rest.create_message(alert["channel_id"], embed=embed)
-        bot.d.synced.insert({"name": item["ItemCode"]})
+    async def normalize_item(self, data: dict) -> AbstractItem:
+        return MercariItem(
+            id=data.get('id'),
+            stock=int(data.get('stock')),
+            price=int(data.get('price')),
+            title=data.get('title', 'Unknown Title'),
+            image_url=data.get('imageUrl')
+        )
