@@ -1,9 +1,11 @@
 from dataclasses import dataclass
-import aiohttp
+from datetime import datetime
 import json
-from bs4 import BeautifulSoup
 from logging import info
 from hikari import Color
+import math
+
+import pytz
 
 from storechecker import AlertChecker, AbstractItem
 
@@ -15,7 +17,8 @@ class YahooAuctionItem(AbstractItem):
     buyout_price: int = 0
     title: str = ''
     image_url: str = ''
-    
+    end_time: datetime = None
+
     @property
     def url(self) -> str:
         return f"https://buyee.jp/item/yahoo/auction/{self.id}"
@@ -25,38 +28,33 @@ class YahooAuctionsChecker(AlertChecker):
         return Color(0xFFA500) # Orange
     
     async def fetch_items(self, session) -> list:
-        url = f"https://zenmarket.jp/en/yahoo.aspx/getProducts?q={self.alert['name']}&sort=new&order=desc"
-        async with session.post(url, json={"page": 1}, headers=self.headers) as response:
-            response_json = await response.json()
-            content = json.loads(response_json["d"])
-            if content['Items']:
-                return content['Items']
+        async def fetch(url):
+            async with session.get(url, headers=self.headers) as response:
+                return await response.json()
+        
+        content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/yahooauction/search?keyword={self.alert['name']}&sort=score&hits=20&page=1")
+        if not content["items"]:
             return []
+        
+        page_count = math.ceil(content["count"] / 20)
+        if page_count > 1:
+            for page in range(2, page_count + 1):
+                page_content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/yahooauction/search?keyword={self.alert['name']}&sort=score&hits=20&page={page}")
+                content["items"].extend(page_content["items"])
+
+        return content["items"]
 
     async def normalize_item(self, data: dict) -> AbstractItem:
-        price = 0
-        buyout_price = 0
-
-        if data["PriceTextControl"]:
-            soup = BeautifulSoup(data.get('PriceTextControl'), 'lxml')
-            price = soup.find("span", {"data-jpy": True}).get("data-jpy")
-        
-            if price:
-                price = price[1:] # Remove the currency symbol
-                price = int(price.replace(",", ""))
-            
-        if data["PriceBidOrBuyTextControl"]:
-            soup = BeautifulSoup(data.get('PriceBidOrBuyTextControl'), 'lxml')
-            buyout_price = soup.find("span", {"data-jpy": True}).get("data-jpy")
-
-            if buyout_price:
-                buyout_price = buyout_price[1:] # Remove the currency symbol
-                buyout_price = int(buyout_price.replace(",", ""))
+        auction_end_time = datetime.strptime(data.get('endTime'), '%Y/%m/%d %H:%M:%S')
+        japan_timezone = pytz.timezone('Asia/Tokyo')
+        end_time_utc = japan_timezone.localize(auction_end_time).astimezone(pytz.utc)
 
         return YahooAuctionItem(
-            id=data.get('AuctionID'),
-            image_url=data.get('Thumbnail'),
-            title=data.get('Title', 'Unknown Title'),
-            price=price,
-            buyout_price=buyout_price
+            id=data.get('id'),
+            stock=int(data.get('stock')),
+            image_url=data.get('imageUrl'),
+            end_time=end_time_utc,
+            title=data.get('title', 'Unknown Title'),
+            price=int(data.get('price')),
+            buyout_price=int(data.get('buyItNowPrice'))
         )

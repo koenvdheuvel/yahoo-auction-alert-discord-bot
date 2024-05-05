@@ -15,6 +15,7 @@ class AbstractItem(ABC):
     title: str = ''
     image_url: str = ''
     message_id: int = 0
+    end_time: datetime = None
     muted: bool = False
 
 @dataclass
@@ -27,6 +28,7 @@ class StoredItem(AbstractItem):
     image_url: str = ''
     url: str = ''
     message_id: int = 0
+    end_time: datetime = None
     muted: bool = False
         
 class AlertChecker(ABC):
@@ -64,7 +66,7 @@ class AlertChecker(ABC):
         
         price = stored_item.get('price')
         if price == None:
-            price = 0;
+            price = 0
         
         stock = stored_item.get('stock')
         if stock == None:
@@ -145,6 +147,7 @@ class AlertChecker(ABC):
                 "price": item.price,
                 "buyout_price": item.buyout_price,
                 "message_id": message_id,
+                "end_time": item.end_time,
                 "updated_at": datetime.now(),
             }, 'name')
 
@@ -157,6 +160,7 @@ class AlertChecker(ABC):
                 "stock": item.stock,
                 "price": item.price,
                 "buyout_price": item.buyout_price,
+                "end_time": item.end_time,
                 "message_id": message_id,
                 "found_at": datetime.now(),
             }
@@ -185,6 +189,9 @@ class AlertChecker(ABC):
 
         if item.stock > 1:
             embed.add_field("Stock", item.stock, inline=True)
+        
+        if item.end_time is not None:
+            embed.add_field("End Time:", f"<t:{int(round(item.end_time.timestamp()))}:R>")
 
         embed.set_footer(f"Source: {self.__class__.__name__} — #{item.id} - {self.alert['name']}")
         return embed
