@@ -5,8 +5,8 @@ on:
     branches: [master]
 
 env:
-  APP_NAME: yahoo-auction-discord-alert-bot
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/yahoo-auction-discord-alert-bot:${{ github.sha }}
+  APP_NAME: yahoo-auction-alert-discord-bot
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/yahoo-auction-alert-discord-bot:${{ github.sha }}
 
 jobs:
   build:
@@ -68,5 +68,5 @@ jobs:
             docker rm "$APP" || true
 
             echo "Running new container"
-            docker run -d --name $APP -v /home/local/yahoo-auction-alert-discord-bot/alerts.db:/app/alerts.db -v /home/local/yahoo-auction-alert-discord-bot/.env:/app/.env $IMAGE
+            docker run -d --name $APP -v ~/$APP/alerts.db:/app/alerts.db -v ~/$APP/.env:/app/.env $IMAGE
           ENDSSH
