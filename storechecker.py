@@ -1,14 +1,13 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from models import Alert, Blacklist, Item, Notification
+from models import Alert, Item, Notification
 from typing import Optional
-import peewee
 from repositories import ItemRepository
 import aiohttp
 from logging import info, warning
 from lightbulb import BotApp
-from hikari import Embed, Color, Message
+from hikari import Embed, Color
 
 @dataclass
 class AbstractItem(ABC):

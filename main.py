@@ -2,11 +2,10 @@ import os
 import dotenv
 import lightbulb
 import hikari
-import dataset
 import asyncio
 import importlib
 import sys
-from models import create_tables, Alert, Blacklist, Notification, Item
+from models import create_tables, Alert
 from logging import info
 from yahoo import YahooAuctionsChecker
 from mercari import MercariChecker
