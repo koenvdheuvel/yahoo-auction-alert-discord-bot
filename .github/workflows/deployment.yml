@@ -2,7 +2,7 @@ name: Docker Build and Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [master]
 
 env:
   APP_NAME: yahoo-auction-discord-alert-bot
