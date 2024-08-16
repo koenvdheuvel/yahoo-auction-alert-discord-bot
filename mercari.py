@@ -11,7 +11,8 @@ class MercariItem(AbstractItem):
     price: int = 0
     title: str = ''
     image_url: str = ''
-    
+    end_time: None
+
     @property
     def url(self) -> str:
         return f"https://jp.mercari.com/item/{self.id}"

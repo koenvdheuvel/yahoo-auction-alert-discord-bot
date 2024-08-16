@@ -13,6 +13,7 @@ class SurugayaItem(AbstractItem):
     price: int = 0
     title: str = ''
     image_url: str = ''
+    end_time: None
 
     @property
     def url(self) -> str:

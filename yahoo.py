@@ -2,9 +2,11 @@ from dataclasses import dataclass
 import aiohttp
 import json 
 import math
-from bs4 import BeautifulSoup
 from logging import info, error
 from hikari import Color
+import math
+
+import pytz
 
 from storechecker import AlertChecker, AbstractItem
 
@@ -16,7 +18,8 @@ class YahooAuctionItem(AbstractItem):
     buyout_price: int = 0
     title: str = ''
     image_url: str = ''
-    
+    end_time: datetime = None
+
     @property
     def url(self) -> str:
         return f"https://buyee.jp/item/yahoo/auction/{self.id}"

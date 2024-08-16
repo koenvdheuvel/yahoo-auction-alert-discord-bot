@@ -19,6 +19,7 @@ class AbstractItem(ABC):
     title: str = ''
     image_url: str = ''
     message_id: int = 0
+    end_time: datetime = None
     muted: bool = False
 
 @dataclass
@@ -31,6 +32,7 @@ class StoredItem(AbstractItem):
     image_url: str = ''
     url: str = ''
     message_id: int = 0
+    end_time: datetime = None
     muted: bool = False
     blacklisted: bool = False
         
@@ -177,6 +179,9 @@ class AlertChecker(ABC):
 
         if item.stock > 1:
             embed.add_field("Stock", item.stock, inline=True)
+        
+        if item.end_time is not None:
+            embed.add_field("End Time:", f"<t:{int(round(item.end_time.timestamp()))}:R>")
 
         embed.set_footer(f"Source: {self.__class__.__name__} — #{item.id} - {self.search_query}")
         return embed
