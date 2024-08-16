@@ -86,7 +86,7 @@ def load_commands(bot):
 async def on_ready(event: hikari.StartingEvent) -> None:
     info("Starting event loop...")
     asyncio.create_task(check_alerts())
-    create_tables()
+    
         
 processor = HikariEventProcessor()
 @bot.listen(hikari.Event)
@@ -94,6 +94,7 @@ async def on_event(event: hikari.Event):
     await processor.process_event(event, bot)
 
 if __name__ == "__main__":
+    create_tables()
     load_commands(bot)
     bot.run(
         propagate_interrupts=True,      # Any OS interrupts get rethrown as errors.
