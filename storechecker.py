@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from models import Alert, Blacklist, Item, Notification
+from typing import Optional
+import peewee
+from repositories import ItemRepository
 import aiohttp
 from logging import info, warning
 from lightbulb import BotApp
@@ -30,12 +34,15 @@ class StoredItem(AbstractItem):
     message_id: int = 0
     end_time: datetime = None
     muted: bool = False
+    blacklisted: bool = False
         
 class AlertChecker(ABC):
-    def __init__(self, bot: BotApp, alert: dict):
+    def __init__(self, bot: BotApp, alert: Alert):
         self.bot = bot
         self.alert = alert
-        self.blacklist = bot.d.blacklist.find(channel_id=alert['channel_id'])
+        self.search_query = alert.search_query
+        self.channel_id = alert.channel_id
+        self.item_repo = ItemRepository()
         self.up_to_date_counter = 0
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
@@ -54,74 +61,50 @@ class AlertChecker(ABC):
         """Factory method to create a new item instance from data."""
         pass
 
-    def find_stored_item(self, name) -> AbstractItem:
-        stored_item = self.bot.d.synced.find_one(name=name)
+    async def find_stored_item(self, id: str) -> Optional[AbstractItem]:
+        item = Item.select().where(Item.item_id == id).get_or_none()
 
-        if not stored_item:
+        if item == None:
             return None
         
-        buyout_price = stored_item.get('buyout_price')
-        if buyout_price == None:
-            buyout_price = 0
-        
-        price = stored_item.get('price')
-        if price == None:
-            price = 0
-        
-        stock = stored_item.get('stock')
-        if stock == None:
-            stock = 0
-
-        muted = stored_item.get('muted')
-        if muted == None:
-            muted = False
-
         return StoredItem(
-            id=stored_item.get('name'),
-            stock=stock,
-            price=price,
-            buyout_price=buyout_price,
-            muted=muted,
+            id=item.item_id,
+            stock=item.stock,
+            price=item.price,
+            buyout_price=item.buyout_price,
+            muted=item.muted,
+            blacklisted=item.blacklisted(self.channel_id),
         )
     
     async def check_store(self) -> None:
         async with aiohttp.ClientSession() as session:
-            info(f"[{self.__class__.__name__}] Searching for {self.alert['name']}...")
-            items = await self.fetch_items(session)
-            if not items:
-                warning(f"[{self.__class__.__name__}] no items found [{self.alert.get('name')}]")
+            info(f"[{self.__class__.__name__}] Searching for {self.search_query}...")
+            results = await self.fetch_items(session)
+            if not results:
+                warning(f"[{self.__class__.__name__}] no search results found [{self.search_query}]")
                 return
     
-            for item in items:
-                found_item = await self.normalize_item(item)
-
-                # Blacklist check
-                if found_item.id in self.blacklist:
+            for result in results:
+                found_item = await self.normalize_item(result)
+                stored_item = await self.find_stored_item(found_item.id)
+                
+                if stored_item and stored_item.blacklisted:
                     info(f"[{self.__class__.__name__}] Item blacklisted: {found_item.title}")
                     continue
-                
-                stored_item = None
-                stored_item = self.find_stored_item(found_item.id)
+
                 if stored_item:
                     await self.check_item(stored_item, found_item)
                 else:
                     await self.new_item(found_item)
 
             if self.up_to_date_counter > 0:
-                info(f"[{self.__class__.__name__}] {self.up_to_date_counter} items up to date [{self.alert.get('name')}]")
+                info(f"[{self.__class__.__name__}] {self.up_to_date_counter} items up to date [{self.search_query}]")
 
     async def check_item(self, stored_item: AbstractItem, found_item: AbstractItem) -> None:
-        self.up_to_date_counter += 1
-
-        if found_item.stock == 0:
-            # If the item is out of stock, update the stored item but do not post an alert
-            await self.update_item(found_item, [], True)
-            return
-        
         differences = []
 
         # Only alert and update  if the stock difference is greater than 1
-        if stored_item.stock != found_item.stock:
+        if stored_item.stock != found_item.stock and found_item.stock > 1:
             differences.append(f"Stock changed from {stored_item.stock} to {found_item.stock}")
 
         # Only alert and update if the price decrease is greater than 500 yen
@@ -135,36 +118,43 @@ class AlertChecker(ABC):
         if differences:
             await self.update_item(found_item, differences, stored_item.muted)
         
+        query = Item.update(
+            item_id=found_item.id,
+            checker=self.__class__.__name__,
+            title=found_item.title,
+            stock=found_item.stock,
+            price=found_item.price,
+            buyout_price=found_item.buyout_price,
+            alert=self.alert,
+        ).where(Item.item_id == found_item.id)
+        query.execute()
+        self.up_to_date_counter += 1
+        
     async def update_item(self, item: AbstractItem, differences: list, muted: False) -> None:
         info(f"[{self.__class__.__name__}] Item updated: {item.title}")
 
         if not muted:
             message_id = await self.post_alert(item, differences)
-
-        self.bot.d.synced.update({
-                "name": item.id,
-                "stock": item.stock,
-                "price": item.price,
-                "buyout_price": item.buyout_price,
-                "message_id": message_id,
-                "end_time": item.end_time,
-                "updated_at": datetime.now(),
-            }, 'name')
-
+            query = Item.update(message_id=message_id).where(Item.item_id == item.id)
+            query.execute()
+            
     async def new_item(self, item: AbstractItem) -> None:
         info(f"[{self.__class__.__name__}] New item found: {item.title}")
         message_id = await self.post_alert(item, [])
-        self.bot.d.synced.insert(
-            {
-                "name": item.id,
-                "stock": item.stock,
-                "price": item.price,
-                "buyout_price": item.buyout_price,
-                "end_time": item.end_time,
-                "message_id": message_id,
-                "found_at": datetime.now(),
-            }
+
+        query = Item.insert(
+            item_id=item.id,
+            checker=self.__class__.__name__,
+            title=item.title,
+            stock=item.stock,
+            price=item.price,
+            buyout_price=item.buyout_price,
+            message_id=message_id,
+            found_at=datetime.now(),
+            updated_at=datetime.now(),
+            alert=self.alert,
         )
+        query.execute()
     
     # def post_updates(self, updates: list):
     #     embed = Embed()
@@ -193,7 +183,7 @@ class AlertChecker(ABC):
         if item.end_time is not None:
             embed.add_field("End Time:", f"<t:{int(round(item.end_time.timestamp()))}:R>")
 
-        embed.set_footer(f"Source: {self.__class__.__name__} — #{item.id} - {self.alert['name']}")
+        embed.set_footer(f"Source: {self.__class__.__name__} — #{item.id} - {self.search_query}")
         return embed
     
     async def post_alert(self, item: AbstractItem, differences: list) -> int:
@@ -202,9 +192,16 @@ class AlertChecker(ABC):
             embed.color = Color(0x00FF00) # Green
             for difference in differences:
                 embed.add_field("Update", difference, inline=False)
-            
-        message = await self.bot.rest.create_message(self.alert["channel_id"], embed=embed)
+
+            db_item = Item.select().where(Item.item_id == item.id)
+            notifications = Notification.select().where(Notification.item == db_item)
+            for notification in notifications:
+                user_id = notification.user_id
+                dm_channel = await self.bot.rest.create_dm_channel(user_id)
+                await self.bot.rest.create_message(dm_channel.id, embed=embed)
+
+        message = await self.bot.rest.create_message(self.channel_id, embed=embed)
         await message.add_reaction('🗑️')
-        await message.add_reaction('🔇')
+        await message.add_reaction('🔔')
 
         return message.id
