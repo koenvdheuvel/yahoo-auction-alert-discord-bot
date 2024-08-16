@@ -21,15 +21,10 @@ from commands.base import BaseCommand
 
 dotenv.load_dotenv()
 
-db = dataset.connect("sqlite:///alerts.db")
 bot = lightbulb.BotApp(
     os.environ["BOT_TOKEN"],
     #logs="DEBUG",
 )
-bot.d.table = db["alerts"]
-bot.d.blacklist = db["blacklist"]
-bot.d.synced = db["synced_alerts"]
-bot.d.notifications = db["notifications"]
 
 async def create_check_tasks(alerts: list):
     tasks = []

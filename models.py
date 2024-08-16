@@ -4,7 +4,7 @@ from typing import Optional
 import os
 
 # Define the database connection
-database = SqliteDatabase(os.getenv('DATABASE_URL', 'alertsv2.db'))
+database = SqliteDatabase(os.getenv('DATABASE_URL', 'alerts.db'))
 
 # BaseModel to connect to the Peewee database
 class BaseModel(Model):
