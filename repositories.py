@@ -8,3 +8,4 @@ class ItemRepository():
             return Item.get(Item.item_id == item_id)
         except Item.DoesNotExist:
             return None
+            

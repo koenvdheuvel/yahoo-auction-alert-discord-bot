@@ -24,8 +24,9 @@ class MercariChecker(AlertChecker):
         async def fetch(url):
             async with session.get(url, headers=self.headers) as response:
                 return await response.json()
-        
-        content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/mercari/search?keyword={self.search_query}&sort=score&hits=24&page=1")
+            
+        items_per_page = 99
+        content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/mercari/search?keyword={self.search_query}&sort=score&hits={items_per_page}&page=1")
         if 'items' not in content:
             error(f"Failed to fetch items for {self.search_query}")
             error(content)
@@ -33,10 +34,10 @@ class MercariChecker(AlertChecker):
         if not content.get("items"):
             return []
 
-        page_count = math.ceil(content["count"] / 24)
+        page_count = math.ceil(content["count"] / items_per_page)
         if page_count > 1:
             for page in range(2, page_count + 1):
-                page_content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/mercari/search?keyword={self.search_query}&sort=score&hits=24&page={page}")
+                page_content = await fetch(f"https://www.fromjapan.co.jp/japan/sites/mercari/search?keyword={self.search_query}&sort=score&hits={items_per_page}&page={page}")
                 content["items"].extend(page_content["items"])
 
         return content["items"]

@@ -22,7 +22,10 @@ from commands.base import BaseCommand
 dotenv.load_dotenv()
 
 db = dataset.connect("sqlite:///alerts.db")
-bot = lightbulb.BotApp(os.environ["BOT_TOKEN"])
+bot = lightbulb.BotApp(
+    os.environ["BOT_TOKEN"],
+    #logs="DEBUG",
+)
 bot.d.table = db["alerts"]
 bot.d.blacklist = db["blacklist"]
 bot.d.synced = db["synced_alerts"]
@@ -101,7 +104,7 @@ if __name__ == "__main__":
     bot.run(
         propagate_interrupts=True,      # Any OS interrupts get rethrown as errors.
         coroutine_tracking_depth=30,
-        asyncio_debug=True,
+        asyncio_debug=False,
         activity=hikari.Activity(
             name="Posters", type=hikari.ActivityType.WATCHING
         )

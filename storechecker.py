@@ -37,6 +37,7 @@ class StoredItem(AbstractItem):
 class AlertChecker(ABC):
     def __init__(self, bot: BotApp, alert: Alert):
         self.bot = bot
+        self.alert = alert
         self.search_query = alert.search_query
         self.channel_id = alert.channel_id
         self.item_repo = ItemRepository()
@@ -98,17 +99,10 @@ class AlertChecker(ABC):
                 info(f"[{self.__class__.__name__}] {self.up_to_date_counter} items up to date [{self.search_query}]")
 
     async def check_item(self, stored_item: AbstractItem, found_item: AbstractItem) -> None:
-        self.up_to_date_counter += 1
-
-        if found_item.stock == 0:
-            # If the item is out of stock, update the stored item but do not post an alert
-            await self.update_item(found_item, [], True)
-            return
-        
         differences = []
 
         # Only alert and update  if the stock difference is greater than 1
-        if stored_item.stock != found_item.stock:
+        if stored_item.stock != found_item.stock and found_item.stock > 1:
             differences.append(f"Stock changed from {stored_item.stock} to {found_item.stock}")
 
         # Only alert and update if the price decrease is greater than 500 yen
@@ -122,33 +116,41 @@ class AlertChecker(ABC):
         if differences:
             await self.update_item(found_item, differences, stored_item.muted)
         
+        query = Item.update(
+            item_id=found_item.id,
+            checker=self.__class__.__name__,
+            title=found_item.title,
+            stock=found_item.stock,
+            price=found_item.price,
+            buyout_price=found_item.buyout_price,
+            alert=self.alert,
+        ).where(Item.item_id == found_item.id)
+        query.execute()
+        self.up_to_date_counter += 1
+        
     async def update_item(self, item: AbstractItem, differences: list, muted: False) -> None:
         info(f"[{self.__class__.__name__}] Item updated: {item.title}")
 
         if not muted:
             message_id = await self.post_alert(item, differences)
-
-        query = Item.update(
-            item_id=item.id,
-            stock=item.stock,
-            price=item.price,
-            buyout_price=item.buyout_price,
-            message_id=message_id,
-            updated_at=datetime.now(),
-        ).where(Item.item_id == item.id)
-        query.execute()
-
+            query = Item.update(message_id=message_id).where(Item.item_id == item.id)
+            query.execute()
+            
     async def new_item(self, item: AbstractItem) -> None:
         info(f"[{self.__class__.__name__}] New item found: {item.title}")
         message_id = await self.post_alert(item, [])
 
         query = Item.insert(
             item_id=item.id,
+            checker=self.__class__.__name__,
+            title=item.title,
             stock=item.stock,
             price=item.price,
             buyout_price=item.buyout_price,
             message_id=message_id,
             found_at=datetime.now(),
+            updated_at=datetime.now(),
+            alert=self.alert,
         )
         query.execute()
     
