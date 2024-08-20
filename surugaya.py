@@ -57,6 +57,6 @@ class SurugayaChecker(AlertChecker):
         async with aiohttp.ClientSession() as session:
             page_response = await session.get(item.url, headers=self.headers)
             soup = BeautifulSoup(await page_response.text(), 'html.parser')
-            item.title = soup.find('h1', id="item_title").text
+            item.title = soup.find('h1', id="item_title").text.strip()
 
         return item
