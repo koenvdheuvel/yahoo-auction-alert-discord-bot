@@ -27,7 +27,6 @@ class CleanupCommand(BaseCommand):
                 bot_messages = [msg for msg in messages if msg.author.id == bot_id]
                 
                 to_delete = bot_messages[:count]
-                print(to_delete)
                 if not to_delete:
                     await ctx.edit_last_response("No messages by the bot found to delete.")
                     return
