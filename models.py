@@ -47,7 +47,12 @@ class Filter(BaseModel):
     inverse = BooleanField(default=False)
     matches = IntegerField(default=0)
 
+class FilterHit(BaseModel):
+    item = ForeignKeyField(Item, backref='filter_hits')
+    filter = ForeignKeyField(Filter, backref='hits')
+    matched_at = DateTimeField(default=datetime.now)
+
 # simple utility function to create tables
 def create_tables():
     with database:
-        database.create_tables([Alert, Item, Blacklist, Notification, Filter])
+        database.create_tables([Alert, Item, Blacklist, Notification, Filter, FilterHit])
