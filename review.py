@@ -87,6 +87,13 @@ class ReviewServer:
         async def guard(request, handler):
             started = time.monotonic()
             try:
+                # Behind a TLS-terminating proxy (traefik) the browser's Origin is https while the
+                # proxied request is http; adopt the forwarded scheme so the same-origin check and
+                # the Secure cookie flag reflect what the browser sees. A cross-site page cannot set
+                # this header without a CORS preflight, which is never granted.
+                forwarded = request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower()
+                if forwarded in {"http", "https"} and forwarded != request.scheme:
+                    request = request.clone(scheme=forwarded)
                 if request.path.startswith("/api/"):
                     if request.method not in {"GET", "HEAD", "OPTIONS"} and not self.same_origin(request):
                         raise web.HTTPForbidden(reason="Open Filter Lab in the same browser tab to make changes")

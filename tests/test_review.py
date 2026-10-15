@@ -118,6 +118,16 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await (await self.client.get("/api/session")).json())["authenticated"], False)
         self.assertEqual((await self.client.get("/api/alerts")).status, 401)
 
+    async def test_login_behind_tls_terminating_proxy(self):
+        https_origin = self.origin.replace("http:", "https:")
+        response = await self.client.post("/api/login", json={"token": TOKEN},
+                                          headers={"Origin": https_origin, "X-Forwarded-Proto": "https"})
+        self.assertEqual(response.status, 200)
+        self.assertTrue(response.cookies["filter_lab_session"]["secure"])
+        response = await self.client.post("/api/login", json={"token": TOKEN},
+                                          headers={"Origin": self.origin, "X-Forwarded-Proto": "https"})
+        self.assertEqual(response.status, 403)
+
     async def test_standalone_preview_matches_live_normalization_and_preserves_original(self):
         await self.login()
         original = "ＢＡＢＹＭＥＴＡＬ　ポスター"

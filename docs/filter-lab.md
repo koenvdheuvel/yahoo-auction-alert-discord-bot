@@ -139,3 +139,7 @@ For a local Docker deployment, add `-e REVIEW_HOST=0.0.0.0` and
 `-p 127.0.0.1:9101:9101` to the README's container command. This maps the UI to
 the host's loopback interface. With `DATABASE_URL=/data/alerts.db`, the generated
 key is `data/alerts.db.review-token` on the host's mounted data directory.
+
+Behind an HTTPS reverse proxy (for example traefik, which does this by default),
+the proxy must send `X-Forwarded-Proto: https`; the UI uses it for the same-origin
+check and to mark the session cookie Secure.
