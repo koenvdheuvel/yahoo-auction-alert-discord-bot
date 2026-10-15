@@ -1,7 +1,6 @@
 """Ingestion orchestrates provider facts, pure policy and transactional persistence."""
 from collections import Counter
 import asyncio
-from dataclasses import replace
 import logging
 
 from filtering import CompiledRuleset, Decision, default_ruleset
@@ -64,29 +63,13 @@ class Ingestion:
                         normalization=normalization),
                         version_id, "invalid")
                     continue
-                context = await self.repository.context_for_listing(provider.source, listing.id, alert["channel_id"])
-                if provider.source == "surugaya" and context["title"]:
-                    listing = replace(listing, title=context["title"])
-                if context["blacklisted"]:
+                if await self.repository.is_blacklisted(provider.source, listing.id, alert["channel_id"]):
                     self.metrics.items.labels(source=provider.source, outcome="blacklisted").inc()
                     await self._archive(alert, listing, self._special_decision(
                         listing, "channel_blacklist", "This listing is excluded in this channel.", "filtered",
                         normalization=normalization),
                         version_id, "blacklisted")
                     continue
-                # Existing Surugaya rows already carry the authoritative HTML title.
-                if provider.source != "surugaya" or not context["title"]:
-                    try:
-                        listing = await provider.enrich(listing)
-                    except Exception:
-                        invalid += 1
-                        self.metrics.items.labels(source=provider.source, outcome="enrichment_error").inc()
-                        logger.exception("listing_enrichment_failed", extra={"fields": {"item_id": listing.id}})
-                        await self._archive(alert, listing, self._special_decision(
-                            listing, "enrichment_error", "The full listing title could not be retrieved.",
-                            normalization=normalization),
-                            version_id, "enrichment_error")
-                        continue
                 # Live ingestion and replay share the same bounded pure evaluator.
                 decision = await asyncio.to_thread(policy.evaluate, listing) if policy.has_regex else policy.evaluate(listing)
                 evaluation_failed = any(reason["code"] in {"filter_timeout", "evaluation_budget"}
@@ -109,4 +92,4 @@ class Ingestion:
         finally:
             await self.repository.record_filter_matches(matched)
         if invalid:
-            raise IngestionError(f"Check completed with {invalid} invalid or unenriched listings")
+            raise IngestionError(f"Check completed with {invalid} invalid listings")

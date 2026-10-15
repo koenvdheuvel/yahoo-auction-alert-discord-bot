@@ -139,12 +139,12 @@ class Repository(ReviewRepositoryMixin):
                     Filter.update(matches=Filter.matches + count).where(Filter.id == filter_id).execute()
         await self._call("record_filter_matches", update)
 
-    async def context_for_listing(self, source, external_id, channel_id):
+    async def is_blacklisted(self, source, external_id, channel_id):
         def select():
-            item = Item.get_or_none(Item.checker == source, Item.item_id == external_id)
-            return {"title": item.title if item else "", "blacklisted": bool(item and
-                    Blacklist.select().where(Blacklist.item == item, Blacklist.channel_id == channel_id).exists())}
-        return await self._call("listing_context", select)
+            return (Blacklist.select().join(Item)
+                    .where(Item.checker == source, Item.item_id == external_id,
+                           Blacklist.channel_id == channel_id).exists())
+        return await self._call("is_blacklisted", select)
 
     def _enqueue(self, item, alert, kind, destination_id, listing, differences):
         payload = {"listing": listing.payload(), "differences": differences,

@@ -65,7 +65,7 @@ Polling creates only `CHECK_CONCURRENCY` check-worker tasks and lazily assigns a
 
 HTTP and Discord delivery have separate scheduling. Database work and its queue wait are measured outside the event-loop thread. Provider instances and their connection pool live for the runtime lifetime. Pagination yields a page at a time and explicitly reports searches exceeding `MAX_SEARCH_PAGES`, malformed responses, or incomplete pagination.
 
-Surugaya shares a bounded title cache and coalesces concurrent lookups. Blacklisted products skip enrichment. Existing stored authoritative titles are reused, so unchanged listings do not fetch product HTML again; title changes on existing products are not actively refreshed. If authoritative title freshness later matters to filters, add a measured refresh policy rather than returning to a request per item per poll.
+Surugaya listings take their title and canonical product URL (`/product/detail/` or `/product/other/`) from the FromJapan search response, like the other marketplaces. suruga-ya.jp answers automated product-page requests with a Cloudflare challenge, so the bot never fetches product HTML.
 
 ## Data model and notification semantics
 
@@ -110,7 +110,7 @@ existing Discord filters participate. No product-specific exclusions are enabled
 automatically. Missing or unknown titles require review.
 
 Every candidate is archived before it can be discarded, including invalid
-provider facts, title enrichment failures and channel blacklists. Accepted
+provider facts and channel blacklists. Accepted
 candidate history, listing facts, per-alert baselines and outbox intentions
 commit together. Rejected candidates create only archive records. Snapshots
 retain original titles, normalized titles, decision reasons, normalization

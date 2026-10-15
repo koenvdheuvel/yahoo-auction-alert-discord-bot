@@ -47,9 +47,6 @@ class MemoryProvider:
         for row in self.rows:
             yield row
 
-    async def enrich(self, listing):
-        return listing
-
 
 class ReviewTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

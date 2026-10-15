@@ -76,7 +76,7 @@ All application metrics use the `auction_bot_` prefix. Durations use seconds, co
 | Per-alert scheduling | `alert_checks_total{alert_id,source,outcome}`, `alert_check_duration_seconds{alert_id,source}` |
 | Alert metadata | `alert_info{alert_id,search_query,channel_id}` with value 1; refreshed each poll and database-stat snapshot |
 | Provider transport | `provider_requests_total{source,operation,outcome}`, `provider_request_duration_seconds{source,operation}` |
-| Ingestion decisions | `items_total{source,outcome}`; includes filtered, blacklisted, invalid and enrichment-error decisions as well as recorded observations |
+| Ingestion decisions | `items_total{source,outcome}`; includes filtered, blacklisted and invalid decisions as well as recorded observations |
 | SQLite | `database_operation_duration_seconds{operation}` including executor queue wait, `database_errors_total{operation}`, `database_stats_refreshed_timestamp_seconds` |
 | Delivery | `delivery_attempts_total{kind,outcome}`, `delivery_duration_seconds{kind}`, `outbox_pending`, `outbox_failed`, `outbox_oldest_pending_age_seconds` |
 | Runtime health | `worker_alive{worker}`, `discord_connected`, `ready`, `event_loop_lag_seconds`, `started_timestamp_seconds` |
@@ -93,7 +93,7 @@ Provider counters count request attempts, including retries. Delivery counters c
 Filter Lab request labels use fixed API operation names and outcomes. Candidate
 IDs, rule text, access keys and search queries do not become metric labels.
 Ingestion item outcomes now also include `filtered`, `review`, `blacklisted`,
-`invalid`, `enrichment_error` and `filter_timeout`. Database operation timing
+`invalid` and `filter_timeout`. Database operation timing
 covers candidate writes, feedback, publication and history retention through
 the existing repository boundary. Standalone review mode does not expose a
 Prometheus listener; the embedded bot mode uses the normal monitoring registry.

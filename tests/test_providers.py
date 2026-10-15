@@ -98,7 +98,7 @@ class HttpClientTests(unittest.IsolatedAsyncioTestCase):
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
     def adapter(self, adapter_type=YahooAuctionsAdapter, **settings):
-        http = SimpleNamespace(get_json=AsyncMock(), get_text=AsyncMock())
+        http = SimpleNamespace(get_json=AsyncMock())
         return adapter_type(http, replace(Settings(), **settings))
 
     async def test_pages_are_fetched_only_as_iterator_advances(self):
@@ -162,7 +162,6 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listing.title, "Unknown Title")
         self.assertTrue(listing.url.endswith("item%2F1"))
         adapter.http.get_json.assert_not_called()
-        adapter.http.get_text.assert_not_called()
         listing = self.adapter(MercariAdapter).normalize({"id": "m1", "stock": "2", "price": 2500})
         self.assertEqual((listing.stock, listing.price), (2, 2500))
 
@@ -181,69 +180,16 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(adapter.normalize({"id": "a", "price": 1, "stock": 0}).stock, 0)
         self.assertEqual(self.adapter().normalize({"id": "a", "price": 1}).stock, 1)
 
-    async def test_surugaya_authoritative_titles_use_bounded_lru(self):
+    def test_surugaya_uses_fromjapan_title_and_canonical_product_url(self):
         adapter = self.adapter(SurugayaAdapter)
-        adapter.title_cache_size = 2
-        adapter.http.get_text.side_effect = [f'<h1 id="item_title"> Title {n} </h1>' for n in range(4)]
-        listings = [adapter.normalize({"id": str(n), "price": 1, "stock": 0}) for n in range(3)]
-        original = listings[0]
-        self.assertEqual((await adapter.enrich(original)).title, "Title 0")
-        self.assertEqual(original.title, "Unknown Title")
-        await adapter.enrich(listings[1])
-        self.assertEqual((await adapter.enrich(original)).title, "Title 0")
-        await adapter.enrich(listings[2])
-        self.assertEqual(list(adapter._titles), ["0", "2"])
-        await adapter.enrich(listings[1])
-        self.assertEqual(adapter.http.get_text.await_count, 4)
-        self.assertEqual(len(adapter._titles), 2)
-
-    async def test_surugaya_coalesces_concurrent_title_requests(self):
-        adapter = self.adapter(SurugayaAdapter)
-        started, release = asyncio.Event(), asyncio.Event()
-        async def fetch(*args):
-            started.set()
-            await release.wait()
-            return '<h1 id="item_title">Japanese title</h1>'
-        adapter.http.get_text.side_effect = fetch
-        listing = adapter.normalize({"id": "a", "price": 1, "stock": 0})
-        owner = asyncio.create_task(adapter.enrich(listing))
-        await started.wait()
-        waiter = asyncio.create_task(adapter.enrich(listing))
-        await asyncio.sleep(0)
-        release.set()
-        results = await asyncio.gather(owner, waiter)
-        self.assertEqual([item.title for item in results], ["Japanese title", "Japanese title"])
-        self.assertEqual(adapter.http.get_text.await_count, 1)
-        self.assertEqual(adapter._inflight, {})
-
-    async def test_surugaya_missing_title_is_not_cached(self):
-        adapter = self.adapter(SurugayaAdapter)
-        adapter.http.get_text.side_effect = ["<html></html>", '<h1 id="item_title">Recovered</h1>']
-        listing = adapter.normalize({"id": "a", "price": 1, "stock": 0})
-        with self.assertRaisesRegex(ProviderError, "missing_title"):
-            await adapter.enrich(listing)
-        self.assertEqual(adapter._titles, {})
-        self.assertEqual(adapter._inflight, {})
-        self.assertEqual((await adapter.enrich(listing)).title, "Recovered")
-
-    async def test_surugaya_cancelled_owner_cleans_up_and_fails_waiter(self):
-        adapter = self.adapter(SurugayaAdapter)
-        started, release = asyncio.Event(), asyncio.Event()
-        async def fetch(*args):
-            started.set()
-            await release.wait()
-        adapter.http.get_text.side_effect = fetch
-        listing = adapter.normalize({"id": "a", "price": 1, "stock": 0})
-        owner = asyncio.create_task(adapter.enrich(listing))
-        await started.wait()
-        waiter = asyncio.create_task(adapter.enrich(listing))
-        await asyncio.sleep(0)
-        owner.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await owner
-        with self.assertRaisesRegex(ProviderError, "request_cancelled"):
-            await waiter
-        self.assertEqual(adapter._inflight, {})
+        listing = adapter.normalize({"id": "120165069", "price": 1760, "stock": 1, "title": "Japanese title",
+                                     "url": "https://www.suruga-ya.jp/product/other/120165069"})
+        self.assertEqual((listing.title, listing.url),
+                         ("Japanese title", "https://www.suruga-ya.jp/product/other/120165069"))
+        for url in (None, "", "https://evil.example/product/1", "http://www.suruga-ya.jp/product/detail/1"):
+            with self.subTest(url=url):
+                listing = adapter.normalize({"id": "a1", "price": 1, "stock": 0, "url": url})
+                self.assertEqual(listing.url, "https://www.suruga-ya.jp/product/detail/a1")
 
 
 if __name__ == "__main__":

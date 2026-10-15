@@ -120,6 +120,7 @@ class ReviewService:
                     "code": "channel_blacklist", "message":
                     "This snapshot was excluded in its channel; its recorded blacklist still vetoes replay."}], []).payload()
                 current, proposed = blocked, blocked
+            # "enrichment_error" rows predate FromJapan-sourced Surugaya titles; no longer written.
             elif row.get("observation_kind") in {"invalid", "enrichment_error"} or payload.get("archive_truncated"):
                 incomplete = Decision("review", row.get("normalized_title", ""), [{
                     "code": "incomplete_snapshot", "message":

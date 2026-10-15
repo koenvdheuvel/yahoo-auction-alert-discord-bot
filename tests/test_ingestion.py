@@ -4,7 +4,6 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
 
 from config import Settings
 from domain import Listing
@@ -22,7 +21,6 @@ class FixtureProvider:
         self.source = adapter.source
         self.normalize = adapter.normalize
         self.rows, self.failure = rows, failure
-        self.enrich = AsyncMock(side_effect=lambda item: item)
 
     async def iter_items(self, query):
         for row in self.rows:
@@ -63,7 +61,6 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([json.loads(job["payload"])["listing"]["id"] for job in jobs], ["good-a", "good-b"])
         self.assertEqual(self.item_counter("yahooauction", "new"), 2)
         self.assertEqual(self.item_counter("yahooauction", "invalid"), 1)
-        self.assertEqual(provider.enrich.await_count, 2)
 
     async def test_error_history_uses_the_published_normalization_options(self):
         ruleset = default_ruleset()
@@ -108,42 +105,16 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await self.repository.due_deliveries()), 1)
         self.assertEqual((await self.repository.list_filters(1111))[0]["matches"], 0)
 
-    async def test_known_surugaya_title_is_reused_before_filtering_without_html_fetch(self):
-        original = Listing("known", "surugaya", "Authoritative Japanese figure", 1, 5000)
-        await self.repository.observe(self.alert, original)
-        await self.repository.register_alert(2222, "figure")
-        second = next(row for row in await self.repository.list_alerts() if row["channel_id"] == 2222)
-        await self.repository.add_filter(2222, "figure", "text", "whitelist", "Authoritative")
-        provider = FixtureProvider([raw("known", "Translated title")], SurugayaAdapter)
-        provider.enrich.side_effect = AssertionError("existing title must avoid enrichment")
-        await self.ingestion.check(provider, second)
-        provider.enrich.assert_not_awaited()
-        jobs = await self.repository.due_deliveries()
-        self.assertEqual(len(jobs), 2)
-        self.assertEqual(json.loads(jobs[1]["payload"])["listing"]["title"], original.title)
-
-    async def test_blacklist_skips_enrichment_and_preserves_observation(self):
+    async def test_blacklist_preserves_observation(self):
         original = Listing("known", "surugaya", "Authoritative Japanese figure", 1, 5000)
         await self.repository.observe(self.alert, original)
         item = await self.repository._call("test_item", lambda: Item.get(Item.item_id == "known").id)
         await self.repository.blacklist_item(item, 1111)
         provider = FixtureProvider([raw("known", "Translated title", price=3000)], SurugayaAdapter)
-        provider.enrich.side_effect = AssertionError("blacklist must avoid enrichment")
         await self.ingestion.check(provider, self.alert)
-        provider.enrich.assert_not_awaited()
         self.assertEqual(self.item_counter("surugaya", "blacklisted"), 1)
         self.assertEqual(await self.repository.due_deliveries(), [])
         self.assertEqual(await self.repository._call("test_price", lambda: Item.get_by_id(item).price), 5000)
-
-    async def test_enrichment_failure_processes_valid_sibling_and_marks_partial(self):
-        provider = FixtureProvider([raw("failed"), raw("good")], SurugayaAdapter)
-        provider.enrich.side_effect = [ProviderError("surugaya", "title", "missing_title"),
-                                       Listing("good", "surugaya", "Authoritative good", 1, 5000)]
-        with self.assertRaisesRegex(IngestionError, "1 invalid"):
-            await self.ingestion.check(provider, self.alert)
-        jobs = await self.repository.due_deliveries()
-        self.assertEqual([json.loads(job["payload"])["listing"]["id"] for job in jobs], ["good"])
-        self.assertEqual(self.item_counter("surugaya", "enrichment_error"), 1)
 
 
 if __name__ == "__main__":

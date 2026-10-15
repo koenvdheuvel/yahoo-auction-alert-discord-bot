@@ -62,7 +62,7 @@ groups:
           severity: warning
         annotations:
           summary: 'No successful {{ $labels.source }} cycle on {{ $labels.instance }}'
-          description: 'Use check_failed and provider error logs to distinguish API failures, payload changes, invalid listings, enrichment failures and database errors. Completed poll cycles can still contain failed source checks.'
+          description: 'Use check_failed and provider error logs to distinguish API failures, payload changes, invalid listings and database errors. Completed poll cycles can still contain failed source checks.'
 
       - alert: AuctionBotDeliveryBacklog
         expr: auction_bot_outbox_oldest_pending_age_seconds{job="auction-bot"} > 300

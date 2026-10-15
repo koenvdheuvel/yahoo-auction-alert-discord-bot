@@ -4,8 +4,6 @@ Adapters contain marketplace parsing only. Their immutable listings have no
 Discord or persistence dependencies, and search results are streamed by page.
 """
 import asyncio
-from collections import OrderedDict
-from dataclasses import replace
 import json
 import logging
 import math
@@ -13,7 +11,6 @@ import time
 from urllib.parse import quote
 
 import aiohttp
-from bs4 import BeautifulSoup
 
 from domain import Listing
 
@@ -57,12 +54,9 @@ class HttpClient:
             self.session = None
 
     async def get_json(self, source, operation, url, params=None):
-        return await self._request(source, operation, url, params, json_response=True)
+        return await self._request(source, operation, url, params)
 
-    async def get_text(self, source, operation, url, params=None):
-        return await self._request(source, operation, url, params, json_response=False)
-
-    async def _request(self, source, operation, url, params, *, json_response):
+    async def _request(self, source, operation, url, params):
         if self.session is None or self.session.closed:
             raise ProviderError(source, operation, "client_not_started")
         for attempt in range(self.settings.request_retries + 1):
@@ -88,7 +82,7 @@ class HttpClient:
                         outcome = "transient_error"
                     else:
                         try:
-                            body = await response.json() if json_response else await response.text()
+                            body = await response.json()
                         except (json.JSONDecodeError, UnicodeDecodeError, aiohttp.ContentTypeError):
                             outcome = "invalid_response"
                             raise ProviderError(source, operation, "invalid_response") from None
@@ -192,11 +186,11 @@ class FromJapanAdapter:
             stock=integer(data.get("stock"), self.source, "stock", default=1 if self.source == "yahooauction" else None),
             price=integer(data.get("price"), self.source, "price"),
             buyout_price=integer(data.get("buyItNowPrice"), self.source, "buyout_price", default=0),
-            image_url=image_url, url=self.item_url.format(id=quote(identifier, safe="")),
+            image_url=image_url, url=self.listing_url(data, identifier),
         )
 
-    async def enrich(self, listing):
-        return listing
+    def listing_url(self, data, identifier):
+        return self.item_url.format(id=quote(identifier, safe=""))
 
 
 class YahooAuctionsAdapter(FromJapanAdapter):
@@ -216,44 +210,13 @@ class SurugayaAdapter(FromJapanAdapter):
     color = 0x0000FF
     items_per_page = 24
     item_url = "https://www.suruga-ya.jp/product/detail/{id}"
-    title_cache_size = 512
 
-    def __init__(self, http, settings):
-        super().__init__(http, settings)
-        self._titles = OrderedDict()
-        self._inflight = {}
-
-    async def enrich(self, listing):
-        if listing.id in self._titles:
-            self._titles.move_to_end(listing.id)
-            return replace(listing, title=self._titles[listing.id])
-        pending = self._inflight.get(listing.id)
-        if pending is not None:
-            return replace(listing, title=await asyncio.shield(pending))
-        pending = asyncio.get_running_loop().create_future()
-        self._inflight[listing.id] = pending
-        try:
-            html = await self.http.get_text(self.source, "title", listing.url)
-            soup = BeautifulSoup(html, "html.parser")
-            heading = soup.find("h1", id="item_title")
-            title = heading.get_text(" ", strip=True) if heading is not None else ""
-            if not title:
-                raise ProviderError(self.source, "title", "missing_title")
-            self._titles[listing.id] = title
-            self._titles.move_to_end(listing.id)
-            while len(self._titles) > self.title_cache_size:
-                self._titles.popitem(last=False)
-            pending.set_result(title)
-            return replace(listing, title=title)
-        except BaseException as exc:
-            # Coalesced waiters receive an operational failure when the owning
-            # check is cancelled. No detached task survives a timed-out check.
-            failure = ProviderError(self.source, "title", "request_cancelled") if isinstance(exc, asyncio.CancelledError) else exc
-            pending.set_exception(failure)
-            pending.exception()
-            raise
-        finally:
-            self._inflight.pop(listing.id, None)
+    def listing_url(self, data, identifier):
+        # FromJapan returns the canonical page: some products live under /product/other/.
+        url = data.get("url")
+        if isinstance(url, str) and url.startswith("https://www.suruga-ya.jp/product/"):
+            return url
+        return super().listing_url(data, identifier)
 
 
 PROVIDERS = {provider.source: provider for provider in (

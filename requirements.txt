@@ -1,5 +1,4 @@
 aiohttp==3.14.3
-beautifulsoup4==4.12.3
 hikari==2.6.0
 hikari-lightbulb==3.2.6
 peewee==3.17.6

@@ -110,8 +110,8 @@ historical listings, cancel already queued notifications or reset baselines.
 
 ## History and storage
 
-New polling saves accepted, filtered, review, blacklisted, invalid and enrichment
-failure candidates. Accepted candidate history commits in the same transaction
+New polling saves accepted, filtered, review, blacklisted and invalid
+candidates. Accepted candidate history commits in the same transaction
 as listing facts, per-alert baselines and delivery jobs. Rejected candidates
 create history only. Repeated polls can produce repeated snapshots; the archive
 represents observations rather than unique products.
