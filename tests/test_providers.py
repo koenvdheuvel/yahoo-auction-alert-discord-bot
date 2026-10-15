@@ -139,6 +139,39 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 received.append(item["id"])
         self.assertEqual(received, ["a", "b", "c"])
 
+    async def test_mercari_follows_drifting_estimate_until_empty_page(self):
+        # Shape observed live for "beatmania ポスター": 127 -> 300 -> 300 -> 0 with short pages.
+        adapter = self.adapter(MercariAdapter)
+        adapter.items_per_page = 3
+        adapter.http.get_json.side_effect = [
+            {"items": [{"id": "a"}, {"id": "b"}], "count": 4},
+            {"items": [{"id": "c"}], "count": 10},
+            {"items": [{"id": "d"}, {"id": "e"}], "count": 10},
+            {"items": [], "count": 0},
+        ]
+        self.assertEqual([item["id"] async for item in adapter.iter_items("query")], ["a", "b", "c", "d", "e"])
+        self.assertEqual(adapter.http.get_json.await_count, 4)
+
+    async def test_mercari_stops_when_estimate_is_reached_without_extra_request(self):
+        adapter = self.adapter(MercariAdapter)
+        adapter.items_per_page = 3
+        adapter.http.get_json.side_effect = [{"items": [{"id": "a"}, {"id": "b"}], "count": 3}]
+        self.assertEqual([item["id"] async for item in adapter.iter_items("query")], ["a", "b"])
+        self.assertEqual(adapter.http.get_json.await_count, 1)
+
+    async def test_mercari_estimate_growing_past_page_cap_fails(self):
+        adapter = self.adapter(MercariAdapter, max_pages=2)
+        adapter.items_per_page = 2
+        adapter.http.get_json.side_effect = [
+            {"items": [{"id": "a"}, {"id": "b"}], "count": 4},
+            {"items": [{"id": "c"}, {"id": "d"}], "count": 9},
+        ]
+        received = []
+        with self.assertRaisesRegex(ProviderError, "max_pages_exceeded"):
+            async for item in adapter.iter_items("query"):
+                received.append(item["id"])
+        self.assertEqual(received, ["a", "b"])
+
     async def test_empty_results_are_successful(self):
         adapter = self.adapter()
         adapter.http.get_json.return_value = {"items": [], "count": 0}

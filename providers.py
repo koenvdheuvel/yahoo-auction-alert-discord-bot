@@ -129,6 +129,8 @@ class FromJapanAdapter:
     color = 0
     items_per_page = 99
     item_url = ""
+    # Yahoo and Surugaya report an exact total; Mercari's is an estimate (see MercariAdapter).
+    exact_count = True
 
     def __init__(self, http, settings):
         self.http, self.settings = http, settings
@@ -142,11 +144,17 @@ class FromJapanAdapter:
             raise ProviderError(self.source, "search", "invalid_items")
         items = payload["items"]
         count = integer(payload.get("count"), self.source, "count")
-        if len(items) > self.items_per_page or len(items) > count:
+        if len(items) > self.items_per_page or (self.exact_count and len(items) > count):
             raise ProviderError(self.source, "search", "inconsistent_count")
         if any(not isinstance(item, dict) for item in items):
             raise ProviderError(self.source, "search", "invalid_item")
         return items, count
+
+    def _pages(self, count):
+        pages = max(1, (count + self.items_per_page - 1) // self.items_per_page)
+        if pages > self.settings.max_pages:
+            raise ProviderError(self.source, "search", "max_pages_exceeded")
+        return pages
 
     async def iter_items(self, search_query):
         expected, received, pages = None, 0, 1
@@ -156,18 +164,22 @@ class FromJapanAdapter:
                 "keyword": search_query, "sort": "score", "hits": self.items_per_page, "page": page,
             })
             items, count = self._page(payload)
-            if expected is None:
+            if not self.exact_count:
+                # Estimated totals drift between pages and pages come back short; an empty
+                # page is the only reliable end, and each page refreshes the estimate.
+                if not items:
+                    return
+                pages = max(page, self._pages(count))
+            elif expected is None:
                 expected = count
-                pages = max(1, (expected + self.items_per_page - 1) // self.items_per_page)
-                if pages > self.settings.max_pages:
-                    raise ProviderError(self.source, "search", "max_pages_exceeded")
-            if not items and received < expected:
+                pages = self._pages(expected)
+            if self.exact_count and not items and received < expected:
                 raise ProviderError(self.source, "search", "incomplete_pagination")
             for item in items:
                 received += 1
                 yield item
             page += 1
-        if received != expected:
+        if self.exact_count and received != expected:
             raise ProviderError(self.source, "search", "incomplete_pagination")
 
     def normalize(self, data):
@@ -203,6 +215,9 @@ class MercariAdapter(FromJapanAdapter):
     source = "mercari"
     color = 0xFF0000
     item_url = "https://jp.mercari.com/item/{id}"
+    # FromJapan's Mercari `count` changes from page to page (e.g. 127 -> 300 -> 0, or
+    # 3844 -> 9319) and pages hold fewer than `hits` items.
+    exact_count = False
 
 
 class SurugayaAdapter(FromJapanAdapter):
