@@ -16,10 +16,14 @@ class FilterService:
         matched_filters = []
         
         for db_filter in filters:
-            filter = self.filter_factory.create(db_filter)
-            matches = filter.matches(item.title)
+            filter_instance = self.filter_factory.create(db_filter)
+            item_matches_filter = filter_instance.match(item.title)
             
-            if (matches and not db_filter.inverse) or (not matches and db_filter.inverse):
+            is_hit = (item_matches_filter and not db_filter.inverse) or (not item_matches_filter and db_filter.inverse)
+            
+            if is_hit:
+                db_filter.matches += 1
+                db_filter.save()
                 matched_filters.append(db_filter)
         
         if matched_filters:

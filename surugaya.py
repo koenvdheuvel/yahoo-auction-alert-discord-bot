@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from logging import error
 from hikari import Color
 from storechecker import AlertChecker, AbstractItem
+import asyncio
 
 @dataclass
 class SurugayaItem(AbstractItem):
@@ -46,17 +47,21 @@ class SurugayaChecker(AlertChecker):
         return content["items"]
 
     async def normalize_item(self, data: dict) -> AbstractItem:
-        item = SurugayaItem(
-            id=data.get('id'),
-            stock=data.get('stock'),
-            price=data.get('price'),
-            title=data.get('title'),
-            image_url=data.get('imageUrl')
-        )
+        try:
+            item = SurugayaItem(
+                id=data.get('id'),
+                stock=data.get('stock'),
+                price=data.get('price'),
+                title=data.get('title'),
+                image_url=data.get('imageUrl')
+            )
 
-        async with aiohttp.ClientSession() as session:
-            page_response = await session.get(item.url, headers=self.headers)
-            soup = BeautifulSoup(await page_response.text(), 'html.parser')
-            item.title = soup.find('h1', id="item_title").text.strip()
+            async with aiohttp.ClientSession() as session:
+                page_response = await session.get(item.url, headers=self.headers)
+                soup = BeautifulSoup(await page_response.text(), 'html.parser')
+                item.title = soup.find('h1', id="item_title").text.strip()
 
-        return item
+            return item
+        except asyncio.CancelledError:
+            # Re-raise cancellation to propagate properly
+            raise
