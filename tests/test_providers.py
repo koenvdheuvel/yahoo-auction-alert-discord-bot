@@ -139,6 +139,17 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 received.append(item["id"])
         self.assertEqual(received, ["a", "b", "c"])
 
+    async def test_exact_total_changing_mid_scan_uses_latest_total(self):
+        # Observed live for Yahoo "babymetal": an auction ended mid-scan, 2880 -> 2879.
+        adapter = self.adapter()
+        adapter.items_per_page = 2
+        adapter.http.get_json.side_effect = [
+            {"items": [{"id": "a"}, {"id": "b"}], "count": 5},
+            {"items": [{"id": "c"}, {"id": "d"}], "count": 4},
+        ]
+        self.assertEqual([item["id"] async for item in adapter.iter_items("query")], ["a", "b", "c", "d"])
+        self.assertEqual(adapter.http.get_json.await_count, 2)
+
     async def test_mercari_follows_drifting_estimate_until_empty_page(self):
         # Shape observed live for "beatmania ポスター": 127 -> 300 -> 300 -> 0 with short pages.
         adapter = self.adapter(MercariAdapter)

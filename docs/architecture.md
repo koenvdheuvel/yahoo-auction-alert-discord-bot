@@ -65,7 +65,7 @@ Polling creates only `CHECK_CONCURRENCY` check-worker tasks and lazily assigns a
 
 HTTP and Discord delivery have separate scheduling. Database work and its queue wait are measured outside the event-loop thread. Provider instances and their connection pool live for the runtime lifetime. Pagination yields a page at a time and explicitly reports searches exceeding `MAX_SEARCH_PAGES`, malformed responses, or incomplete pagination.
 
-Yahoo and Surugaya report an exact result `count`, so a scan must deliver exactly that many items. FromJapan's Mercari `count` is only an estimate that changes between pages, and its pages are short; Mercari scans recompute the page total from each response and end at the first empty page. `MAX_SEARCH_PAGES` caps both.
+Every search page refreshes the result `count` and page total, because listings end or appear during long scans. Yahoo and Surugaya report an exact `count`, so a scan fails as incomplete if it delivers fewer items than the latest one. FromJapan's Mercari `count` is only an estimate and its pages are short, so Mercari scans end at the first empty page. `MAX_SEARCH_PAGES` caps both.
 
 Surugaya listings take their title and canonical product URL (`/product/detail/` or `/product/other/`) from the FromJapan search response, like the other marketplaces. suruga-ya.jp answers automated product-page requests with a Cloudflare challenge, so the bot never fetches product HTML.
 

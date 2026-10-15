@@ -157,29 +157,26 @@ class FromJapanAdapter:
         return pages
 
     async def iter_items(self, search_query):
-        expected, received, pages = None, 0, 1
-        page = 1
+        expected, received, pages, page = 0, 0, 1, 1
         while page <= pages:
             payload = await self.http.get_json(self.source, "search", self.search_url, params={
                 "keyword": search_query, "sort": "score", "hits": self.items_per_page, "page": page,
             })
             items, count = self._page(payload)
-            if not self.exact_count:
-                # Estimated totals drift between pages and pages come back short; an empty
-                # page is the only reliable end, and each page refreshes the estimate.
-                if not items:
-                    return
-                pages = max(page, self._pages(count))
-            elif expected is None:
-                expected = count
-                pages = self._pages(expected)
-            if self.exact_count and not items and received < expected:
-                raise ProviderError(self.source, "search", "incomplete_pagination")
+            if not items:
+                # The only reliable end for estimated totals; exact ones must already be met.
+                if self.exact_count and received < expected:
+                    raise ProviderError(self.source, "search", "incomplete_pagination")
+                return
+            # Listings end or appear while a long scan runs, so every page refreshes the
+            # total (e.g. Yahoo 2880 -> 2879 at page 27); completeness uses the latest one.
+            expected = count
+            pages = max(page, self._pages(count))
             for item in items:
                 received += 1
                 yield item
             page += 1
-        if self.exact_count and received != expected:
+        if self.exact_count and received < expected:
             raise ProviderError(self.source, "search", "incomplete_pagination")
 
     def normalize(self, data):
