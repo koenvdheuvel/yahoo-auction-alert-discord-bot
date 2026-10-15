@@ -1,0 +1,33 @@
+# Run with: promtool test rules monitoring/grafana.test.yml
+rule_files: []
+evaluation_interval: 1m
+
+tests:
+  - name: alert-metadata-join-preserves-counts-and-scopes-identities
+    interval: 1m
+    input_series:
+      - series: 'auction_bot_alert_checks_total{job="auction-bot",instance="bot-a:9100",alert_id="17",source="mercari",outcome="error"}'
+        values: '5+0x1'
+      - series: 'auction_bot_alert_checks_total{job="auction-bot",instance="bot-a:9100",alert_id="17",source="surugaya",outcome="success"}'
+        values: '12+0x1'
+      - series: 'auction_bot_alert_checks_total{job="auction-bot",instance="bot-b:9100",alert_id="17",source="mercari",outcome="error"}'
+        values: '9+0x1'
+      - series: 'auction_bot_alert_checks_total{job="auction-bot",instance="bot-a:9100",alert_id="99",source="mercari",outcome="error"}'
+        values: '2+0x1'
+      - series: 'auction_bot_alert_info{job="auction-bot",instance="bot-a:9100",alert_id="17",search_query="BABYMETAL",channel_id="123"}'
+        values: '1+0x1'
+      - series: 'auction_bot_alert_info{job="auction-bot",instance="bot-b:9100",alert_id="17",search_query="Japanese figure",channel_id="456"}'
+        values: '1+0x1'
+    promql_expr_test:
+      - expr: |
+          auction_bot_alert_checks_total{job="auction-bot"}
+            * on (job, instance, alert_id) group_left(search_query, channel_id)
+              auction_bot_alert_info{job="auction-bot"}
+        eval_time: 1m
+        exp_samples:
+          - labels: '{job="auction-bot",instance="bot-a:9100",alert_id="17",source="mercari",outcome="error",search_query="BABYMETAL",channel_id="123"}'
+            value: 5
+          - labels: '{job="auction-bot",instance="bot-a:9100",alert_id="17",source="surugaya",outcome="success",search_query="BABYMETAL",channel_id="123"}'
+            value: 12
+          - labels: '{job="auction-bot",instance="bot-b:9100",alert_id="17",source="mercari",outcome="error",search_query="Japanese figure",channel_id="456"}'
+            value: 9

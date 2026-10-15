@@ -1,21 +1,31 @@
 import lightbulb
-from commands.base import BaseCommand
-from models import Alert
-class RegisterCommand(BaseCommand):
-    def register(self):
-        @self.bot.command
-        @lightbulb.option("search_query", "search query of the item to register.", required=True)
-        @lightbulb.command(
-            "register", "Register a new search query for a specific item.", pass_options=True
+from commands.base import (
+    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS,
+    log_change, management_hooks, respond,
+)
+
+
+class RegisterCommand(
+    lightbulb.SlashCommand, name="register", description="Register a search alert in this channel.",
+    default_member_permissions=ADMIN_PERMISSION, contexts=GUILD_CONTEXTS,
+    integration_types=GUILD_INSTALLS, hooks=management_hooks(),
+):
+    search_query = lightbulb.string(
+        "search_query", "Search query to monitor in this channel.", min_length=1, max_length=100,
+    )
+
+    @lightbulb.invoke
+    async def invoke(self, ctx: lightbulb.Context, services: CommandServices):
+        search_query = self.search_query.strip()
+        if not search_query:
+            await respond(ctx, "Enter a non-empty search query.", ephemeral=True)
+            return
+        created = await services.repository.register_alert(
+            ctx.channel_id, search_query, guild_id=ctx.guild_id,
         )
-        @lightbulb.implements(lightbulb.SlashCommand)
-        async def register(ctx: lightbulb.SlashContext, search_query: str) -> None:
-            if Alert().select().where(Alert.search_query == search_query).exists():
-                await ctx.respond(f"Alert for **{search_query}** already exists!")
-
-            alert = Alert.create(
-                channel_id=ctx.channel_id,
-                search_query=search_query,
-            )
-
-            await ctx.respond(f"Registered alert for **{search_query}**!")
+        if not created:
+            await respond(ctx, f"Alert for **{search_query}** already exists in this channel!",
+                          ephemeral=True)
+            return
+        log_change("alert_registered", ctx)
+        await respond(ctx, f"Registered alert for **{search_query}**!", ephemeral=True)

@@ -1,0 +1,115 @@
+groups:
+  - name: auction-bot
+    rules:
+      - alert: AuctionBotUnavailable
+        expr: up{job="auction-bot"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Auction bot metrics unavailable on {{ $labels.instance }}'
+          description: 'Check process/container state, startup logs, monitoring bind address and Prometheus target connectivity.'
+
+      - alert: AuctionBotNotReady
+        expr: auction_bot_ready{job="auction-bot"} == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Auction bot is not ready on {{ $labels.instance }}'
+          description: 'Read /health/ready. Check disconnected gateway shards, database availability, stale polling and worker_stopped logs.'
+
+      - alert: AuctionBotWorkerStopped
+        expr: |
+          auction_bot_worker_alive{job="auction-bot"} == 0
+          and on (job, instance) auction_bot_started_timestamp_seconds > 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Auction bot worker {{ $labels.worker }} stopped on {{ $labels.instance }}'
+          description: 'Find worker_stopped in structured logs. A fatal worker exit shuts down the bot; check that process supervision restarted it and resolve the underlying failure.'
+
+      - alert: AuctionBotPollStalled
+        expr: |
+          (
+            (time() - auction_bot_last_poll_completed_timestamp_seconds{job="auction-bot"}
+              > auction_bot_health_max_poll_age_seconds)
+            and auction_bot_last_poll_completed_timestamp_seconds > 0
+          )
+          or
+          (
+            (auction_bot_last_poll_completed_timestamp_seconds{job="auction-bot"} == 0)
+            and (time() - auction_bot_started_timestamp_seconds > auction_bot_health_max_poll_age_seconds)
+            and (auction_bot_started_timestamp_seconds > 0)
+          )
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Auction bot poll cycle has stopped completing on {{ $labels.instance }}'
+          description: 'Inspect active checks, per-source request latency, database latency and check_timed_out logs. If healthy cycles legitimately exceed HEALTH_MAX_POLL_AGE, adjust it using measured cycle duration.'
+
+      - alert: AuctionBotSourceStale
+        expr: |
+          (time() - auction_bot_source_last_success_timestamp_seconds{job="auction-bot"}
+            > on (job, instance) group_left() (3 * auction_bot_health_max_poll_age_seconds))
+          and on (job, instance)
+            (time() - auction_bot_started_timestamp_seconds > 3 * auction_bot_health_max_poll_age_seconds)
+          and on (job, instance) (auction_bot_configured_alerts > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'No successful {{ $labels.source }} cycle on {{ $labels.instance }}'
+          description: 'Use check_failed and provider error logs to distinguish API failures, payload changes, invalid listings, enrichment failures and database errors. Completed poll cycles can still contain failed source checks.'
+
+      - alert: AuctionBotDeliveryBacklog
+        expr: auction_bot_outbox_oldest_pending_age_seconds{job="auction-bot"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Auction bot delivery queue is aging on {{ $labels.instance }}'
+          description: 'Inspect delivery_failed logs, pending-job count, Discord rate limits and database_stats freshness. Retried jobs retain their original queue age.'
+
+      - alert: AuctionBotDeliveryFailed
+        expr: auction_bot_outbox_failed{job="auction-bot"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Auction bot has terminal delivery failures on {{ $labels.instance }}'
+          description: 'Read delivery_failed logs and delivery_job.last_error. Resolve missing Discord permissions, unavailable destinations, invalid payloads or exhausted retries before manually requeuing any job.'
+
+      - alert: AuctionBotDatabaseStatsStale
+        expr: |
+          time() - auction_bot_database_stats_refreshed_timestamp_seconds{job="auction-bot"}
+            > (3 * auction_bot_configured_stats_interval_seconds + 30)
+          and auction_bot_started_timestamp_seconds > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Auction bot database statistics are stale on {{ $labels.instance }}'
+          description: 'Outbox gauges may no longer reflect current state. Inspect database_stats_failed logs, database errors, database queue latency and worker health.'
+
+      - alert: AuctionBotEventLoopLag
+        expr: |
+          histogram_quantile(0.95,
+            sum by (job, instance, le) (rate(auction_bot_event_loop_lag_seconds_bucket{job="auction-bot"}[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Auction bot event loop is delayed on {{ $labels.instance }}'
+          description: 'Inspect CPU/memory and per-check workload. Database operations should run on the repository thread; avoid adding blocking work to Discord event handlers.'
+
+      - alert: AuctionBotLegacyFiltersDisabled
+        expr: auction_bot_disabled_legacy_filters{job="auction-bot"} > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: 'Auction bot has migrated filters awaiting matcher selection on {{ $labels.instance }}'
+          description: 'List the filters in their Discord channel, select the intended text or regex matcher and recreate them. The old schema did not preserve that selection.'

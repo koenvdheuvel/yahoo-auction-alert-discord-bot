@@ -1,0 +1,75 @@
+# Run with: promtool test rules monitoring/alerts.test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A completed heartbeat alone must not conceal a source that has never
+  # succeeded. The source label joins against per-instance configuration.
+  - name: completed-cycles-with-stale-source
+    interval: 1m
+    input_series:
+      - series: 'auction_bot_started_timestamp_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '1+0x12'
+      - series: 'auction_bot_health_max_poll_age_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '60+0x12'
+      - series: 'auction_bot_last_poll_completed_timestamp_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '1+60x12'
+      - series: 'auction_bot_source_last_success_timestamp_seconds{job="auction-bot",instance="bot:9100",source="yahooauction"}'
+        values: '0+0x12'
+      - series: 'auction_bot_configured_alerts{job="auction-bot",instance="bot:9100"}'
+        values: '2+0x12'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AuctionBotSourceStale
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: AuctionBotPollStalled
+        exp_alerts: []
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuctionBotSourceStale",alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AuctionBotSourceStale",alertstate="firing",job="auction-bot",instance="bot:9100",source="yahooauction",severity="warning"}'
+            value: 1
+
+  # Empty polling cycles intentionally do not advance source success; a
+  # deployment with no registered searches must not alert on this condition.
+  - name: no-alerts-no-stale-source-warning
+    interval: 1m
+    input_series:
+      - series: 'auction_bot_started_timestamp_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '1+0x12'
+      - series: 'auction_bot_health_max_poll_age_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '60+0x12'
+      - series: 'auction_bot_source_last_success_timestamp_seconds{job="auction-bot",instance="bot:9100",source="mercari"}'
+        values: '0+0x12'
+      - series: 'auction_bot_configured_alerts{job="auction-bot",instance="bot:9100"}'
+        values: '0+0x12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AuctionBotSourceStale
+        exp_alerts: []
+
+  # A process that has never completed its first poll receives startup grace
+  # based on its configured health threshold, then alerts after the hold time.
+  - name: first-poll-startup-grace-and-stall
+    interval: 1m
+    input_series:
+      - series: 'auction_bot_started_timestamp_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '1+0x6'
+      - series: 'auction_bot_health_max_poll_age_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '60+0x6'
+      - series: 'auction_bot_last_poll_completed_timestamp_seconds{job="auction-bot",instance="bot:9100"}'
+        values: '0+0x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: AuctionBotPollStalled
+        exp_alerts: []
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuctionBotPollStalled",alertstate="firing"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AuctionBotPollStalled",alertstate="firing",job="auction-bot",instance="bot:9100",severity="warning"}'
+            value: 1

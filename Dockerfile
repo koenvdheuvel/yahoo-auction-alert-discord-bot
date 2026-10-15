@@ -1,7 +1,10 @@
-FROM python:3.11-alpine AS build
+FROM python:3.11-slim
 
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
-COPY . /app
+COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+COPY . /app
 
-CMD ["python", "-OO", "main.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 CMD ["python", "healthcheck.py"]
+CMD ["python", "main.py"]

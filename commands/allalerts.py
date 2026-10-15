@@ -1,23 +1,22 @@
 import lightbulb
-from commands.base import BaseCommand
-from models import Alert
-from lightbulb.utils import pag, nav
+from commands.base import (
+    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, management_hooks, respond,
+)
 
-class AllAlertsCommand(BaseCommand):
-    def register(self):
-        @self.bot.command
-        @lightbulb.command("allalerts", "List alerts for all channels")
-        @lightbulb.implements(lightbulb.SlashCommand)
-        async def allalerts(ctx: lightbulb.SlashContext) -> None:
-            # Fetch all alerts and group them by channel_id
-            alerts = Alert.select().order_by(Alert.channel_id)
-            if not alerts:
-                await ctx.respond("You have no alerts!")
-                return
 
-            paginated_alerts = pag.StringPaginator()
-            for alert in alerts:
-                paginated_alerts.add_line(f"<#{alert.channel_id}> - {alert.search_query}")
-            navigation = nav.ButtonNavigator(paginated_alerts.build_pages())
-            await navigation.run(ctx)
-
+class AllAlertsCommand(
+    lightbulb.SlashCommand, name="allalerts", description="List alerts across this server's channels.",
+    default_member_permissions=ADMIN_PERMISSION, contexts=GUILD_CONTEXTS,
+    integration_types=GUILD_INSTALLS, hooks=management_hooks(),
+):
+    @lightbulb.invoke
+    async def invoke(self, ctx: lightbulb.Context, services: CommandServices):
+        alerts = await services.repository.list_alerts(
+            channel_id=ctx.channel_id, guild_id=ctx.guild_id,
+        )
+        if not alerts:
+            await respond(ctx, "You have no alerts in this server!", ephemeral=True)
+            return
+        await services.respond_lines(ctx, [
+            f"<#{alert['channel_id']}> - {alert['search_query']}" for alert in alerts
+        ], ephemeral=True)

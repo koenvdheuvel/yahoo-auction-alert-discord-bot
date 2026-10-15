@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: auction-bot
+    metrics_path: /metrics
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ['127.0.0.1:9100']

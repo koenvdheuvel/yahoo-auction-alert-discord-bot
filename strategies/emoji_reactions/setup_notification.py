@@ -1,22 +1,21 @@
-# strategies/delete_message_strategy.py
-import hikari
+import logging
 from .base import EmojiActionStrategy
-from logging import info
-from models import Item, Notification
+
+
+logger = logging.getLogger(__name__)
+
 
 class SetupNotificationStrategy(EmojiActionStrategy):
-    async def execute(self, event: hikari.ReactionAddEvent, bot):
-        channel_id = event.channel_id
-        message_id = event.message_id
-        guild_id = event.guild_id
-
-        message = await bot.rest.fetch_message(channel_id, message_id)
-        dm_channel = await bot.rest.create_dm_channel(event.user_id)
-        if message.author.id == bot.get_me().id:
-            item = Item.select().where(Item.message_id == message_id).get()
-            if item:
-                Notification.create(item=item, user_id=event.user_id)
-                
-                await bot.rest.create_message(dm_channel.id, f"Notification set for Item https://discord.com/channels/{guild_id}/{channel_id}/{message_id}.")
-                info(f"[{self.__class__.__name__}] Notification set for {item.item_id} after reaction by {event.user_id}.")
-            
+    async def execute(self, event, bot):
+        message = await self.lookup(event, bot)
+        if message is None:
+            return
+        created = await bot.services.repository.subscribe(message["item_id"], event.user_id)
+        if not created:
+            return
+        logger.info("notification_subscribed",
+                    extra={"fields": {"source": message["source"],
+                                      "external_id": message["external_id"],
+                                      "user_id": int(event.user_id),
+                                      "channel_id": int(event.channel_id)}})
+        await self.confirm(event, bot, f"Notification set for item {self.message_url(event)}.")

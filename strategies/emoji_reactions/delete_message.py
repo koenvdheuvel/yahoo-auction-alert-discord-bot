@@ -1,20 +1,31 @@
-# strategies/delete_message_strategy.py
+import logging
+
 import hikari
 from .base import EmojiActionStrategy
-from logging import info
-from models import Blacklist, Item
+
+
+logger = logging.getLogger(__name__)
+
 
 class DeleteMessageStrategy(EmojiActionStrategy):
-    async def execute(self, event: hikari.ReactionAddEvent, bot):
-        channel_id = event.channel_id
-        message_id = event.message_id
-
-        message = await bot.rest.fetch_message(channel_id, message_id)
-        if message.author.id == bot.get_me().id:
-            item = Item.select().where(Item.message_id == message_id).get()
-            if item:
-                Blacklist.create(item=item, channel_id=channel_id)
-                info(f"[{self.__class__.__name__}] Blacklisted item {item.item_id} after reaction by {event.user_id}.")
-
-            await bot.rest.delete_message(channel_id, message_id)
-            info(f"[{self.__class__.__name__}] Message {message_id} deleted after reaction.")
+    async def execute(self, event, bot):
+        message = await self.lookup(event, bot)
+        if message is None:
+            return
+        await bot.services.repository.blacklist_item(message["item_id"], event.channel_id)
+        try:
+            await bot.rest.delete_message(event.channel_id, event.message_id)
+        except hikari.NotFoundError:
+            # Another reaction or cleanup may already have removed the same post.
+            pass
+        except hikari.ForbiddenError:
+            logger.warning("blacklisted_message_delete_forbidden", exc_info=True,
+                           extra={"fields": {"channel_id": int(event.channel_id),
+                                              "message_id": int(event.message_id)}})
+            return
+        await bot.services.repository.mark_message_deleted(event.channel_id, event.message_id)
+        logger.info("item_blacklisted",
+                    extra={"fields": {"source": message["source"],
+                                      "external_id": message["external_id"],
+                                      "channel_id": int(event.channel_id),
+                                      "message_id": int(event.message_id)}})

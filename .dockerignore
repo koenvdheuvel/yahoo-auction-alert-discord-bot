@@ -1,0 +1,11 @@
+.git
+.venv
+.env
+*.db*
+*.sqlite*
+*.bak
+*.review-token
+*.key
+**/__pycache__
+.pytest_cache
+.ruff_cache

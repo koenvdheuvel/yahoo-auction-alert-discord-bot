@@ -2,4 +2,6 @@
 .venv
 .env
 *.db*
+*.review-token
+*.key
 *__pycache__*

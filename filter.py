@@ -1,6 +1,7 @@
-class ItemFilter:
-    def __init__(self) -> None:
-        pass
+from abc import ABC, abstractmethod
 
+
+class ItemFilter(ABC):
+    @abstractmethod
     def match(self, item) -> bool:
-        raise NotImplementedError("This method should be overridden in child classes.")
+        raise NotImplementedError

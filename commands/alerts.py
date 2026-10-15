@@ -1,18 +1,15 @@
 import lightbulb
-from commands.base import BaseCommand
-from models import Alert
+from commands.base import CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, read_hooks, respond
 
-class AlertsCommand(BaseCommand):
-    def register(self):
-        @self.bot.command
-        @lightbulb.command("alerts", "List alerts for current channel")
-        @lightbulb.implements(lightbulb.SlashCommand)
-        async def alerts(ctx: lightbulb.SlashContext) -> None:
-            alerts = Alert.select().where(Alert.channel_id == ctx.channel_id)
 
-            if all(False for _ in alerts):
-                await ctx.respond("You have no alerts in this channel!")
-                return
-
-            alert_list = "\n".join([f"{alert.search_query}" for alert in alerts])
-            await ctx.respond(alert_list or "None")
+class AlertsCommand(
+    lightbulb.SlashCommand, name="alerts", description="List alerts in this channel.",
+    contexts=GUILD_CONTEXTS, integration_types=GUILD_INSTALLS, hooks=read_hooks(),
+):
+    @lightbulb.invoke
+    async def invoke(self, ctx: lightbulb.Context, services: CommandServices):
+        alerts = await services.repository.list_alerts(channel_id=ctx.channel_id)
+        if not alerts:
+            await respond(ctx, "You have no alerts in this channel!")
+            return
+        await services.respond_lines(ctx, [alert["search_query"] for alert in alerts])
