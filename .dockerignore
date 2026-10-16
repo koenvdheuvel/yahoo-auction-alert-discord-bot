@@ -1,11 +1,15 @@
 .git
 .venv
-.env
-*.db*
-*.sqlite*
-*.bak
-*.review-token
-*.key
+**/.env
+**/*.db*
+**/*.sqlite*
+**/*.bak
+**/*.review-token
+**/*.key
 **/__pycache__
 .pytest_cache
 .ruff_cache
+# The image builds the UI itself, so local installs and builds stay out.
+**/node_modules
+frontend/dist
+**/*.tsbuildinfo
