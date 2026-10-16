@@ -37,7 +37,7 @@ describe("Login with Discord", () => {
     ["missing_permission", "You need the Manage Channels permission"],
     ["discord_unavailable", "couldn't reach Discord"],
     ["rate_limited", "Too many sign-in attempts"],
-    ["cookie", "didn't keep Filter Lab's sign-in cookie"],
+    ["cookie", "didn't keep the dashboard's sign-in cookie"],
     ["something_new", "Signing in didn't work"],
   ])("explains why sign-in came back with %s, then clears it from the address", (reason, text) => {
     window.history.replaceState(null, "", `/?alert=5&signin=${reason}`);
@@ -66,9 +66,9 @@ describe("Login without Discord", () => {
     expect(screen.queryByRole("link", { name: "Sign in with Discord" })).not.toBeInTheDocument();
   });
 
-  it("offers to try again when Filter Lab can't be reached", async () => {
+  it("offers to try again when the dashboard can't be reached", async () => {
     const user = userEvent.setup();
-    const { onRetry } = show({ method: undefined, unreachable: new Error("Filter Lab can't be reached.") });
+    const { onRetry } = show({ method: undefined, unreachable: new Error("The dashboard can't be reached.") });
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetry).toHaveBeenCalled();
   });

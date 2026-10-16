@@ -1,4 +1,4 @@
-// Shapes returned by review.py. IDs are strings because Discord snowflakes exceed 2^53.
+// Shapes returned by dashboard.py. IDs are strings because Discord snowflakes exceed 2^53.
 
 export type Source = "yahooauction" | "mercari" | "surugaya";
 export type Verdict = "accepted" | "filtered" | "review";
@@ -7,7 +7,7 @@ export type LabelFilter = Label | "unlabeled";
 export type Policy = "require" | "exclude" | "review";
 export type TermMethod = "contains" | "exact" | "regex";
 
-/** How this Filter Lab signs people in: with Discord, or with the access key when Discord sign-in is not set up. */
+/** How this dashboard signs people in: with Discord, or with the access key when Discord sign-in is not set up. */
 export type SignInMethod = "discord" | "access_key";
 
 export interface DiscordUser {

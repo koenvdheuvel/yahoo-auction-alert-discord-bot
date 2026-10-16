@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class Runtime:
     def __init__(self, bot, settings, repository, http, ingestion, delivery, providers, metrics,
-                 review_server=None):
+                 dashboard_server=None):
         self.bot, self.settings = bot, settings
         self.repository, self.http = repository, http
         self.ingestion, self.delivery = ingestion, delivery
@@ -27,7 +27,7 @@ class Runtime:
         self.health = Health(settings.health_max_poll_age,
                              max_stats_age=max(30, 3 * settings.metrics_stats_interval))
         self.monitoring = MonitoringServer(settings, metrics, self.health)
-        self.review = review_server
+        self.dashboard = dashboard_server
         self._history_pruned_at = None
         self._history_prune_backlog = False
         self.tasks = self.health.tasks
@@ -57,8 +57,8 @@ class Runtime:
             await self.repository.start()
             await self.http.start()
             await self.monitoring.start()
-            if self.review is not None:
-                await self.review.start()
+            if self.dashboard is not None:
+                await self.dashboard.start()
         except Exception:
             await self.close()
             raise
@@ -137,7 +137,7 @@ class Runtime:
         if self.tasks:
             await asyncio.gather(*self.tasks.values(), return_exceptions=True)
         # Close each resource even if another resource reports an error.
-        for name, resource in (("review", self.review), ("monitoring", self.monitoring), ("http", self.http),
+        for name, resource in (("dashboard", self.dashboard), ("monitoring", self.monitoring), ("http", self.http),
                                ("repository", self.repository)):
             if resource is None:
                 continue

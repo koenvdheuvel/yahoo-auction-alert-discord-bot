@@ -24,7 +24,7 @@ class JsonFormatter(logging.Formatter):
         if isinstance(value, dict):
             return {key: "[redacted]" if str(key).lower() in {
                 "token", "bot_token", "authorization", "password", "secret",
-                "review_token", "access_key", "cookie", "client_secret", "access_token",
+                "dashboard_token", "access_key", "cookie", "client_secret", "access_token",
                 "refresh_token", "code_verifier"
             } else self._redact(item) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
@@ -105,13 +105,13 @@ class Metrics:
         self.gateway = gauge("discord_connected", "Discord gateway connection state")
         self.reaction_errors = counter("reaction_errors_total", "Reaction handler failures")
         self.command_errors = counter("command_errors_total", "Slash command failures", ("outcome",))
-        self.review_requests = counter("review_requests_total", "Filter Lab HTTP requests",
+        self.dashboard_requests = counter("dashboard_requests_total", "Dashboard HTTP requests",
                                        ("operation", "outcome"))
-        self.review_duration = histogram("review_request_duration_seconds", "Filter Lab request duration",
+        self.dashboard_duration = histogram("dashboard_request_duration_seconds", "Dashboard request duration",
                                          ("operation",))
-        self.review_logins = counter("review_logins_total", "Filter Lab sign-in attempts by result",
+        self.dashboard_logins = counter("dashboard_logins_total", "Dashboard sign-in attempts by result",
                                      ("method", "outcome"))
-        self.review_access_checks = counter("review_access_checks_total",
+        self.dashboard_access_checks = counter("dashboard_access_checks_total",
                                             "Repeated Discord access checks of signed-in people", ("outcome",))
         for outcome in ("success", "partial", "error"):
             self.polls.labels(outcome)
@@ -121,9 +121,9 @@ class Metrics:
                                  ("discord", ("success", "cancelled", "state", "not_member", "missing_permission",
                                               "discord_error", "discord_unavailable", "rate_limited", "cookie"))):
             for outcome in outcomes:
-                self.review_logins.labels(method, outcome)
+                self.dashboard_logins.labels(method, outcome)
         for outcome in ("kept", "reduced", "revoked", "error"):
-            self.review_access_checks.labels(outcome)
+            self.dashboard_access_checks.labels(outcome)
         for kind in ("channel", "dm"):
             for outcome in ("sent", "retry", "failed", "cancelled"):
                 self.deliveries.labels(kind, outcome)

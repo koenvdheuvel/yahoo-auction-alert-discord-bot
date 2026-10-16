@@ -1,4 +1,4 @@
-# Filter Lab's UI is built in this stage. Only the built files go into the bot image.
+# The dashboard's UI is built in this stage. Only the built files go into the bot image.
 FROM node:24-slim AS frontend
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./

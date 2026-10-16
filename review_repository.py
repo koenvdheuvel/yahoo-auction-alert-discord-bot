@@ -236,7 +236,7 @@ def _candidate_json(row):
 
 
 class ReviewRepositoryMixin:
-    """Methods behind Filter Lab take `guilds`: the server IDs the person may see, or None for all.
+    """Methods behind the dashboard take `guilds`: the server IDs the person may see, or None for all.
 
     An alert, candidate or version outside those servers is reported exactly like a missing one.
     """

@@ -28,15 +28,15 @@ guild and guild-reaction events, with no privileged intents required.
 
 Price decreases greater than ¥500, buyout changes greater than ¥500 in either direction, and stock changes whose new quantity exceeds 1 generate updates. `PRICE_CHANGE_THRESHOLD` configures the price threshold.
 
-## Filter Lab and title normalization
+## Dashboard and title normalization
 
 The operator UI opens at **http://127.0.0.1:9101** when the bot starts. With
-Discord sign-in set up (`REVIEW_PUBLIC_URL` and `REVIEW_DISCORD_CLIENT_SECRET`),
+Discord sign-in set up (`DASHBOARD_PUBLIC_URL` and `DASHBOARD_DISCORD_CLIENT_SECRET`),
 anyone with Manage Channels in one of the bot's servers signs in with Discord
 and sees only those servers. Without it, sign in with the key in
-`alerts.db.review-token` next to your configured database, or set
-`REVIEW_TOKEN` in `.env`. The generated file is private and excluded from Git
-and container builds. `REVIEW_ENABLED=false` disables the listener. The container
+`alerts.db.dashboard-token` next to your configured database, or set
+`DASHBOARD_TOKEN` in `.env`. The generated file is private and excluded from Git
+and container builds. `DASHBOARD_ENABLED=false` disables the listener. The container
 image includes the built UI; from a checkout, build it once with Node 22.12 or
 newer:
 
@@ -44,7 +44,7 @@ newer:
 cd frontend && npm ci && npm run build
 ```
 
-Filter Lab shows what each search found as a photo grid or as rows, with the
+The dashboard shows what each search found as a photo grid or as rows, with the
 bot's decision and its reasons. You label wrong products, accessories and
 bundles from the keyboard, one listing or a selection at a time, edit grouped
 rules, and compare drafts against saved history before publishing. Each required group
@@ -61,13 +61,13 @@ You can also run the UI against an existing database without starting Discord or
 marketplace polling:
 
 ```bash
-python review.py --database alerts.db
+python dashboard.py --database alerts.db
 ```
 
 The bot records new candidates automatically. The UI can explicitly import a
 bounded sample of older saved listings; those records lack the original filter
 decisions and never reconstruct alerts that were previously discarded. Replay
-and publishing do not send notifications. See the [Filter Lab guide](docs/filter-lab.md)
+and publishing do not send notifications. See the [dashboard guide](docs/dashboard.md)
 for rule design, replay limits, authentication, and retention.
 
 ## Metrics and health
@@ -117,6 +117,6 @@ npm ci
 npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-Tests use temporary SQLite files and local HTTP fixtures with fake Discord REST; they do not contact marketplace or Discord services. GitHub Actions runs both sets of checks before deploying pushes to `develop` (the dev bot) and `master` (production). The [Filter Lab guide](docs/filter-lab.md#developing-the-ui) explains live reloading for the UI.
+Tests use temporary SQLite files and local HTTP fixtures with fake Discord REST; they do not contact marketplace or Discord services. GitHub Actions runs both sets of checks before deploying pushes to `develop` (the dev bot) and `master` (production). The [dashboard guide](docs/dashboard.md#developing-the-ui) explains live reloading for the UI.
 
 This project originated as a rewrite of [vlourme's bot](https://github.com/vlourme/yahoo-auction-alert-discord-bot). It is licensed under the [GNU General Public License](LICENSE).

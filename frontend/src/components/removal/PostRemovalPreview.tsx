@@ -110,7 +110,7 @@ function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval 
         </Typography>
       )}
       {!data.bot_running && data.removable_total > 0 && (
-        <Alert severity="info">The bot does not run with this Filter Lab, so the posts are removed when it runs next.</Alert>
+        <Alert severity="info">The bot does not run with this dashboard, so the posts are removed when it runs next.</Alert>
       )}
     </>
   );
@@ -138,7 +138,7 @@ export function PostRemovalPreview({ removal }: { removal: PostRemoval }) {
       )}
       {preview.data && !preview.isFetching && <Result data={preview.data} removal={removal} />}
       <Typography variant="caption" color="text.secondary" component="p">
-        Removed posts cannot be brought back. Posts with 🔔 subscribers stay. The listings and labels in Filter Lab stay too.
+        Removed posts cannot be brought back. Posts with 🔔 subscribers stay. The listings and labels in the dashboard stay too.
       </Typography>
     </Box>
   );

@@ -1,4 +1,4 @@
-"""Real review HTTP flows, live ingestion and replay isolation on temporary SQLite."""
+"""Real dashboard HTTP flows, live ingestion and replay isolation on temporary SQLite."""
 from dataclasses import replace
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -18,13 +18,13 @@ from models import Item, configure_database, create_tables, database
 from observability import Metrics
 from providers import YahooAuctionsAdapter
 from repositories import Repository
-from review import NONCE_PLACEHOLDER, ReviewServer, review_key
+from dashboard import NONCE_PLACEHOLDER, DashboardServer, dashboard_key
 from storechecker import Ingestion
 
 
-TOKEN = "filter-lab-test-access-key-123456789"
+TOKEN = "dashboard-test-access-key-123456789"
 INDEX = (f'<!doctype html><html><head><meta property="csp-nonce" nonce="{NONCE_PLACEHOLDER}">'
-         '<title>Filter Lab</title><script type="module" crossorigin src="/assets/index-abc123.js"></script>'
+         '<title>Dashboard</title><script type="module" crossorigin src="/assets/index-abc123.js"></script>'
          '</head><body><div id="root"></div></body></html>')
 
 
@@ -61,7 +61,7 @@ class MemoryProvider:
 class ReviewTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
-        self.path = str(Path(self.directory.name) / "review.db")
+        self.path = str(Path(self.directory.name) / "alerts.db")
         configure_database(self.path)
         create_tables()
         self.metrics = Metrics()
@@ -69,22 +69,22 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         await self.repository.start()
         await self.repository.register_alert(9007199254740993, "BABYMETAL posters", guild_id=9007199254740995)
         self.alert = (await self.repository.list_alerts())[0]
-        settings = replace(Settings(), database_path=self.path, review_token=TOKEN)
+        settings = replace(Settings(), database_path=self.path, dashboard_token=TOKEN)
         # A stand-in for the Vite build, so these tests do not depend on Node.
         self.assets = Path(self.directory.name) / "dist"
         (self.assets / "assets").mkdir(parents=True)
         (self.assets / "index.html").write_text(INDEX, encoding="utf-8")
         (self.assets / "assets" / "index-abc123.js").write_text("export {};\n")
         (self.assets / "assets" / "index-abc123.py").write_text("print()\n")
-        self.review = ReviewServer(settings, self.repository, self.metrics, assets=self.assets)
-        self.client = TestClient(TestServer(self.review.application(TOKEN)), cookie_jar=CookieJar(unsafe=True))
+        self.dashboard = DashboardServer(settings, self.repository, self.metrics, assets=self.assets)
+        self.client = TestClient(TestServer(self.dashboard.application(TOKEN)), cookie_jar=CookieJar(unsafe=True))
         await self.client.start_server()
         self.origin = str(self.client.make_url("/")).rstrip("/")
         self.headers = {"Origin": self.origin}
 
     async def asyncTearDown(self):
         await self.client.close()
-        await self.review.close()
+        await self.dashboard.close()
         await self.repository.close()
         database.close()
         self.directory.cleanup()
@@ -118,7 +118,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                                           headers={"Origin": self.origin.replace("http:", "https:")})
         self.assertEqual(response.status, 403)
         response = await self.login()
-        cookie = response.cookies["filter_lab_session"]
+        cookie = response.cookies["dashboard_session"]
         self.assertTrue(cookie["httponly"])
         self.assertEqual(cookie["samesite"], "Strict")
         response = await self.client.get("/api/alerts")
@@ -136,7 +136,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/login", json={"token": TOKEN},
                                           headers={"Origin": https_origin, "X-Forwarded-Proto": "https"})
         self.assertEqual(response.status, 200)
-        self.assertTrue(response.cookies["filter_lab_session"]["secure"])
+        self.assertTrue(response.cookies["dashboard_session"]["secure"])
         response = await self.client.post("/api/login", json={"token": TOKEN},
                                           headers={"Origin": self.origin, "X-Forwarded-Proto": "https"})
         self.assertEqual(response.status, 403)
@@ -253,7 +253,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.repository.list_candidates())["total"], 0)
 
     async def test_concurrent_bad_logins_share_the_same_bounded_attempt_window(self):
-        original_body = self.review.body
+        original_body = self.dashboard.body
         ready, arrived = asyncio.Event(), 0
 
         async def simultaneous_bodies(request):
@@ -265,17 +265,17 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
             await ready.wait()
             return data
 
-        self.review.body = simultaneous_bodies
+        self.dashboard.body = simultaneous_bodies
         responses = await asyncio.wait_for(asyncio.gather(
             *(self.post("/api/login", {"token": "incorrect"}) for _ in range(20))), timeout=5)
         self.assertEqual(sum(response.status == 401 for response in responses), 10)
         self.assertEqual(sum(response.status == 429 for response in responses), 10)
-        self.assertEqual(len(self.review.login_failures), 10)
+        self.assertEqual(len(self.dashboard.login_failures), 10)
 
     async def test_static_ui_is_public_but_archive_is_private_and_assets_are_restricted(self):
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)
-        self.assertIn("Filter Lab", await response.text())
+        self.assertIn("Dashboard", await response.text())
         self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
         self.assertEqual((await self.client.get("/assets/index-abc123.js")).status, 200)
         self.assertEqual((await self.client.get("/assets/not-a-file")).status, 404)
@@ -305,7 +305,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await self.client.get(path)).status, 404)
 
     async def test_missing_build_returns_a_clear_error_instead_of_a_blank_page(self):
-        self.review.assets = Path(self.directory.name) / "not-built"
+        self.dashboard.assets = Path(self.directory.name) / "not-built"
         response = await self.client.get("/")
         self.assertEqual(response.status, 503)
         self.assertIn("npm run build", await response.text())
@@ -369,7 +369,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
     async def test_alerts_include_counts_and_channel_names_when_the_bot_cache_has_them(self):
         await self.login()
         await self.seed()
-        self.review.channel_names = lambda ids: {channel_id: "posters" for channel_id in ids}
+        self.dashboard.channel_names = lambda ids: {channel_id: "posters" for channel_id in ids}
         body = await (await self.client.get("/api/alerts")).json()
         alert = body["alerts"][0]
         self.assertEqual((alert["channel_name"], alert["listing_count"], alert["accepted_count"]), ("posters", 4, 4))
@@ -378,7 +378,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
         def unavailable(ids):
             raise RuntimeError("cache unavailable")
-        self.review.channel_names = unavailable
+        self.dashboard.channel_names = unavailable
         response = await self.client.get("/api/alerts")
         self.assertEqual(response.status, 200)
         self.assertIsNone((await response.json())["alerts"][0]["channel_name"])
@@ -405,9 +405,9 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_access_key_is_persisted_privately_and_reused(self):
         settings = replace(Settings(), database_path=self.path)
-        first = review_key(settings)
-        self.assertEqual(review_key(settings), first)
-        path = Path(self.path + ".review-token")
+        first = dashboard_key(settings)
+        self.assertEqual(dashboard_key(settings), first)
+        path = Path(self.path + ".dashboard-token")
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertGreaterEqual(len(first), 32)
 

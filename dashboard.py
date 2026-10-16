@@ -21,7 +21,7 @@ from urllib.parse import urlencode, urlsplit
 
 from aiohttp import web
 
-from review_auth import (CALLBACK_PATH, LOGIN_PATH, DiscordGuilds, DiscordOAuth, DiscordRefused,
+from dashboard_auth import (CALLBACK_PATH, LOGIN_PATH, DiscordGuilds, DiscordOAuth, DiscordRefused,
                          DiscordUnavailable)
 from review_repository import ReviewConflict, ReviewNotFound, ReviewValidation
 from review_service import ReviewBusy, ReviewService, identifier
@@ -30,13 +30,13 @@ from review_service import ReviewBusy, ReviewService, identifier
 logger = logging.getLogger(__name__)
 # The Vite build of frontend/. The container copies only this directory, not the sources.
 ASSETS = Path(__file__).resolve().parent / "frontend" / "dist"
-COOKIE = "filter_lab_session"
+COOKIE = "dashboard_session"
 SESSION_SECONDS = 12 * 3600
 MAX_SESSIONS = 128
 # Sessions one Discord user may hold, so nobody can push everyone else's sessions out.
 MAX_SESSIONS_PER_USER = 5
 # Discord sign-in. This cookie ties Discord's answer to the browser that started the sign-in.
-LOGIN_COOKIE = "filter_lab_login"
+LOGIN_COOKIE = "dashboard_login"
 LOGIN_SECONDS = 600
 FINISH_PATH = LOGIN_PATH + "/finish"
 # How long one check of a person's Discord servers counts for. After Discord fails to answer,
@@ -60,11 +60,11 @@ ERROR_CODES = {401: "unauthorized", 403: "forbidden", 404: "not_found", 405: "me
                413: "payload_too_large", 415: "unsupported_media_type", 429: "rate_limited"}
 # Discord sends the browser back from discord.com, another site, so the browser leaves out the
 # SameSite=Strict session cookie on that request and on redirects that follow it. This page
-# moves on from Filter Lab itself, which makes the next request same-site, so the cookie is sent.
+# moves on from the dashboard itself, which makes the next request same-site, so the cookie is sent.
 HOP_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Signing in to Filter Lab</title>
+<html lang="en"><head><meta charset="utf-8"><title>Signing in to the dashboard</title>
 <meta http-equiv="refresh" content="0; url={target}"></head>
-<body><p>Signing in to Filter Lab. <a href="{target}">Continue</a></p></body></html>
+<body><p>Signing in to the dashboard. <a href="{target}">Continue</a></p></body></html>
 """
 
 
@@ -76,15 +76,15 @@ def content_security_policy(nonce=None):
             "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 
 
-def review_key(settings):
+def dashboard_key(settings):
     """Persist a generated operator key privately; never put it in logs or URLs."""
-    if settings.review_token:
-        if not 16 <= len(settings.review_token) <= 512:
-            raise ValueError("REVIEW_TOKEN must contain between 16 and 512 characters")
-        return settings.review_token
-    path = Path(settings.review_token_file or (settings.database_path + ".review-token"))
-    if settings.database_path == ":memory:" and not settings.review_token_file:
-        raise ValueError("In-memory review requires REVIEW_TOKEN or REVIEW_TOKEN_FILE")
+    if settings.dashboard_token:
+        if not 16 <= len(settings.dashboard_token) <= 512:
+            raise ValueError("DASHBOARD_TOKEN must contain between 16 and 512 characters")
+        return settings.dashboard_token
+    path = Path(settings.dashboard_token_file or (settings.database_path + ".dashboard-token"))
+    if settings.database_path == ":memory:" and not settings.dashboard_token_file:
+        raise ValueError("An in-memory database requires DASHBOARD_TOKEN or DASHBOARD_TOKEN_FILE")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags, 0o600)
@@ -93,15 +93,15 @@ def review_key(settings):
         with os.fdopen(descriptor) as handle:
             metadata = os.fstat(handle.fileno())
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
-                raise ValueError("The review access-key file must be a private regular file (mode 600)")
+                raise ValueError("The access-key file must be a private regular file (mode 600)")
             token = handle.read(4096).strip()
     else:
         token = secrets.token_urlsafe(32)
         with os.fdopen(descriptor, "w") as handle:
             handle.write(token + "\n")
-        logger.info("review_key_created", extra={"fields": {"path": str(path)}})
+        logger.info("dashboard_key_created", extra={"fields": {"path": str(path)}})
     if len(token) < 16 or len(token) > 512:
-        raise ValueError("The review access-key file is invalid")
+        raise ValueError("The access-key file is invalid")
     return token
 
 
@@ -141,7 +141,7 @@ def _redirect(location, status=302):
 
 
 def _origin(scheme, host):
-    """scheme://host as REVIEW_PUBLIC_URL writes it: lowercase, without the default port."""
+    """scheme://host as DASHBOARD_PUBLIC_URL writes it: lowercase, without the default port."""
     host = host.lower()
     default = {"https": ":443", "http": ":80"}.get(scheme, "")
     if default and host.endswith(default):
@@ -177,7 +177,7 @@ class AccessUnknown(Exception):
     """Discord did not answer, so the person's access cannot be confirmed."""
 
 
-class ReviewServer:
+class DashboardServer:
     def __init__(self, settings, repository, metrics=None, *, channel_names=None, bot_running=False, assets=ASSETS,
                  guild_access=None, oauth=None, access_seconds=ACCESS_SECONDS):
         """channel_names maps a set of channel IDs to display names; the bot passes its cache.
@@ -190,11 +190,11 @@ class ReviewServer:
         self.channel_names = channel_names
         self.bot_running = bot_running
         self.assets = Path(assets)
-        self.service = ReviewService(repository, settings.review_replay_limit)
+        self.service = ReviewService(repository, settings.dashboard_replay_limit)
         self.discord = settings.discord_sign_in
         if self.discord and guild_access is None:
             raise ValueError("Discord sign-in needs the bot's Discord client to check server access")
-        self.public_url = settings.review_public_url
+        self.public_url = settings.dashboard_public_url
         self.guild_access = guild_access
         self.oauth = oauth or (DiscordOAuth.from_settings(settings) if self.discord else None)
         self.access_seconds = access_seconds
@@ -259,8 +259,8 @@ class ReviewServer:
         except Exception as error:
             # Fail closed: until a check succeeds, the session gets nothing.
             session.failed = time.monotonic()
-            self.count("review_access_checks", "error")
-            logger.warning("review_access_check_failed", extra={"fields": {
+            self.count("dashboard_access_checks", "error")
+            logger.warning("dashboard_access_check_failed", extra={"fields": {
                 "actor_id": user_id, "error": str(error)[:300]}})
             raise
         finally:
@@ -275,9 +275,9 @@ class ReviewServer:
                 del self.revoked[min(self.revoked, key=self.revoked.get)]
             self.revoked[cookie] = now + REVOKED_SECONDS
         outcome = "revoked" if not access.guilds else "reduced" if lost else "kept"
-        self.count("review_access_checks", outcome)
+        self.count("dashboard_access_checks", outcome)
         if lost:
-            logger.warning("review_access_revoked", extra={"fields": {
+            logger.warning("dashboard_access_revoked", extra={"fields": {
                 "actor_id": user_id, "guild_ids": [str(guild) for guild in lost],
                 "remaining_guilds": len(access.guilds), "session_ended": not access.guilds}})
 
@@ -386,7 +386,7 @@ class ReviewServer:
                     request = request.clone(scheme=forwarded)
                 if request.path.startswith("/api/"):
                     if request.method not in {"GET", "HEAD", "OPTIONS"} and not self.same_origin(request):
-                        raise web.HTTPForbidden(reason="Changes must come from a Filter Lab page at this address")
+                        raise web.HTTPForbidden(reason="Changes must come from a dashboard page at this address")
                     if request.path not in {"/api/session", "/api/login"}:
                         request[SESSION] = await self.require_session(request)
                 response = await handler(request)
@@ -409,7 +409,7 @@ class ReviewServer:
                     status=401)
             except AccessUnknown:
                 response = web.json_response({"error": "access_unknown", "message": (
-                    "Filter Lab can't reach Discord to confirm your access. Try again in a minute.")},
+                    "The dashboard can't reach Discord to confirm your access. Try again in a minute.")},
                     status=503, headers={"Retry-After": str(ACCESS_RETRY_SECONDS)})
             except web.HTTPException as error:
                 response = web.json_response({"error": ERROR_CODES.get(error.status, "http_error"),
@@ -417,19 +417,19 @@ class ReviewServer:
                 if error.status == 429:
                     response.headers["Retry-After"] = "60"
             except Exception:
-                logger.exception("review_request_failed", extra={"fields": {
+                logger.exception("dashboard_request_failed", extra={"fields": {
                     "operation": request.match_info.route.name or "unknown"}})
                 response = web.json_response({"error": "internal_error",
                                              "message": "The request failed. See the application logs."}, status=500)
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers.setdefault("Content-Security-Policy", content_security_policy())
             response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
-            if self.metrics is not None and hasattr(self.metrics, "review_requests"):
+            if self.metrics is not None and hasattr(self.metrics, "dashboard_requests"):
                 operation = request.match_info.route.name or "unknown"
                 outcome = "success" if response.status < 400 else (
                     "server_error" if response.status >= 500 else "client_error")
-                self.metrics.review_requests.labels(operation, outcome).inc()
-                self.metrics.review_duration.labels(operation).observe(time.monotonic() - started)
+                self.metrics.dashboard_requests.labels(operation, outcome).inc()
+                self.metrics.dashboard_duration.labels(operation).observe(time.monotonic() - started)
             return response
 
         app = web.Application(middlewares=[guard], client_max_size=128 * 1024)
@@ -465,21 +465,21 @@ class ReviewServer:
         return app
 
     async def start(self):
-        if self.started or not self.settings.review_enabled:
+        if self.started or not self.settings.dashboard_enabled:
             return
-        token = None if self.discord else await asyncio.to_thread(review_key, self.settings)
+        token = None if self.discord else await asyncio.to_thread(dashboard_key, self.settings)
         app = self.application(token)
         self.runner = web.AppRunner(app, access_log=None, shutdown_timeout=15)
         try:
             await self.runner.setup()
-            self.site = web.TCPSite(self.runner, self.settings.review_host, self.settings.review_port)
+            self.site = web.TCPSite(self.runner, self.settings.dashboard_host, self.settings.dashboard_port)
             await self.site.start()
         except Exception:
             await self.close()
             raise
         self.started = True
-        logger.info("review_started", extra={"fields": {
-            "host": self.settings.review_host, "port": self.settings.review_port, "sign_in": self.method}})
+        logger.info("dashboard_started", extra={"fields": {
+            "host": self.settings.dashboard_host, "port": self.settings.dashboard_port, "sign_in": self.method}})
 
     async def close(self):
         if self.runner is not None:
@@ -512,7 +512,7 @@ class ReviewServer:
         try:
             page = await asyncio.to_thread((self.assets / "index.html").read_text, encoding="utf-8")
         except FileNotFoundError:
-            return web.Response(status=503, text="Filter Lab's interface is not built. "
+            return web.Response(status=503, text="The dashboard's interface is not built. "
                                 "Run `npm ci && npm run build` in frontend/, then reload.")
         nonce = secrets.token_urlsafe(18)
         response = web.Response(text=page.replace(NONCE_PLACEHOLDER, nonce), content_type="text/html")
@@ -543,7 +543,7 @@ class ReviewServer:
             session.guilds.values(), key=lambda guild: (guild["name"].casefold(), guild["id"]))
         return web.json_response({"authenticated": True, "method": self.method,
                                   "expires_in": int(session.expires - time.monotonic()),
-                                  "replay_limit": self.settings.review_replay_limit,
+                                  "replay_limit": self.settings.dashboard_replay_limit,
                                   "user": session.user, "guilds": guilds})
 
     async def login(self, request):
@@ -552,21 +552,21 @@ class ReviewServer:
         # Check after reading the body so concurrent requests cannot all reserve
         # the same remaining attempt before yielding to the event loop.
         if self.login_blocked():
-            self.count("review_logins", "access_key", "rate_limited")
+            self.count("dashboard_logins", "access_key", "rate_limited")
             raise web.HTTPTooManyRequests(reason="Too many attempts. Try again in a minute.")
         supplied = data.get("token", "")
         if not isinstance(supplied, str) or len(supplied) > 512 or not secrets.compare_digest(
                 supplied.encode(), self.token.encode()):
             self.login_failures.append(time.monotonic())
-            self.count("review_logins", "access_key", "wrong_key")
-            logger.warning("review_login_denied", extra={"fields": {"method": "access_key", "reason": "wrong_key"}})
+            self.count("dashboard_logins", "access_key", "wrong_key")
+            logger.warning("dashboard_login_denied", extra={"fields": {"method": "access_key", "reason": "wrong_key"}})
             raise web.HTTPUnauthorized(reason="The access key is incorrect")
         cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS))
-        self.count("review_logins", "access_key", "success")
-        logger.info("review_login_succeeded", extra={"fields": {"method": "access_key"}})
+        self.count("dashboard_logins", "access_key", "success")
+        logger.info("dashboard_login_succeeded", extra={"fields": {"method": "access_key"}})
         response = web.json_response({"authenticated": True, "method": self.method,
                                       "expires_in": SESSION_SECONDS,
-                                      "replay_limit": self.settings.review_replay_limit,
+                                      "replay_limit": self.settings.dashboard_replay_limit,
                                       "user": None, "guilds": None})
         self.set_session_cookie(response, request, cookie)
         return response
@@ -578,10 +578,10 @@ class ReviewServer:
         """
         if counted:
             self.login_failures.append(time.monotonic())
-        self.count("review_logins", "discord", reason)
+        self.count("dashboard_logins", "discord", reason)
         # Refusals while blocked are not logged one by one; the metric still counts them.
         log = logger.debug if reason == "rate_limited" else logger.warning
-        log("review_login_denied", extra={"fields": {
+        log("dashboard_login_denied", extra={"fields": {
             "method": "discord", "reason": reason, "detail": detail, "actor_id": user["id"] if user else None}})
         response = _redirect("/?" + urlencode({"signin": reason}), status=303)
         if used_login:
@@ -594,10 +594,10 @@ class ReviewServer:
         if here != self.public_url:
             if urlsplit(here).netloc == urlsplit(self.public_url).netloc:
                 # Same host, other scheme: sending the browser on would come back here forever.
-                logger.error("review_public_url_mismatch", extra={"fields": {
+                logger.error("dashboard_public_url_mismatch", extra={"fields": {
                     "request_scheme": request.scheme, "public_url": self.public_url}})
                 return web.Response(status=500, text=(
-                    f"Filter Lab was reached over {request.scheme}, but REVIEW_PUBLIC_URL is "
+                    f"The dashboard was reached over {request.scheme}, but DASHBOARD_PUBLIC_URL is "
                     f"{self.public_url}. A reverse proxy that ends TLS must send X-Forwarded-Proto: https."))
             # The login cookie has to be set on the address Discord sends people back to.
             return _redirect(f"{self.public_url}{LOGIN_PATH}?{urlencode({'next': page})}")
@@ -646,8 +646,8 @@ class ReviewServer:
             return failed("missing_permission" if access.member_of else "not_member", user=user)
         cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS, user=user,
                                            guilds=access.guilds, checked=time.monotonic()))
-        self.count("review_logins", "discord", "success")
-        logger.info("review_login_succeeded", extra={"fields": {
+        self.count("dashboard_logins", "discord", "success")
+        logger.info("dashboard_login_succeeded", extra={"fields": {
             "method": "discord", "actor_id": user["id"], "guild_ids": [str(guild) for guild in access.guilds]}})
         target = html.escape(f"{FINISH_PATH}?{urlencode({'next': page})}", quote=True)
         response = web.Response(text=HOP_PAGE.format(target=target), content_type="text/html")
@@ -666,7 +666,7 @@ class ReviewServer:
         self.revoked.pop(request.cookies.get(COOKIE, ""), None)
         session = self.sessions.pop(request.cookies.get(COOKIE, ""), None)
         if session is not None:
-            logger.info("review_logout", extra={"fields": {
+            logger.info("dashboard_logout", extra={"fields": {
                 "actor_id": session.user["id"] if session.user else None}})
         response = web.json_response({"authenticated": False, "method": self.method})
         response.del_cookie(COOKIE, path="/")
@@ -680,7 +680,7 @@ class ReviewServer:
                 names = self.channel_names({alert["channel_id"] for alert in result["alerts"]})
             except Exception:
                 # Names are a convenience; the list still works with channel IDs.
-                logger.exception("review_channel_names_failed")
+                logger.exception("dashboard_channel_names_failed")
         for alert in result["alerts"]:
             alert["channel_name"] = names.get(alert["channel_id"])
         return web.json_response(result)
@@ -788,31 +788,31 @@ def main(argv=None):
     import dotenv
 
     dotenv.load_dotenv()
-    parser = argparse.ArgumentParser(description="Run Filter Lab without connecting the Discord bot")
+    parser = argparse.ArgumentParser(description="Run the dashboard without connecting the Discord bot")
     parser.add_argument("--database", help="SQLite database filename")
     parser.add_argument("--host", help="Listener host (default 127.0.0.1)")
     parser.add_argument("--port", type=int, help="Listener port (default 9101)")
     parser.add_argument("--init", action="store_true", help="Create a new empty database explicitly")
     args = parser.parse_args(argv)
     settings = Settings.from_env(require_token=False)
-    settings = replace(settings, review_enabled=True,
+    settings = replace(settings, dashboard_enabled=True,
                        database_path=args.database or settings.database_path,
-                       review_host=args.host or settings.review_host,
-                       review_port=settings.review_port if args.port is None else args.port)
-    if not 1 <= settings.review_port <= 65535:
+                       dashboard_host=args.host or settings.dashboard_host,
+                       dashboard_port=settings.dashboard_port if args.port is None else args.port)
+    if not 1 <= settings.dashboard_port <= 65535:
         parser.error("Port must be between 1 and 65535")
     if not args.init and not Path(settings.database_path).is_file():
         parser.error("Database does not exist. Start the bot once or use --init for an empty archive.")
     configure_logging(settings.log_level, secrets=(
-        settings.token, settings.review_token, settings.review_discord_client_secret))
+        settings.token, settings.dashboard_token, settings.dashboard_discord_client_secret))
     configure_database(settings.database_path)
     create_tables()
     repository = Repository(Metrics())
     # Without the gateway there is no cache; Discord sign-in asks Discord's REST API with the bot token.
     guild_access = DiscordGuilds() if settings.discord_sign_in else None
     rest_app = None
-    server = ReviewServer(settings, repository, repository.metrics, guild_access=guild_access)
-    app = server.application(None if settings.discord_sign_in else review_key(settings))
+    server = DashboardServer(settings, repository, repository.metrics, guild_access=guild_access)
+    app = server.application(None if settings.discord_sign_in else dashboard_key(settings))
 
     async def startup(_):
         nonlocal rest_app
@@ -838,7 +838,7 @@ def main(argv=None):
 
     app.on_startup.append(startup)
     app.on_cleanup.append(cleanup)
-    web.run_app(app, host=settings.review_host, port=settings.review_port, access_log=None)
+    web.run_app(app, host=settings.dashboard_host, port=settings.dashboard_port, access_log=None)
 
 
 if __name__ == "__main__":

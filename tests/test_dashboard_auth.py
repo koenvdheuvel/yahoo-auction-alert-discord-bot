@@ -21,8 +21,8 @@ from filtering import default_ruleset
 from models import Item, Message, configure_database, create_tables, database
 from observability import JsonFormatter, Metrics
 from repositories import Repository
-from review import ReviewServer
-from review_auth import DiscordGuilds, DiscordOAuth, DiscordUnavailable, can_manage, guild_permissions
+from dashboard import DashboardServer
+from dashboard_auth import DiscordGuilds, DiscordOAuth, DiscordUnavailable, can_manage, guild_permissions
 
 P = hikari.Permissions
 SECRET = "fake-client-secret-0123456789abcdef"
@@ -30,7 +30,7 @@ BOT_TOKEN = "fake-bot-token"
 GUILD_A, GUILD_B = 1100000000000000001, 1100000000000000002
 MANAGER_A = 1200000000000000001
 ALICE, BOB, CAROL, DAVE, ERIN = 1, 2, 3, 4, 5
-INDEX = '<!doctype html><html><head><title>Filter Lab</title></head><body><div id="root"></div></body></html>'
+INDEX = '<!doctype html><html><head><title>Dashboard</title></head><body><div id="root"></div></body></html>'
 
 
 def snowflake(moment):
@@ -163,7 +163,7 @@ class DiscordGuildsTests(unittest.IsolatedAsyncioTestCase):
 class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
-        self.path = str(Path(self.directory.name) / "review.db")
+        self.path = str(Path(self.directory.name) / "alerts.db")
         configure_database(self.path)
         create_tables()
         self.metrics = Metrics()
@@ -194,20 +194,20 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
 
         # The real address is known once the test server listens; port 0 lets the system pick one.
         settings = replace(Settings(), token=BOT_TOKEN, database_path=self.path,
-                           review_public_url="http://127.0.0.1:1", review_discord_client_secret=SECRET,
-                           review_port=0)
+                           dashboard_public_url="http://127.0.0.1:1", dashboard_discord_client_secret=SECRET,
+                           dashboard_port=0)
         assets = Path(self.directory.name) / "dist"
         assets.mkdir()
         (assets / "index.html").write_text(INDEX, encoding="utf-8")
         oauth = DiscordOAuth.from_settings(settings, authorize_url=self.fake.authorize_url, api_url=self.fake.api_url,
                                            cdn_url=self.fake.base_url)
-        self.review = ReviewServer(settings, self.repository, self.metrics, assets=assets,
+        self.dashboard = DashboardServer(settings, self.repository, self.metrics, assets=assets,
                                    guild_access=DiscordGuilds(self.rest), oauth=oauth)
-        self.client = TestClient(TestServer(self.review.application(), host="127.0.0.1"),
+        self.client = TestClient(TestServer(self.dashboard.application(), host="127.0.0.1"),
                                  cookie_jar=CookieJar(unsafe=True))
         await self.client.start_server()
         self.public = f"http://127.0.0.1:{self.client.port}"
-        self.review.public_url, oauth.redirect_uri = self.public, self.public + "/auth/discord/callback"
+        self.dashboard.public_url, oauth.redirect_uri = self.public, self.public + "/auth/discord/callback"
         self.headers = {"Origin": self.public}
         self.logs = []
         handler = logging.Handler()
@@ -215,15 +215,15 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         handler.emit = lambda record: self.logs.append(JsonFormatter().format(record))
         handler.setLevel(logging.DEBUG)
         self.handler = handler
-        for name in ("review", "review_auth"):
+        for name in ("dashboard", "dashboard_auth"):
             logging.getLogger(name).addHandler(handler)
             logging.getLogger(name).setLevel(logging.DEBUG)
 
     async def asyncTearDown(self):
-        for name in ("review", "review_auth"):
+        for name in ("dashboard", "dashboard_auth"):
             logging.getLogger(name).removeHandler(self.handler)
         await self.client.close()
-        await self.review.close()
+        await self.dashboard.close()
         await self.rest.close()
         await self.rest_app.close()
         await self.fake.close()
@@ -236,7 +236,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
 
     def logins(self, outcome):
         return self.metrics.registry.get_sample_value(
-            "auction_bot_review_logins_total", {"method": "discord", "outcome": outcome})
+            "auction_bot_dashboard_logins_total", {"method": "discord", "outcome": outcome})
 
     async def start(self, next_page="/?alert=1&tab=rules"):
         response = await self.client.get("/auth/discord", params={"next": next_page}, allow_redirects=False)
@@ -259,10 +259,10 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
 
     def denied(self, response, reason):
         self.assertEqual((response.status, response.headers["Location"]), (303, f"/?signin={reason}"))
-        self.assertNotIn("filter_lab_session", response.cookies)
+        self.assertNotIn("dashboard_session", response.cookies)
 
     def expire_access_checks(self):
-        for session in self.review.sessions.values():
+        for session in self.dashboard.sessions.values():
             session.checked -= 301
 
     async def test_sign_in_uses_a_lax_handshake_cookie_then_a_strict_session_after_a_same_site_hop(self):
@@ -276,17 +276,17 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
             "redirect_uri": self.public + "/auth/discord/callback", "code_challenge_method": "S256"})
         # Discord shows its consent screen every time; prompt=none is not sent.
         self.assertNotIn("prompt", query)
-        handshake = start.cookies["filter_lab_login"]
+        handshake = start.cookies["dashboard_login"]
         self.assertEqual((handshake["samesite"], handshake["path"], bool(handshake["httponly"])),
                          ("Lax", "/auth/discord", True))
         self.assertNotIn(handshake.value, location)
 
         callback = await self.callback(self.fake.approve(location, ALICE))
         self.assertEqual(callback.status, 200)
-        session = callback.cookies["filter_lab_session"]
+        session = callback.cookies["dashboard_session"]
         self.assertEqual((session["samesite"], session["path"], bool(session["httponly"])), ("Strict", "/", True))
-        self.assertEqual(callback.cookies["filter_lab_login"]["max-age"], "0")
-        # The page moves on with a refresh from Filter Lab's own address instead of a redirect.
+        self.assertEqual(callback.cookies["dashboard_login"]["max-age"], "0")
+        # The page moves on with a refresh from the dashboard's own address instead of a redirect.
         page = await callback.text()
         self.assertIn('http-equiv="refresh" content="0; url=/auth/discord/finish?next=%2F%3Falert%3D1%26tab%3Drules"',
                       page.replace("&amp;", "&"))
@@ -300,7 +300,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
                                         "avatar_url": self.fake.base_url + "/embed/avatars/0.png"})
         self.assertEqual(body["guilds"], [{"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None}])
         self.assertEqual(self.logins("success"), 1)
-        self.assertEqual(self.events("review_login_succeeded")[0]["actor_id"], str(ALICE))
+        self.assertEqual(self.events("dashboard_login_succeeded")[0]["actor_id"], str(ALICE))
         # The access token was revoked at Discord after its one use.
         self.assertEqual((len(self.fake.issued), self.fake.tokens), (1, {}))
         # Neither the code, the token, the PKCE verifier nor the client secret is logged.
@@ -309,24 +309,24 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(value, output)
 
     async def test_the_session_survives_behind_a_tls_proxy_with_secure_cookies(self):
-        self.review.public_url = self.public.replace("http:", "https:")
+        self.dashboard.public_url = self.public.replace("http:", "https:")
         response = await self.client.get("/auth/discord", headers={"X-Forwarded-Proto": "https"},
                                          allow_redirects=False)
-        self.assertTrue(response.cookies["filter_lab_login"]["secure"])
+        self.assertTrue(response.cookies["dashboard_login"]["secure"])
 
     async def test_a_proxy_that_hides_https_gets_a_clear_error_instead_of_a_redirect_loop(self):
-        self.review.public_url = self.public.replace("http:", "https:")
+        self.dashboard.public_url = self.public.replace("http:", "https:")
         response = await self.client.get("/auth/discord", allow_redirects=False)
         self.assertEqual(response.status, 500)
         self.assertIn("X-Forwarded-Proto: https", await response.text())
-        self.assertNotIn("filter_lab_login", response.cookies)
+        self.assertNotIn("dashboard_login", response.cookies)
 
     async def test_sign_in_starts_over_on_the_public_address(self):
         response = await self.client.get("/auth/discord", params={"next": "/?tab=rules"},
-                                         headers={"Host": "filterlab.internal:9101"}, allow_redirects=False)
+                                         headers={"Host": "dashboard.internal:9101"}, allow_redirects=False)
         self.assertEqual(response.headers["Location"], self.public + "/auth/discord?next=%2F%3Ftab%3Drules")
-        self.assertNotIn("filter_lab_login", response.cookies)
-        # Only Filter Lab's own page is a place to come back to.
+        self.assertNotIn("dashboard_login", response.cookies)
+        # Only the dashboard's own page is a place to come back to.
         location = (await self.start(next_page="//evil.example/")).headers["Location"]
         page = await (await self.callback(self.fake.approve(location, ALICE))).text()
         self.assertIn("url=/auth/discord/finish?next=%2F\"", page)
@@ -345,15 +345,15 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.fake.down = True
         self.denied(await self.callback(self.fake.approve(location, ALICE)), "discord_unavailable")
         self.fake.down = False
-        self.assertEqual({entry["reason"]: entry["actor_id"] for entry in self.events("review_login_denied")}, {
+        self.assertEqual({entry["reason"]: entry["actor_id"] for entry in self.events("dashboard_login_denied")}, {
             "cancelled": None, "not_member": str(CAROL), "missing_permission": str(BOB),
             "discord_unavailable": None})
         for reason in ("cancelled", "not_member", "missing_permission", "discord_unavailable"):
             self.assertEqual(self.logins(reason), 1)
-        self.assertEqual(self.review.sessions, {})
+        self.assertEqual(self.dashboard.sessions, {})
 
     async def test_bad_expired_reused_or_foreign_state_is_refused(self):
-        # States Filter Lab never issued, or changed ones.
+        # States the dashboard never issued, or changed ones.
         location = (await self.start()).headers["Location"]
         callback = self.fake.approve(location, ALICE)
         state = parse_qs(urlsplit(callback).query)["state"][0]
@@ -367,18 +367,18 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.denied(await self.callback(callback), "state")
         # Expired.
         location = (await self.start()).headers["Location"]
-        self.review.login_seconds = -1
+        self.dashboard.login_seconds = -1
         self.denied(await self.callback(self.fake.approve(location, ALICE)), "state")
-        self.review.login_seconds = 600
+        self.dashboard.login_seconds = 600
         # Started in another browser: the login cookie is missing.
         location = (await self.start()).headers["Location"]
-        self.client.session.cookie_jar.clear(lambda cookie: cookie.key == "filter_lab_login")
+        self.client.session.cookie_jar.clear(lambda cookie: cookie.key == "dashboard_login")
         self.denied(await self.callback(self.fake.approve(location, ALICE)), "state")
         # Started in another tab: a later sign-in replaced the login cookie.
         first = (await self.start()).headers["Location"]
         await self.start()
         self.denied(await self.callback(self.fake.approve(first, ALICE)), "state")
-        self.assertEqual([entry["detail"] for entry in self.events("review_login_denied")],
+        self.assertEqual([entry["detail"] for entry in self.events("dashboard_login_denied")],
                          ["invalid", "mismatch", "mismatch", "other_browser", "expired", "other_browser", "mismatch"])
 
     async def test_many_sign_ins_started_elsewhere_do_not_break_one_in_progress(self):
@@ -395,7 +395,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         callback = self.fake.approve(location, ALICE)
         self.fake.codes.clear()
         self.denied(await self.callback(callback), "discord_error")
-        self.assertEqual(self.events("review_login_denied")[0]["detail"], "invalid_grant")
+        self.assertEqual(self.events("dashboard_login_denied")[0]["detail"], "invalid_grant")
 
     async def test_the_last_step_reports_a_session_cookie_the_browser_did_not_send(self):
         self.denied(await self.client.get("/auth/discord/finish", allow_redirects=False), "cookie")
@@ -413,27 +413,27 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
                                           allow_redirects=False), "rate_limited")
         self.assertEqual(self.logins("rate_limited"), 2)
         # Refusals while blocked are counted, and logged only at debug level.
-        self.assertEqual({(entry["reason"], entry["level"]) for entry in self.events("review_login_denied")},
+        self.assertEqual({(entry["reason"], entry["level"]) for entry in self.events("dashboard_login_denied")},
                          {("state", "WARNING"), ("cancelled", "WARNING"), ("rate_limited", "DEBUG")})
 
     async def test_one_person_cannot_push_out_everyone_elses_sessions(self):
         await self.sign_in(ERIN)
-        erin = next(cookie.value for cookie in self.client.session.cookie_jar if cookie.key == "filter_lab_session")
+        erin = next(cookie.value for cookie in self.client.session.cookie_jar if cookie.key == "dashboard_session")
         for _ in range(7):
             await self.sign_in(ALICE)
-        users = [session.user["id"] for session in self.review.sessions.values()]
+        users = [session.user["id"] for session in self.dashboard.sessions.values()]
         self.assertEqual((users.count(str(ALICE)), users.count(str(ERIN))), (5, 1))
-        self.assertIn(erin, self.review.sessions)
+        self.assertIn(erin, self.dashboard.sessions)
 
     async def test_the_access_key_is_turned_off(self):
         response = await self.client.post("/api/login", json={"token": "anything-at-all-123"}, headers=self.headers)
         self.assertEqual(response.status, 404)
-        self.assertNotIn("filter_lab_session", response.cookies)
+        self.assertNotIn("dashboard_session", response.cookies)
         self.assertEqual(await (await self.client.get("/api/session")).json(),
                          {"authenticated": False, "method": "discord"})
         self.assertEqual((await (await self.client.get("/api/alerts")).json())["message"], "Sign in with Discord")
-        await self.review.start()
-        self.assertFalse(Path(self.path + ".review-token").exists())
+        await self.dashboard.start()
+        self.assertFalse(Path(self.path + ".dashboard-token").exists())
 
     async def test_access_is_checked_again_only_after_five_minutes(self):
         await self.sign_in(ALICE)
@@ -448,8 +448,8 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({response.status for response in responses}, {401})
         self.assertEqual({(await response.json())["error"] for response in responses}, {"access_revoked"})
         self.assertEqual(self.fake.calls[calls:].count(("GET", f"/api/v10/guilds/{GUILD_A}/members/{ALICE}")), 1)
-        self.assertEqual(self.review.sessions, {})
-        revoked = self.events("review_access_revoked")[0]
+        self.assertEqual(self.dashboard.sessions, {})
+        revoked = self.events("dashboard_access_revoked")[0]
         self.assertEqual((revoked["actor_id"], revoked["guild_ids"], revoked["session_ended"]),
                          (str(ALICE), [str(GUILD_A)], True))
         # A reload still says why, until the person signs out or signs in again.
@@ -473,7 +473,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         session = await (await self.client.get("/api/session")).json()
         self.assertEqual([guild["id"] for guild in session["guilds"]], [str(GUILD_B)])
         self.assertEqual(self.metrics.registry.get_sample_value(
-            "auction_bot_review_access_checks_total", {"outcome": "reduced"}), 1)
+            "auction_bot_dashboard_access_checks_total", {"outcome": "reduced"}), 1)
 
     async def test_session_reports_revocation_when_it_is_the_request_that_finds_it(self):
         await self.sign_in(ALICE)
@@ -492,10 +492,10 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.fake.down = False
         self.assertEqual((await self.client.get("/api/alerts")).status, 503)
         self.assertEqual(len(self.fake.calls), calls)
-        for session in self.review.sessions.values():
+        for session in self.dashboard.sessions.values():
             session.failed -= 31
         self.assertEqual((await self.client.get("/api/alerts")).status, 200)
-        self.assertEqual(self.events("review_access_check_failed")[0]["actor_id"], str(ALICE))
+        self.assertEqual(self.events("dashboard_access_check_failed")[0]["actor_id"], str(ALICE))
 
     async def test_every_endpoint_is_limited_to_the_servers_the_person_manages(self):
         await self.sign_in(ALICE)
@@ -654,56 +654,56 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.delete("/api/session", headers=self.headers)
         self.assertEqual(response.status, 200)
         self.assertEqual((await self.client.get("/api/alerts")).status, 401)
-        self.assertEqual(self.events("review_logout")[0]["actor_id"], str(ALICE))
+        self.assertEqual(self.events("dashboard_logout")[0]["actor_id"], str(ALICE))
 
 
 def configure(monkeypatch, **values):
-    for name in ("BOT_TOKEN", "REVIEW_TOKEN", "REVIEW_TOKEN_FILE", "REVIEW_PUBLIC_URL",
-                 "REVIEW_DISCORD_CLIENT_SECRET", "REVIEW_DISCORD_CLIENT_SECRET_FILE"):
+    for name in ("BOT_TOKEN", "DASHBOARD_TOKEN", "DASHBOARD_TOKEN_FILE", "DASHBOARD_PUBLIC_URL",
+                 "DASHBOARD_DISCORD_CLIENT_SECRET", "DASHBOARD_DISCORD_CLIENT_SECRET_FILE"):
         monkeypatch.delenv(name, raising=False)
     for name, value in values.items():
         monkeypatch.setenv(name, value)
 
 
 def test_discord_sign_in_settings_are_checked_at_startup(monkeypatch, tmp_path):
-    configure(monkeypatch, BOT_TOKEN="token", REVIEW_PUBLIC_URL="https://Yahoo.Internal.Waxdt.com:443/",
-              REVIEW_DISCORD_CLIENT_SECRET=SECRET)
+    configure(monkeypatch, BOT_TOKEN="token", DASHBOARD_PUBLIC_URL="https://Yahoo.Internal.Waxdt.com:443/",
+              DASHBOARD_DISCORD_CLIENT_SECRET=SECRET)
     settings = Settings.from_env()
-    assert (settings.review_public_url, settings.discord_sign_in) == ("https://yahoo.internal.waxdt.com", True)
+    assert (settings.dashboard_public_url, settings.discord_sign_in) == ("https://yahoo.internal.waxdt.com", True)
     assert SECRET not in repr(settings)
     secret_file = tmp_path / "client-secret"
     secret_file.write_text(SECRET + "\n")
-    configure(monkeypatch, BOT_TOKEN="token", REVIEW_PUBLIC_URL="http://127.0.0.1:9101",
-              REVIEW_DISCORD_CLIENT_SECRET_FILE=str(secret_file))
-    assert Settings.from_env().review_discord_client_secret == SECRET
+    configure(monkeypatch, BOT_TOKEN="token", DASHBOARD_PUBLIC_URL="http://127.0.0.1:9101",
+              DASHBOARD_DISCORD_CLIENT_SECRET_FILE=str(secret_file))
+    assert Settings.from_env().dashboard_discord_client_secret == SECRET
     configure(monkeypatch, BOT_TOKEN="token")
     assert not Settings.from_env().discord_sign_in
     for values, message in (
-        ({"REVIEW_DISCORD_CLIENT_SECRET": SECRET}, "needs REVIEW_PUBLIC_URL"),
-        ({"REVIEW_PUBLIC_URL": "https://filterlab.example.com"}, "also set REVIEW_DISCORD_CLIENT_SECRET"),
-        ({"REVIEW_PUBLIC_URL": "http://filterlab.example.com", "REVIEW_DISCORD_CLIENT_SECRET": SECRET}, "https://"),
-        ({"REVIEW_PUBLIC_URL": "https://filterlab.example.com/lab", "REVIEW_DISCORD_CLIENT_SECRET": SECRET},
+        ({"DASHBOARD_DISCORD_CLIENT_SECRET": SECRET}, "needs DASHBOARD_PUBLIC_URL"),
+        ({"DASHBOARD_PUBLIC_URL": "https://dashboard.example.com"}, "also set DASHBOARD_DISCORD_CLIENT_SECRET"),
+        ({"DASHBOARD_PUBLIC_URL": "http://dashboard.example.com", "DASHBOARD_DISCORD_CLIENT_SECRET": SECRET}, "https://"),
+        ({"DASHBOARD_PUBLIC_URL": "https://dashboard.example.com/lab", "DASHBOARD_DISCORD_CLIENT_SECRET": SECRET},
          "site address only"),
-        ({"REVIEW_PUBLIC_URL": "https://filterlab.example.com", "REVIEW_DISCORD_CLIENT_SECRET": "short"},
+        ({"DASHBOARD_PUBLIC_URL": "https://dashboard.example.com", "DASHBOARD_DISCORD_CLIENT_SECRET": "short"},
          "not a Discord client secret"),
-        ({"REVIEW_PUBLIC_URL": "https://filterlab.example.com", "REVIEW_DISCORD_CLIENT_SECRET": SECRET,
-          "REVIEW_DISCORD_CLIENT_SECRET_FILE": str(secret_file)}, "not both"),
-        ({"REVIEW_PUBLIC_URL": "https://filterlab.example.com",
-          "REVIEW_DISCORD_CLIENT_SECRET_FILE": str(tmp_path / "missing")}, "cannot be read"),
-        ({"REVIEW_PUBLIC_URL": "https://filterlab.example.com", "REVIEW_DISCORD_CLIENT_SECRET": SECRET,
-          "REVIEW_TOKEN": "an-access-key-that-is-long"}, "remove REVIEW_TOKEN"),
+        ({"DASHBOARD_PUBLIC_URL": "https://dashboard.example.com", "DASHBOARD_DISCORD_CLIENT_SECRET": SECRET,
+          "DASHBOARD_DISCORD_CLIENT_SECRET_FILE": str(secret_file)}, "not both"),
+        ({"DASHBOARD_PUBLIC_URL": "https://dashboard.example.com",
+          "DASHBOARD_DISCORD_CLIENT_SECRET_FILE": str(tmp_path / "missing")}, "cannot be read"),
+        ({"DASHBOARD_PUBLIC_URL": "https://dashboard.example.com", "DASHBOARD_DISCORD_CLIENT_SECRET": SECRET,
+          "DASHBOARD_TOKEN": "an-access-key-that-is-long"}, "remove DASHBOARD_TOKEN"),
     ):
         configure(monkeypatch, BOT_TOKEN="token", **values)
         with pytest.raises(ValueError, match=message):
             Settings.from_env()
-    configure(monkeypatch, REVIEW_PUBLIC_URL="https://filterlab.example.com", REVIEW_DISCORD_CLIENT_SECRET=SECRET)
+    configure(monkeypatch, DASHBOARD_PUBLIC_URL="https://dashboard.example.com", DASHBOARD_DISCORD_CLIENT_SECRET=SECRET)
     with pytest.raises(ValueError, match="needs BOT_TOKEN"):
         Settings.from_env(require_token=False)
 
 
 def test_the_client_secret_and_oauth_tokens_are_redacted_from_logs():
     formatter = JsonFormatter(secrets=(SECRET,))
-    record = logging.LogRecord("review", logging.INFO, __file__, 1, "using %s", (SECRET,), None)
+    record = logging.LogRecord("dashboard", logging.INFO, __file__, 1, "using %s", (SECRET,), None)
     record.fields = {"client_secret": "a", "access_token": "b", "refresh_token": "c", "code_verifier": "d"}
     encoded = formatter.format(record)
     assert SECRET not in encoded
@@ -717,11 +717,11 @@ def test_the_bot_wires_discord_sign_in_to_its_rest_client_and_cache(tmp_path, mo
     captured = {}
     monkeypatch.setattr(observability, "configure_logging", lambda level, secrets=(): captured.update(secrets=secrets))
     settings = replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK", database_path=str(tmp_path / "bot.db"),
-                       monitoring_enabled=False, review_public_url="https://filterlab.example.com",
-                       review_discord_client_secret=SECRET)
+                       monitoring_enabled=False, dashboard_public_url="https://dashboard.example.com",
+                       dashboard_discord_client_secret=SECRET)
     bot = main.create_application(settings)
-    review = bot.services.runtime.review
+    dashboard = bot.services.runtime.dashboard
     assert SECRET in captured["secrets"]
-    assert (review.guild_access.rest, review.guild_access.cache) == (bot.rest, bot.cache)
-    assert review.oauth.redirect_uri == "https://filterlab.example.com/auth/discord/callback"
+    assert (dashboard.guild_access.rest, dashboard.guild_access.cache) == (bot.rest, bot.cache)
+    assert dashboard.oauth.redirect_uri == "https://dashboard.example.com/auth/discord/callback"
     asyncio.run(bot.services.runtime.close())

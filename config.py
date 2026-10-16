@@ -37,7 +37,7 @@ def secret(name):
 
 
 def public_url(value):
-    """The address people open Filter Lab at. Discord sends them back to it after sign-in."""
+    """The address people open the dashboard at. Discord sends them back to it after sign-in."""
     value = value.strip()
     if not value:
         return ""
@@ -45,13 +45,13 @@ def public_url(value):
     try:
         parts.port
     except ValueError:
-        raise ValueError("REVIEW_PUBLIC_URL has an invalid port") from None
+        raise ValueError("DASHBOARD_PUBLIC_URL has an invalid port") from None
     # Plain http leaks the session cookie, so it is only accepted on this computer.
     local = parts.hostname in {"localhost", "127.0.0.1", "::1"}
     if not parts.hostname or parts.scheme not in {"https", "http"} or (parts.scheme == "http" and not local):
-        raise ValueError("REVIEW_PUBLIC_URL must start with https:// (http:// only works for localhost)")
+        raise ValueError("DASHBOARD_PUBLIC_URL must start with https:// (http:// only works for localhost)")
     if parts.path not in {"", "/"} or parts.query or parts.fragment or parts.username or parts.password:
-        raise ValueError("REVIEW_PUBLIC_URL must be the site address only, such as https://filterlab.example.com")
+        raise ValueError("DASHBOARD_PUBLIC_URL must be the site address only, such as https://dashboard.example.com")
     # Browsers leave the default port out of the Host header, so it is left out here too.
     host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
     default = {"https": 443, "http": 80}[parts.scheme]
@@ -78,21 +78,21 @@ class Settings:
     price_threshold: int = 500
     enabled_sources: tuple = ("yahooauction", "mercari", "surugaya")
     log_level: str = "INFO"
-    review_enabled: bool = True
-    review_host: str = "127.0.0.1"
-    review_port: int = 9101
-    review_token: str = field(default="", repr=False)
-    review_token_file: str = ""
+    dashboard_enabled: bool = True
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 9101
+    dashboard_token: str = field(default="", repr=False)
+    dashboard_token_file: str = ""
     # Discord sign-in is on when the client secret is set. The client ID is the bot's application ID.
-    review_public_url: str = ""
-    review_discord_client_secret: str = field(default="", repr=False)
-    review_replay_limit: int = 500
+    dashboard_public_url: str = ""
+    dashboard_discord_client_secret: str = field(default="", repr=False)
+    dashboard_replay_limit: int = 500
     history_retention_days: int = 90
     history_max_rows: int = 50000
 
     @property
     def discord_sign_in(self):
-        return bool(self.review_discord_client_secret)
+        return bool(self.dashboard_discord_client_secret)
 
     @classmethod
     def from_env(cls, require_token=True):
@@ -107,20 +107,20 @@ class Settings:
         log_level = os.getenv("LOG_LEVEL", "INFO").upper()
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("LOG_LEVEL is invalid")
-        review_token = os.getenv("REVIEW_TOKEN", "").strip()
-        review_token_file = os.getenv("REVIEW_TOKEN_FILE", "")
-        review_url = public_url(os.getenv("REVIEW_PUBLIC_URL", ""))
-        client_secret = secret("REVIEW_DISCORD_CLIENT_SECRET")
+        dashboard_token = os.getenv("DASHBOARD_TOKEN", "").strip()
+        dashboard_token_file = os.getenv("DASHBOARD_TOKEN_FILE", "")
+        review_url = public_url(os.getenv("DASHBOARD_PUBLIC_URL", ""))
+        client_secret = secret("DASHBOARD_DISCORD_CLIENT_SECRET")
         if client_secret and not review_url:
-            raise ValueError("Discord sign-in needs REVIEW_PUBLIC_URL, the address Discord sends people back to")
+            raise ValueError("Discord sign-in needs DASHBOARD_PUBLIC_URL, the address Discord sends people back to")
         if review_url and not client_secret:
-            raise ValueError("REVIEW_PUBLIC_URL is only used for Discord sign-in; "
-                             "also set REVIEW_DISCORD_CLIENT_SECRET or REVIEW_DISCORD_CLIENT_SECRET_FILE")
+            raise ValueError("DASHBOARD_PUBLIC_URL is only used for Discord sign-in; "
+                             "also set DASHBOARD_DISCORD_CLIENT_SECRET or DASHBOARD_DISCORD_CLIENT_SECRET_FILE")
         if client_secret and (not 16 <= len(client_secret) <= 512 or any(c.isspace() for c in client_secret)):
-            raise ValueError("REVIEW_DISCORD_CLIENT_SECRET is not a Discord client secret")
-        if client_secret and (review_token or review_token_file):
+            raise ValueError("DASHBOARD_DISCORD_CLIENT_SECRET is not a Discord client secret")
+        if client_secret and (dashboard_token or dashboard_token_file):
             raise ValueError("The access key is turned off when Discord sign-in is set up; "
-                             "remove REVIEW_TOKEN and REVIEW_TOKEN_FILE")
+                             "remove DASHBOARD_TOKEN and DASHBOARD_TOKEN_FILE")
         if client_secret and not token:
             raise ValueError("Discord sign-in checks server membership with the bot, so it needs BOT_TOKEN")
         sources = tuple(source for source, flag in (
@@ -142,12 +142,12 @@ class Settings:
             health_max_poll_age=positive("HEALTH_MAX_POLL_AGE", interval + timeout + 60),
             price_threshold=positive("PRICE_CHANGE_THRESHOLD", 500, minimum=0),
             enabled_sources=sources, log_level=log_level,
-            review_enabled=boolean("REVIEW_ENABLED"),
-            review_host=os.getenv("REVIEW_HOST", "127.0.0.1"),
-            review_port=positive("REVIEW_PORT", 9101, maximum=65535),
-            review_token=review_token, review_token_file=review_token_file,
-            review_public_url=review_url, review_discord_client_secret=client_secret,
-            review_replay_limit=positive("REVIEW_REPLAY_LIMIT", 500, maximum=500),
+            dashboard_enabled=boolean("DASHBOARD_ENABLED"),
+            dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
+            dashboard_port=positive("DASHBOARD_PORT", 9101, maximum=65535),
+            dashboard_token=dashboard_token, dashboard_token_file=dashboard_token_file,
+            dashboard_public_url=review_url, dashboard_discord_client_secret=client_secret,
+            dashboard_replay_limit=positive("DASHBOARD_REPLAY_LIMIT", 500, maximum=500),
             history_retention_days=positive("HISTORY_RETENTION_DAYS", 90, maximum=3650),
             history_max_rows=positive("HISTORY_MAX_ROWS", 50000, maximum=1000000),
         )

@@ -55,7 +55,7 @@ function SessionGate() {
   if (session.isPending) {
     return (
       <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-        <CircularProgress aria-label="Opening Filter Lab" />
+        <CircularProgress aria-label="Opening the dashboard" />
       </Box>
     );
   }

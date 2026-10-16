@@ -1,8 +1,8 @@
 {
-  "name": "filter-lab",
+  "name": "dashboard",
   "private": true,
   "version": "1.0.0",
-  "description": "Filter Lab operator UI for the auction alert bot",
+  "description": "Web dashboard for the auction alert bot",
   "type": "module",
   "engines": {
     "node": ">=22.12"

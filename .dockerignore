@@ -4,6 +4,7 @@
 **/*.db*
 **/*.sqlite*
 **/*.bak
+**/*.dashboard-token
 **/*.review-token
 **/*.key
 **/__pycache__

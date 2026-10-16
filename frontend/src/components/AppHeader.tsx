@@ -87,7 +87,7 @@ export function AppHeader({ showMenu, onMenu, onTestTitle, onHelp }: Props) {
           <IconButton edge="start" aria-label="Open the list of searches" onClick={onMenu}><MenuIcon /></IconButton>
         )}
         <LogoMark size={26} />
-        <Typography variant="h2" component="p" sx={{ fontSize: "1.05rem" }}>Filter Lab</Typography>
+        <Typography variant="h2" component="p" sx={{ fontSize: "1.05rem" }}>Dashboard</Typography>
         <Box sx={{ flex: 1 }} />
         <Button startIcon={<ScienceOutlined />} onClick={onTestTitle} color="inherit" aria-keyshortcuts="t">
           Test a title

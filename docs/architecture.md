@@ -12,10 +12,10 @@ flowchart LR
     Ingestion --> Changes["domain.py: listing facts + change rules"]
     Ingestion --> Repo["repositories.py: dedicated database thread"]
     Repo --> DB[("models.py: versioned SQLite")]
-    Runtime --> Review["review.py: operator HTTP + UI"]
-    Review --> Replay["review_service.py: bounded replay worker"]
+    Runtime --> Dashboard["dashboard.py: operator HTTP + UI"]
+    Dashboard --> Replay["review_service.py: bounded replay worker"]
     Replay --> Policy
-    Review --> Repo
+    Dashboard --> Repo
     DB --> Outbox["durable delivery jobs"]
     Runtime --> Delivery["delivery.py: Discord outbound adapter"]
     Delivery --> Outbox
@@ -41,10 +41,10 @@ flowchart LR
 | `repositories.py` | Async persistence API over a single database thread; no Peewee objects escape to callers |
 | `review_repository.py` | Candidate snapshots, feedback, immutable rule versions, atomic activation and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
-| `review.py` | Authenticated same-origin operator API that also serves the built UI; separate listener from monitoring |
-| `review_auth.py` | Discord sign-in: the OAuth2 code grant for `identify`, and the bot's own check of a person's servers and Manage Channels permission |
+| `dashboard.py` | Authenticated same-origin operator API that also serves the built UI; separate listener from monitoring |
+| `dashboard_auth.py` | Discord sign-in: the OAuth2 code grant for `identify`, and the bot's own check of a person's servers and Manage Channels permission |
 | `devtools/` | A fake Discord for tests and a harness for trying Discord sign-in in a browser; never used by the bot |
-| `frontend/` | Filter Lab's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
+| `frontend/` | The dashboard's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
 | `delivery.py` | Formats embeds and sends durable channel/DM jobs with independent retries |
 | `observability.py` | Bounded-label Prometheus collectors, JSON correlation/redaction, health endpoints |
 | `commands/*` | Thin Discord command adapters using repository methods and guild/channel checks |
@@ -106,7 +106,7 @@ Existing notification thresholds are preserved deliberately: price decreases str
 
 Enabled title filters actually participate in ingestion. Blacklist matches veto a listing; if any whitelist rules exist, at least one must match. Text matching remains case-sensitive. Regex is compiled once per check, validated on creation, and limited to 256 characters. Matching runs off the event loop with a 50-millisecond deadline per pattern; an evaluation timeout logs the rule version, counts the failure, and archives the item for review without stopping valid siblings. The saved decision identifies the legacy filter or new rule group involved. This uses the [regex engine's timeout support](https://pypi.org/project/regex/2024.11.6/). Alerts allow at most 50 filters. Match counters are aggregated and persisted once per check. A filtered listing does not advance its baseline or queue delivery.
 
-Filter Lab adds versioned grouped rules on top of this compatibility path. The
+The dashboard adds versioned grouped rules on top of this compatibility path. The
 same pure evaluator runs during ingestion, title preview, and replay. Required
 groups combine with AND, with any/all matching inside each group; exclusion
 groups veto matches and review groups suppress ambiguous listings. Rules can
@@ -135,11 +135,11 @@ processing budget; incomplete listing snapshots stay in review. It
 compares title/source/price eligibility while retaining recorded channel
 blacklist vetoes. It does not reconstruct delivery, changing blacklist state,
 subscriptions or stock-change behavior. Feedback supports relevant, wrong
-product, accessory, bundle and unsure labels. See [filter-lab.md](filter-lab.md).
+product, accessory, bundle and unsure labels. See [dashboard.md](dashboard.md).
 
 ## Durable delivery and recovery
 
-Each channel post and subscriber DM is a separate `DeliveryJob`. Filter Lab can also queue the deletion of posts that published rules filter (`kind="delete"`). The worker takes those only when no post or DM is due: posts under 14 days old go in one bulk request per channel, up to 100 at a time, and older posts go one request each, five per round. Bulk delete needs the Manage Messages permission; where Discord refuses it, the posts go one at a time and bulk is tried there again an hour later. Discord failures do not roll back the observed marketplace state or block later jobs. Transient failures use bounded exponential delays; permission, missing-resource, malformed-payload failures, and exhausted attempts become `failed` jobs visible in metrics and operational commands.
+Each channel post and subscriber DM is a separate `DeliveryJob`. The dashboard can also queue the deletion of posts that published rules filter (`kind="delete"`). The worker takes those only when no post or DM is due: posts under 14 days old go in one bulk request per channel, up to 100 at a time, and older posts go one request each, five per round. Bulk delete needs the Manage Messages permission; where Discord refuses it, the posts go one at a time and bulk is tried there again an hour later. Discord failures do not roll back the observed marketplace state or block later jobs. Transient failures use bounded exponential delays; permission, missing-resource, malformed-payload failures, and exhausted attempts become `failed` jobs visible in metrics and operational commands.
 
 A channel message's ID and historical mapping are saved immediately after creation and before adding reactions. If a reaction fails, the next attempt reuses that message. A failed DM cannot prevent the channel job from completing. Blacklisting, unsubscribing, and unregistering cancel matching pending jobs. An already in-flight Discord request cannot be guaranteed to stop when configuration changes.
 

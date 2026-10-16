@@ -148,7 +148,7 @@ export interface LabelChange {
   label: Label | null;
 }
 
-/** review.py accepts at most this many listings per bulk label request. */
+/** dashboard.py accepts at most this many listings per bulk label request. */
 export const LABEL_BATCH = 200;
 
 export function useLabelMutation() {

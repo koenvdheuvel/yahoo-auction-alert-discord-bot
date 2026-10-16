@@ -1,13 +1,13 @@
-"""Run Filter Lab with Discord sign-in against a fake Discord on this computer.
+"""Run the dashboard with Discord sign-in against a fake Discord on this computer.
 
 For trying the sign-in, the denials, the server picker and revocation in a real browser
 without a Discord application. Use a copy of a database, never the bot's own file:
 
-    python -m devtools.filter_lab_harness --database filterlab-scratch.db
+    python -m devtools.dashboard_harness --database dashboard-scratch.db
 
 Open http://127.0.0.1:9101. The fake Discord runs on http://localhost:9199, another site as
 far as the browser is concerned, like discord.com is. Its page at /fake changes members and
-roles, and can make Discord stop answering. Nothing here is used by the bot or by review.py.
+roles, and can make Discord stop answering. Nothing here is used by the bot or by dashboard.py.
 """
 import argparse
 import asyncio
@@ -23,8 +23,8 @@ from devtools.fake_discord import PERMISSIONS, FakeDiscord
 from models import Alert, configure_database, create_tables
 from observability import Metrics, configure_logging
 from repositories import Repository
-from review import ReviewServer
-from review_auth import DiscordGuilds, DiscordOAuth
+from dashboard import DashboardServer
+from dashboard_auth import DiscordGuilds, DiscordOAuth
 
 SECRET = "fake-client-secret-for-the-harness"
 BOT_TOKEN = "fake-bot-token"
@@ -59,9 +59,9 @@ async def run(args):
             guild.members[1004] = []
     await fake.start()
 
-    settings = replace(Settings(), token=BOT_TOKEN, database_path=args.database, review_host="127.0.0.1",
-                       review_port=args.port, review_public_url=f"http://127.0.0.1:{args.port}",
-                       review_discord_client_secret=SECRET)
+    settings = replace(Settings(), token=BOT_TOKEN, database_path=args.database, dashboard_host="127.0.0.1",
+                       dashboard_port=args.port, dashboard_public_url=f"http://127.0.0.1:{args.port}",
+                       dashboard_discord_client_secret=SECRET)
     rest_app = hikari.RESTApp(url=fake.api_url, max_retries=0)
     await rest_app.start()
     rest = rest_app.acquire(BOT_TOKEN, hikari.TokenType.BOT)
@@ -70,13 +70,13 @@ async def run(args):
                                        cdn_url=fake.base_url)
     repository = Repository(Metrics())
     await repository.start()
-    server = ReviewServer(settings, repository, repository.metrics, guild_access=DiscordGuilds(rest), oauth=oauth,
+    server = DashboardServer(settings, repository, repository.metrics, guild_access=DiscordGuilds(rest), oauth=oauth,
                           access_seconds=args.recheck)
     runner = web.AppRunner(server.application(), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", args.port).start()
     logging.getLogger(__name__).info("harness_ready", extra={"fields": {
-        "filter_lab": settings.review_public_url, "fake_discord": fake.base_url + "/fake",
+        "dashboard": settings.dashboard_public_url, "fake_discord": fake.base_url + "/fake",
         "recheck_seconds": args.recheck}})
     try:
         await asyncio.Event().wait()
@@ -91,7 +91,7 @@ async def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--database", required=True, help="A copy of a Filter Lab database")
+    parser.add_argument("--database", required=True, help="A copy of the bot's database")
     parser.add_argument("--port", type=int, default=9101)
     parser.add_argument("--discord-port", type=int, default=9199)
     parser.add_argument("--recheck", type=float, default=300, help="Seconds between access checks (default 300)")

@@ -112,7 +112,7 @@ class DeliveryWorker:
         return "failed" if permanent else "retry"
 
     async def remove(self, job):
-        """Delete one post that Filter Lab queued because the published rules filter its listing."""
+        """Delete one post that the dashboard queued because the published rules filter its listing."""
         try:
             await self.bot.rest.delete_message(job["destination_id"], job["message_id"])
         except hikari.NotFoundError:

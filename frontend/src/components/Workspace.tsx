@@ -86,7 +86,7 @@ export function Workspace() {
   }, []);
 
   useEffect(() => {
-    document.title = alert ? `${alert.search_query} | Filter Lab` : "Filter Lab";
+    document.title = alert ? `${alert.search_query} | Dashboard` : "Dashboard";
   }, [alert]);
 
   const select = (alertId: string | null) => {

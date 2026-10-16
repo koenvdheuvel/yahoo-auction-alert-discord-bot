@@ -262,7 +262,7 @@ class Repository(ReviewRepositoryMixin):
         return await self._call("unsubscribe", delete)
 
     async def due_deliveries(self, limit=50, removal_limit=100):
-        """Posts and DMs first. Post removals from Filter Lab come only when nothing else waits,
+        """Posts and DMs first. Post removals from the dashboard come only when nothing else waits,
         newest post first, so the ones young enough for Discord's bulk delete come together."""
         def select():
             due = DeliveryJob.select().where(DeliveryJob.status == "pending", DeliveryJob.next_attempt_at <= utcnow())
@@ -331,7 +331,7 @@ class Repository(ReviewRepositoryMixin):
     async def stats(self):
         def select():
             # Post removals are left out: a long cleanup is expected to take a while, and the
-            # backlog alerts are about posts and DMs that are late. Filter Lab shows its progress.
+            # backlog alerts are about posts and DMs that are late. The dashboard shows its progress.
             jobs = DeliveryJob.select().where(DeliveryJob.kind != "delete")
             pending = jobs.where(DeliveryJob.status == "pending")
             oldest = pending.select(fn.MIN(DeliveryJob.created_at)).scalar()

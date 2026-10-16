@@ -19,7 +19,7 @@ import type {
   Verdict,
 } from "./types";
 
-/** An error response from review.py, or a network failure (status 0). */
+/** An error response from dashboard.py, or a network failure (status 0). */
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -61,7 +61,7 @@ export async function request<T>(path: string, { method = "GET", body, signal }:
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    throw new ApiError("Filter Lab can't be reached. Check that the bot is running, then try again.", 0, "network_error");
+    throw new ApiError("The dashboard can't be reached. Check that the bot is running, then try again.", 0, "network_error");
   }
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {

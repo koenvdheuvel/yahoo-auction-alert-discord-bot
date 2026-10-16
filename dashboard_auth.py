@@ -1,6 +1,6 @@
-"""Discord sign-in for Filter Lab.
+"""Discord sign-in for the dashboard.
 
-DiscordOAuth runs Discord's OAuth2 code grant with only the `identify` scope, so Filter Lab learns
+DiscordOAuth runs Discord's OAuth2 code grant with only the `identify` scope, so the dashboard learns
 who the person is and nothing else. DiscordGuilds then works out what they may open, using the
 bot's own token: the servers the bot is in, the person's roles there and what those roles allow.
 """
@@ -23,13 +23,13 @@ AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 API_URL = "https://discord.com/api/v10"
 CDN_URL = "https://cdn.discordapp.com"
 LOGIN_PATH = "/auth/discord"
-# The redirect URI to register in the Discord Developer Portal is REVIEW_PUBLIC_URL + this path.
+# The redirect URI to register in the Discord Developer Portal is DASHBOARD_PUBLIC_URL + this path.
 CALLBACK_PATH = LOGIN_PATH + "/callback"
 # One access check, the server list and one member lookup per server, must finish in this time.
 CHECK_SECONDS = 10
 # Member lookups in different servers run side by side, at most this many at once.
 CHECK_CONCURRENCY = 4
-USER_AGENT = "FilterLab (https://github.com/koenvdheuvel/yahoo-auction-alert-discord-bot, 1.0)"
+USER_AGENT = "AuctionBotDashboard (https://github.com/koenvdheuvel/yahoo-auction-alert-discord-bot, 1.0)"
 AVATAR_HASH = re.compile(r"(a_)?[0-9a-f]{32}")
 # Errors that mean Discord could not answer. Anything else is a bug and is not hidden.
 UNAVAILABLE = (hikari.HTTPError, aiohttp.ClientError, OSError, TimeoutError)
@@ -192,11 +192,11 @@ class DiscordOAuth:
 
     @classmethod
     def from_settings(cls, settings, **urls):
-        return cls(settings.review_discord_client_secret, settings.review_public_url + CALLBACK_PATH, **urls)
+        return cls(settings.dashboard_discord_client_secret, settings.dashboard_public_url + CALLBACK_PATH, **urls)
 
     def authorize_url(self, client_id, state, verifier):
         # No prompt=none: Discord does not document what it does for someone who never approved
-        # Filter Lab, so Discord shows its consent screen every time.
+        # the dashboard, so Discord shows its consent screen every time.
         return self.authorize + "?" + urlencode({
             "response_type": "code", "client_id": str(client_id), "scope": "identify",
             "redirect_uri": self.redirect_uri, "state": state,

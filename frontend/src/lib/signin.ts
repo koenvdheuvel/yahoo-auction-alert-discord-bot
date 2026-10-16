@@ -5,16 +5,16 @@ export interface SignInNotice {
   message: string;
 }
 
-/** Why Discord sign-in came back without a session. review.py puts the reason in ?signin=. */
+/** Why Discord sign-in came back without a session. dashboard.py puts the reason in ?signin=. */
 export const SIGN_IN_ERRORS: Record<string, SignInNotice> = {
   cancelled: { severity: "info", message: "You cancelled on Discord, so you are not signed in." },
   state: { severity: "warning", message: "This sign-in expired, or it was started in another browser or tab. Start again from this page." },
   not_member: { severity: "error", message: "Your Discord account is not in any server this bot is in. Ask a server admin to invite you, or sign in with another account." },
   missing_permission: { severity: "error", message: "You need the Manage Channels permission in a server this bot is in. Ask a server admin for it, then sign in again." },
-  discord_unavailable: { severity: "error", message: "Filter Lab couldn't reach Discord to check your access. Try again in a minute." },
+  discord_unavailable: { severity: "error", message: "The dashboard couldn't reach Discord to check your access. Try again in a minute." },
   discord_error: { severity: "error", message: "Discord didn't accept the sign-in. Try again." },
   rate_limited: { severity: "error", message: "Too many sign-in attempts. Try again in a minute." },
-  cookie: { severity: "error", message: "Your browser didn't keep Filter Lab's sign-in cookie. Allow cookies for this site and try again." },
+  cookie: { severity: "error", message: "Your browser didn't keep the dashboard's sign-in cookie. Allow cookies for this site and try again." },
 };
 
 export const ACCESS_REVOKED: SignInNotice = {

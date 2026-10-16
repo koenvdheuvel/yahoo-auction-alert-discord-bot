@@ -53,8 +53,8 @@ def create_application(settings=None):
     from processors.hikari_event import HikariEventProcessor
     from providers import HttpClient, PROVIDERS
     from repositories import Repository
-    from review import ReviewServer
-    from review_auth import DiscordGuilds
+    from dashboard import DashboardServer
+    from dashboard_auth import DiscordGuilds
     from runtime import Runtime
     from storechecker import Ingestion
 
@@ -64,7 +64,7 @@ def create_application(settings=None):
     if not settings.token:
         raise ValueError("BOT_TOKEN is required")
     configure_logging(settings.log_level, secrets=(
-        settings.token, settings.review_token, settings.review_discord_client_secret))
+        settings.token, settings.dashboard_token, settings.dashboard_discord_client_secret))
     configure_database(settings.database_path)
     create_tables()
     metrics = Metrics()
@@ -78,7 +78,7 @@ def create_application(settings=None):
     providers = {source: PROVIDERS[source](http, settings) for source in settings.enabled_sources}
 
     def channel_names(channel_ids):
-        """Filter Lab shows channel names from the gateway cache instead of bare IDs."""
+        """The dashboard shows channel names from the gateway cache instead of bare IDs."""
         names = {}
         for channel_id in channel_ids:
             channel = bot.cache.get_guild_channel(int(channel_id)) or bot.cache.get_thread(int(channel_id))
@@ -88,10 +88,10 @@ def create_application(settings=None):
 
     # Discord sign-in checks people's servers and roles with the bot's REST client and cache.
     guild_access = DiscordGuilds(bot.rest, bot.cache) if settings.discord_sign_in else None
-    review = ReviewServer(settings, repository, metrics, channel_names=channel_names, bot_running=True,
+    dashboard = DashboardServer(settings, repository, metrics, channel_names=channel_names, bot_running=True,
                           guild_access=guild_access)
     runtime = Runtime(bot, settings, repository, http, ingestion, delivery, providers, metrics,
-                      review_server=review)
+                      dashboard_server=dashboard)
     bot.services = ApplicationServices(repository, runtime, metrics, client)
     processor = HikariEventProcessor()
     load_commands(bot, client, repository)

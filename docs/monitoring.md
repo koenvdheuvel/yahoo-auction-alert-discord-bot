@@ -82,28 +82,28 @@ All application metrics use the `auction_bot_` prefix. Durations use seconds, co
 | Runtime health | `worker_alive{worker}`, `discord_connected`, `ready`, `event_loop_lag_seconds`, `started_timestamp_seconds` |
 | Configuration | `configured_alerts`, `disabled_legacy_filters`, `configured_poll_interval_seconds`, `configured_stats_interval_seconds`, `health_max_poll_age_seconds` |
 | Discord interactions | `reaction_errors_total`, `command_errors_total{outcome}` |
-| Filter Lab | `review_requests_total{operation,outcome}`, `review_request_duration_seconds{operation}`, `review_logins_total{method,outcome}`, `review_access_checks_total{outcome}` |
+| Dashboard | `dashboard_requests_total{operation,outcome}`, `dashboard_request_duration_seconds{operation}`, `dashboard_logins_total{method,outcome}`, `dashboard_access_checks_total{outcome}` |
 
 Histogram names also expose `_bucket`, `_count` and `_sum`. Standard Python GC/platform collectors and process metrics are included; process metrics depend on platform support. Each application uses its own registry so tests and application instances do not duplicate global metric registration.
 
 `last_poll_completed_timestamp_seconds` advances after a settled cycle even when some checks fail, or when a recoverable cycle read fails. `last_poll_success_timestamp_seconds` advances only when the cycle has no failed checks. Per-source success advances only when that source has at least one check and all its checks succeed in that cycle. No alerts is a successful empty cycle; it does not mark source checks as successful. Cancelled cycles do not count as completed cycles. Health freshness uses a monotonic clock; exported event timestamps use wall time.
 
-Provider counters count request attempts, including retries. Delivery counters count attempts rather than unique listings or messages. A successful ingestion check means listings were observed and delivery jobs were durably queued; delivery success is tracked independently. Queue gauges are periodic database snapshots. A zero queue gauge with a stale statistics timestamp is not evidence that delivery is healthy. Post removals that Filter Lab queues count in `delivery_attempts_total{kind="delete"}` but not in the three outbox gauges: a long cleanup is expected to take a while and should not set off the backlog or failure alerts. Filter Lab shows their progress, and `manage.py outbox-list` lists them with the other jobs.
+Provider counters count request attempts, including retries. Delivery counters count attempts rather than unique listings or messages. A successful ingestion check means listings were observed and delivery jobs were durably queued; delivery success is tracked independently. Queue gauges are periodic database snapshots. A zero queue gauge with a stale statistics timestamp is not evidence that delivery is healthy. Post removals that the dashboard queues count in `delivery_attempts_total{kind="delete"}` but not in the three outbox gauges: a long cleanup is expected to take a while and should not set off the backlog or failure alerts. The dashboard shows their progress, and `manage.py outbox-list` lists them with the other jobs.
 
-Filter Lab request labels use fixed API operation names and outcomes. Candidate
+The dashboard request labels use fixed API operation names and outcomes. Candidate
 IDs, rule text, access keys, Discord user IDs and search queries do not become
-metric labels. `review_logins_total` counts sign-ins by method (`discord` or
+metric labels. `dashboard_logins_total` counts sign-ins by method (`discord` or
 `access_key`) and result: `success`, or why it was refused (`cancelled`,
 `state`, `not_member`, `missing_permission`, `discord_error`,
 `discord_unavailable`, `rate_limited`, `cookie`, `wrong_key`).
-`review_access_checks_total` counts the repeated checks of signed-in people:
+`dashboard_access_checks_total` counts the repeated checks of signed-in people:
 `kept`, `reduced` (lost some servers), `revoked` (lost all, signed out) and
 `error` (Discord did not answer). A rise in `error` means people are being
 refused while Discord is unreachable.
 Ingestion item outcomes now also include `filtered`, `review`, `blacklisted`,
 `invalid` and `filter_timeout`. Database operation timing
 covers candidate writes, feedback, publication and history retention through
-the existing repository boundary. Standalone review mode does not expose a
+the existing repository boundary. The standalone dashboard does not expose a
 Prometheus listener; the embedded bot mode uses the normal monitoring registry.
 
 JSON logs include `timestamp`, `level`, `logger` and `event`, with contextual fields. Poll checks carry `cycle_id`, `alert_id` and `source`; delivery attempts carry `delivery_id` and `kind`. Context is local to the asyncio task and is restored after the operation. Exceptions retain their traceback. The configured bot token is redacted from messages, fields and tracebacks, and known secret field keys are redacted recursively. HTTP access logs are disabled. Keep logs in the process's stdout/stderr collection pipeline; no external logging service is required by the app.

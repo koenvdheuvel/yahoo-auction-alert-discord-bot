@@ -57,7 +57,7 @@ class Delivery:
 
 
 def build_runtime(check, alerts=None, settings=None, delivery=None):
-    settings = settings or replace(Settings(), monitoring_enabled=False, review_enabled=False)
+    settings = settings or replace(Settings(), monitoring_enabled=False, dashboard_enabled=False)
     bot = Bot()
     repo, http, metrics = Repository(alerts), Resource(), Metrics()
     runtime = Runtime(bot, settings, repo, http, SimpleNamespace(check=check),
@@ -94,7 +94,7 @@ def test_factory_registers_commands_without_starting_network_or_workers(tmp_path
     monkeypatch.chdir(tmp_path)
     database_path = tmp_path / "configured.db"
     settings = replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK", database_path=str(database_path),
-                       monitoring_enabled=False, review_enabled=False)
+                       monitoring_enabled=False, dashboard_enabled=False)
     bot = main.create_application(settings)
     assert database_path.exists()
     assert not bot.services.runtime.tasks
@@ -144,7 +144,7 @@ def test_factory_gateway_events_open_resources_before_starting_workers(tmp_path,
     async def scenario():
         nonlocal bot
         bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
-                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, review_enabled=False))
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, dashboard_enabled=False))
 
         def listener(event_type, name):
             return next(callback for callback in bot.get_listeners(event_type) if callback.__name__ == name)
@@ -183,7 +183,7 @@ def test_server_channels_and_threads_fill_in_missing_alert_servers(tmp_path, mon
     async def scenario():
         bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
                                                database_path=str(tmp_path / "db"), monitoring_enabled=False,
-                                               review_enabled=False))
+                                               dashboard_enabled=False))
         try:
             listeners = [callback for event_type in (hikari.GuildAvailableEvent, hikari.GuildJoinEvent)
                          for callback in bot.get_listeners(event_type) if callback.__name__ == "on_guild_available"]
@@ -223,7 +223,7 @@ def test_command_sync_failure_stops_startup_before_background_work(tmp_path, mon
 
     async def scenario():
         bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
-                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, review_enabled=False))
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, dashboard_enabled=False))
 
         def listener(event_type, name):
             return next(callback for callback in bot.get_listeners(event_type) if callback.__name__ == name)
@@ -262,7 +262,7 @@ def test_command_error_handler_responds_privately_and_logs_unexpected_errors(tmp
 
     async def scenario():
         bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
-                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, review_enabled=False))
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, dashboard_enabled=False))
         client = bot.services.commands
         handler = next(callback for callbacks in client._error_handlers.values() for callback in callbacks)
         context = SimpleNamespace(channel_id=123, respond=AsyncMock(),
@@ -347,7 +347,7 @@ def test_worker_pool_is_bounded_and_never_skips_a_query():
             seen.append(item["id"])
             active -= 1
 
-        settings = replace(Settings(), concurrency=3, monitoring_enabled=False, review_enabled=False)
+        settings = replace(Settings(), concurrency=3, monitoring_enabled=False, dashboard_enabled=False)
         rows = [alert(index, "BABYMETAL BEGINS" if index == 0 else "query") for index in range(1000)]
         runtime = build_runtime(check, rows, settings)
         await runtime.poll_cycle()
@@ -394,7 +394,7 @@ def test_timeout_preserves_last_success_and_advances_completed_timestamp():
             if fail:
                 await asyncio.Future()
 
-        runtime = build_runtime(check, [alert(1)], replace(Settings(), check_timeout=.01, monitoring_enabled=False, review_enabled=False))
+        runtime = build_runtime(check, [alert(1)], replace(Settings(), check_timeout=.01, monitoring_enabled=False, dashboard_enabled=False))
         await runtime.poll_cycle()
         previous_success = value(runtime, "last_poll_success_timestamp_seconds")
         previous_source_success = value(runtime, "source_last_success_timestamp_seconds", {"source": "yahooauction"})
@@ -419,7 +419,7 @@ def test_recoverable_database_cycle_error_is_retried():
         async def check(provider, item):
             checked.set()
 
-        runtime = build_runtime(check, [alert(1)], replace(Settings(), interval=.001, monitoring_enabled=False, review_enabled=False))
+        runtime = build_runtime(check, [alert(1)], replace(Settings(), interval=.001, monitoring_enabled=False, dashboard_enabled=False))
         original = runtime.repository.list_alerts
         reads = 0
 

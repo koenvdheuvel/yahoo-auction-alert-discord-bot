@@ -1,9 +1,9 @@
-"""A small local stand-in for Discord, for tests and for trying Filter Lab's Discord sign-in.
+"""A small local stand-in for Discord, for tests and for trying the dashboard's Discord sign-in.
 
-It serves what Filter Lab asks Discord for: the authorize page, the token exchange and
+It serves what the dashboard asks Discord for: the authorize page, the token exchange and
 /users/@me with the person's token, and the bot's calls for its servers, roles and members.
-It is never used in production; Filter Lab only talks to it when a test or the harness in
-devtools/filter_lab_harness.py passes its URLs in code.
+It is never used in production; the dashboard only talks to it when a test or the harness in
+devtools/dashboard_harness.py passes its URLs in code.
 """
 import asyncio
 import base64
@@ -114,7 +114,7 @@ class FakeDiscord:
             await self.runner.cleanup()
             self.runner = None
 
-    # OAuth2, as seen by the person's browser and by Filter Lab with the person's token.
+    # OAuth2, as seen by the person's browser and by the dashboard with the person's token.
 
     def _check_authorize(self, params):
         expected = {"response_type": "code", "client_id": str(APPLICATION_ID), "scope": "identify",
@@ -162,7 +162,7 @@ class FakeDiscord:
 main{{background:#2b2d31;padding:32px;border-radius:8px;width:420px}}button{{display:block;width:100%;margin:8px 0;
 padding:12px;border:0;border-radius:4px;background:#5865f2;color:#fff;font-size:15px;cursor:pointer}}
 button.cancel{{background:#4e5058}}</style></head>
-<body><main><h1>Fake Discord</h1><p>Filter Lab wants to know who you are (scope: identify).</p>
+<body><main><h1>Fake Discord</h1><p>The dashboard wants to know who you are (scope: identify).</p>
 <form method="post" action="/oauth2/authorize">{hidden}{people}
 <button class="cancel" name="decision" value="cancel">Cancel</button></form></main></body></html>"""
         return web.Response(text=page, content_type="text/html")

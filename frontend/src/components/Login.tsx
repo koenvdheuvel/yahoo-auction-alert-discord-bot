@@ -37,7 +37,7 @@ export function Login({ method, ended, unreachable, onRetry, onSignedIn }: Props
       <Box sx={{ width: "100%", maxWidth: 420 }}>
         <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 4 }}>
           <LogoMark size={36} />
-          <Typography variant="h1" component="h1">Filter Lab</Typography>
+          <Typography variant="h1" component="h1">Dashboard</Typography>
         </Stack>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
           Label what your searches find, and tune the rules that decide what gets posted to Discord.
@@ -48,7 +48,7 @@ export function Login({ method, ended, unreachable, onRetry, onSignedIn }: Props
           <AccessKeySignIn ended={ended !== null} onSignedIn={onSignedIn} />
         ) : (
           <Stack spacing={2}>
-            <Alert severity="error" role="alert">{unreachable ? errorMessage(unreachable) : "Filter Lab can't be reached."}</Alert>
+            <Alert severity="error" role="alert">{unreachable ? errorMessage(unreachable) : "The dashboard can't be reached."}</Alert>
             <Button variant="outlined" color="inherit" onClick={onRetry}>Try again</Button>
           </Stack>
         )}
@@ -58,7 +58,7 @@ export function Login({ method, ended, unreachable, onRetry, onSignedIn }: Props
 }
 
 function DiscordSignIn({ ended }: { ended: SessionEnd | null }) {
-  // review.py sends the person back with ?signin=<reason> when sign-in did not work.
+  // dashboard.py sends the person back with ?signin=<reason> when sign-in did not work.
   const [reason] = useState(readSignInReason);
   useEffect(() => clearSignInReason(), []);
   const notice = reason ? signInNotice(reason) : ended === "revoked" ? ACCESS_REVOKED : null;
@@ -72,7 +72,7 @@ function DiscordSignIn({ ended }: { ended: SessionEnd | null }) {
       </Button>
       {!notice && (
         <Typography variant="body2" color="text.secondary">
-          You need the Manage Channels permission in a server this bot is in. Filter Lab only asks Discord who you
+          You need the Manage Channels permission in a server this bot is in. The dashboard only asks Discord who you
           are; the bot checks your servers itself.
         </Typography>
       )}
@@ -110,7 +110,7 @@ function AccessKeySignIn({ ended, onSignedIn }: { ended: boolean; onSignedIn: (s
         required
         fullWidth
         size="medium"
-        helperText="It is in the .review-token file next to the bot's database, or in REVIEW_TOKEN."
+        helperText="It is in the .dashboard-token file next to the bot's database, or in DASHBOARD_TOKEN."
         slotProps={{
           htmlInput: { maxLength: 512, spellCheck: false, autoCapitalize: "off" },
           input: {
