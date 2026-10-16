@@ -24,6 +24,22 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: python -m pytest -q
+      # Filter Lab's UI. The Docker build compiles it again; this catches errors before that.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
 
   build:
     runs-on: [self-hosted, media]
