@@ -60,6 +60,8 @@ export function Shell() {
   const [filters, setFilters] = useState<ListingFilters>({ search: "", source: "", verdict: "", feedback: "", latest: true });
 
   const notifications = session?.features?.notifications ?? false;
+  // The access key opens everything; the server checks channels only for Discord users.
+  const accessKey = session?.method === "access_key";
   const alert = alerts.data?.alerts.find((item) => item.id === place.alertId) ?? null;
   const missing = place.alertId !== null && alerts.isSuccess && alert === null;
   const known = guilds.data?.guilds ?? [];
@@ -145,12 +147,12 @@ export function Shell() {
       return <SearchView place={place} navigate={navigate} alert={alert} rules={rules} draft={draft} filters={filters}
         onFilters={setFilters} replays={replays} onReplay={(stored) => setReplays((current) => ({ ...current, [stored.alertId]: stored }))}
         replayRequested={replayRequested} setReplayRequested={setReplayRequested} onTestTitle={openTitleTest}
-        canChange={canChangeSearch(channels.data, alert)}
+        canChange={accessKey || canChangeSearch(channels.data, alert)}
         actions={
-          <Tooltip title={canChangeSearch(channels.data, alert) ? "" : "You need Manage Channels in its channel"}>
+          <Tooltip title={accessKey || canChangeSearch(channels.data, alert) ? "" : "You need Manage Channels in its channel"}>
             <span>
               <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlined />}
-                disabled={!canChangeSearch(channels.data, alert)} onClick={() => setUnregistering(alert)}>Unregister</Button>
+                disabled={!accessKey && !canChangeSearch(channels.data, alert)} onClick={() => setUnregistering(alert)}>Unregister</Button>
             </span>
           </Tooltip>
         } />;

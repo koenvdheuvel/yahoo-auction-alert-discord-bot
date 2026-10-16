@@ -241,10 +241,19 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 201)
 
     async def test_changes_need_manage_channels_in_the_channel_itself(self):
+        from filtering import default_ruleset
+
         item = await self.item("staff-item")
         await self.post(item, STAFF, None, 10)
+        await self.repository.register_alert(STAFF, "Staff picks", guild_id=GUILD_A)
+        staff = (await self.repository.list_alerts(channel_id=STAFF))[0]["id"]
+        version = await self.repository.publish_review_rules(staff, default_ruleset())
         self.sign_in(ALICE)
         changes = (
+            ("POST", f"/api/alerts/{staff}/publish", {"ruleset": default_ruleset(), "expected_version_id": version["id"]}),
+            ("POST", f"/api/alerts/{staff}/rollback", {"version_id": version["id"], "expected_version_id": version["id"]}),
+            ("POST", f"/api/alerts/{staff}/posts/removal", {"version_id": version["id"], "message_ids": ["10"]}),
+            ("DELETE", f"/api/alerts/{staff}", {}),
             ("POST", "/api/alerts", {"channel_id": str(STAFF), "search_query": "staff"}),
             ("PUT", f"/api/channels/{STAFF}/hidden/{item}", {}),
             ("DELETE", f"/api/channels/{STAFF}/hidden/{item}", {}),
@@ -255,8 +264,10 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
             response = await self.call(method, path, **body)
             self.assertEqual(response.status, 403, path)
             self.assertIn("Manage Channels permission in #staff", (await response.json())["message"])
-        # Reading is fine: the sign-in already needs Manage Channels in the server.
+        # Nothing changed, and reading is fine: managing the server already needs Manage Channels in it.
+        self.assertEqual((await self.repository.get_review_rules(staff))["versions_total"], 1)
         self.assertEqual((await self.client.get(f"/api/channels/{STAFF}/hidden")).status, 200)
+        self.assertEqual((await self.client.get(f"/api/alerts/{staff}/rules")).status, 200)
         # A member overwrite of her own beats the role's.
         response = await self.call("POST", "/api/alerts", channel_id=str(SHARED), search_query="shared")
         self.assertEqual(response.status, 201)

@@ -27,9 +27,11 @@ interface Props {
   rules: UseQueryResult<RulesResponse>;
   draft: Draft;
   onEditRules: () => void;
+  /** Whether you have Manage Channels in the search's channel, which restoring and removing posts need. */
+  canChange?: boolean;
 }
 
-export function VersionsPanel({ alert, rules, draft, onEditRules }: Props) {
+export function VersionsPanel({ alert, rules, draft, onEditRules, canChange = false }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
   const [open, setOpen] = useState<string | null>(null);
@@ -137,10 +139,12 @@ export function VersionsPanel({ alert, rules, draft, onEditRules }: Props) {
                     Load into draft
                   </Button>
                   {!current && (
-                    <Button size="small" variant="outlined" color="inherit" onClick={() => setRestoring(version)}>Restore</Button>
+                    <Button size="small" variant="outlined" color="inherit" onClick={() => setRestoring(version)}
+                      disabled={!canChange}>Restore</Button>
                   )}
                   {current && (
-                    <Button size="small" variant="outlined" color="inherit" onClick={() => setRemoving(true)}>
+                    <Button size="small" variant="outlined" color="inherit" onClick={() => setRemoving(true)}
+                      disabled={!canChange}>
                       Remove filtered posts
                     </Button>
                   )}

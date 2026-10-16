@@ -850,7 +850,18 @@ class DashboardServer:
         self.log_labels(request, result["items"], data.get("label"))
         return web.json_response(result)
 
+    async def require_search_change(self, request, gone_ok):
+        """With Discord sign-in, changing a search needs Manage Channels in its channel, counting
+        the channel's overwrites, as the slash commands check it. gone_ok allows it for a search
+        whose channel Discord says is deleted."""
+        if request[SESSION].user is None:
+            return
+        alert = await self.repository.review_alert(identifier(request.match_info["id"], "alert_id"),
+                                                   self.guilds(request))
+        await self.management.channel_in_scope(request, alert["channel_id"], change=True, gone_ok=gone_ok)
+
     async def publish(self, request):
+        await self.require_search_change(request, gone_ok=True)
         version = await self.service.publish(request.match_info["id"], await self.body(request),
                                              self.guilds(request))
         logger.info("review_rules_published", extra={"fields": {
@@ -859,6 +870,7 @@ class DashboardServer:
         return web.json_response(version)
 
     async def rollback(self, request):
+        await self.require_search_change(request, gone_ok=True)
         version = await self.service.rollback(request.match_info["id"], await self.body(request),
                                               self.guilds(request))
         logger.info("review_rules_restored", extra={"fields": {
@@ -880,6 +892,7 @@ class DashboardServer:
         return web.json_response({**result, "bot_running": self.bot_running})
 
     async def post_removal(self, request):
+        await self.require_search_change(request, gone_ok=False)
         data = await self.body(request)
         result = await self.service.remove_posts(request.match_info["id"], data, self.guilds(request))
         guild_id = result.pop("guild_id")

@@ -64,7 +64,8 @@ export function SearchView(props: Props) {
           autoRun={replayRequested} onAutoRun={() => setReplayRequested(false)}
           onEditRules={() => navigate({ tab: "rules" })} />;
       case "versions":
-        return <VersionsPanel alert={alert} rules={rules} draft={draft} onEditRules={() => navigate({ tab: "rules" })} />;
+        return <VersionsPanel alert={alert} rules={rules} draft={draft} canChange={canChange}
+          onEditRules={() => navigate({ tab: "rules" })} />;
       default:
         return <ListingsPanel alertId={alert.id} guildId={null} filters={filters} onFilters={onFilters} onTestTitle={onTestTitle} />;
     }

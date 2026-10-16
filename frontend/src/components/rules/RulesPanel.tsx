@@ -10,6 +10,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useState } from "react";
@@ -240,9 +241,14 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
           <Button variant="outlined" color="inherit" onClick={onTestTitle}>Test a title</Button>
           {alert && <Button variant="outlined" color="inherit" onClick={onReplay} disabled={Boolean(invalid)}>Replay draft</Button>}
           {alert && (
-            <Button variant="contained" onClick={() => setConfirming(true)} disabled={!canPublish || publish.isPending}>
-              Publish
-            </Button>
+            <Tooltip title={canChange ? "" : "You need Manage Channels in this search's channel to publish"}>
+              <span>
+                <Button variant="contained" onClick={() => setConfirming(true)}
+                  disabled={!canPublish || publish.isPending || !canChange}>
+                  Publish
+                </Button>
+              </span>
+            </Tooltip>
           )}
         </Stack>
       </Box>
