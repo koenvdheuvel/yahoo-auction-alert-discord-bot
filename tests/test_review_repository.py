@@ -314,15 +314,20 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.prune_candidates(limit=1001)
 
     async def test_history_import_is_explicit_bounded_idempotent_and_marked_incomplete(self):
-        listing = Listing("external", "mercari", "ＢＡＢＹＭＥＴＡＬ　 ＣＤ", 1, 2000)
-        await self.repository.observe(self.alert, listing)
+        for external_id in ("posted", "tracked"):
+            await self.repository.observe(self.alert, Listing(external_id, "mercari", "ＢＡＢＹＭＥＴＡＬ　 ＣＤ", 1, 2000))
+
+        def keep_one_copy_each():
+            # One listing is left only as a posted message, the other only as a tracked item.
+            AlertItem.delete().where(AlertItem.item.in_(Item.select(Item.id).where(Item.item_id == "posted"))).execute()
+            DeliveryJob.delete().where(DeliveryJob.item.in_(Item.select(Item.id).where(Item.item_id == "tracked"))).execute()
+        await self.repository._call("test_keep_one_copy_each", keep_one_copy_each)
         self.assertEqual((await self.repository.list_candidates())["total"], 0)
         result = await self.repository.bootstrap_history(limit=1)
         self.assertEqual((result["imported"], result["incomplete"], result["truncated"]), (1, 1, True))
         before = await self.rows(DeliveryJob)
         complete = await self.repository.bootstrap_history(limit=1000)
-        self.assertEqual(complete["imported"], 1)
-        self.assertEqual(complete["skipped"], 1)
+        self.assertEqual((complete["imported"], complete["skipped"]), (1, 1))
         repeated = await self.repository.bootstrap_history()
         self.assertEqual((repeated["imported"], repeated["skipped"]), (0, 2))
         rows = (await self.repository.list_candidates())["items"]
@@ -330,7 +335,16 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(row["incomplete"] and row["verdict"] == "review" for row in rows))
         self.assertTrue(all(row["normalization_version"] == 1 and row["normalized_title"] == "babymetal cd" for row in rows))
         self.assertEqual(await self.rows(DeliveryJob), before)
-        self.assertEqual(len(await self.rows(Item)), 1)
+        self.assertEqual(len(await self.rows(Item)), 2)
+
+    async def test_history_import_skips_listings_the_search_already_has(self):
+        # The bot already saved this listing with its decision. It was also posted and is still tracked.
+        await self.archive("accepted", external_id="seen")
+        await self.repository.observe(self.alert, Listing("seen", "mercari", "BABYMETAL CD", 1, 2000))
+        result = await self.repository.bootstrap_history()
+        self.assertEqual((result["imported"], result["skipped"]), (0, 2))
+        latest = await self.repository.list_candidates(self.alert["id"], latest=True)
+        self.assertEqual([(row["origin"], row["verdict"]) for row in latest["items"]], [("live", "accepted")])
 
     async def test_bounded_json_and_title_metadata_are_explicit(self):
         huge_title = facts(title="x" * 140000)

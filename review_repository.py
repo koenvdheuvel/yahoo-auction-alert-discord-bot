@@ -345,6 +345,12 @@ class ReviewRepositoryMixin:
                     # generation when SQLite has reused an identical live ID.
                     alert = None
             now = observed_at or utcnow()
+            if (origin != "live" and alert is not None and external_id and CandidateObservation.select().where(
+                    CandidateObservation.alert == alert, CandidateObservation.source == source,
+                    CandidateObservation.external_id == external_id).exists()):
+                # Imports carry no decision. A copy of a listing the search already has would
+                # replace the bot's real decision as the newest row, so it is skipped.
+                return None
             previous = None
             if origin == "live" and alert is not None and external_id:
                 previous = (CandidateObservation
@@ -593,6 +599,8 @@ class ReviewRepositoryMixin:
         Current item rows and channel-job snapshots cannot reconstruct omitted
         or filtered listings or their original policy decisions. Imported rows
         remain review/incomplete; normalization uses current default settings.
+        Listings the alert already has are skipped, including a listing that
+        was both posted and tracked.
         """
         from normalization import NORMALIZATION_VERSION, normalize_title
 
@@ -645,9 +653,11 @@ class ReviewRepositoryMixin:
                                 "reasons": reasons, "matched_groups": [], "legacy_matched_rules": [],
                                 "normalization_version": NORMALIZATION_VERSION}
                     try:
-                        self._archive_candidate_sync(data, payload, decision, origin=origin,
-                                                     observed_at=observed, import_key=key, incomplete=True)
+                        archived = self._archive_candidate_sync(data, payload, decision, origin=origin,
+                                                                observed_at=observed, import_key=key, incomplete=True)
                     except ReviewValidation:
+                        archived = None
+                    if archived is None:
                         counts["skipped"] += 1
                         continue
                     counts["imported"] += 1
