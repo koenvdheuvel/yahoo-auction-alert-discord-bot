@@ -174,7 +174,8 @@ def sidebar(guild, bot_id, counts, outside=()):
     """The server's channel list as Discord's sidebar shows it, for the dashboard.
 
     counts maps a channel ID to {"searches": n, "hidden": n}. Every text and announcement channel
-    is listed; other channels and threads only when they have something in counts. outside holds
+    is listed with its active threads, so a search can be added to one; other channels, and
+    archived threads, only when they have something in counts. outside holds
     Lookups for channel IDs in counts that are not in the server's channel list, such as an
     archived thread (listed under its parent) or a deleted channel (listed as unknown).
     """
@@ -194,13 +195,19 @@ def sidebar(guild, bot_id, counts, outside=()):
                 "archived": channel.archived, "locked": channel.locked, **found,
                 "posting": posting(guild, channel, bot_id)}
 
-    threads = {}
+    threads, busy = {}, set()
     for channel in channels.values():
-        if channel.kind in THREADS and channel.id in counts:
+        if channel.kind not in THREADS:
+            continue
+        parent = channels.get(channel.parent_id)
+        if channel.id in counts:
+            busy.add(channel.parent_id)
+        if channel.id in counts or (not channel.archived and parent is not None
+                                    and parent.kind in {"text", "announcement"}):
             threads.setdefault(channel.parent_id, []).append(channel)
     listed = [channel for channel in channels.values()
               if channel.kind not in THREADS and channel.kind != "category"
-              and (channel.kind in {"text", "announcement"} or channel.id in counts or channel.id in threads)]
+              and (channel.kind in {"text", "announcement"} or channel.id in counts or channel.id in busy)]
     for parent_id in set(threads) - {channel.id for channel in listed}:
         # A thread whose parent is gone or unknown still gets listed, at the top of the server.
         for thread in threads.pop(parent_id):

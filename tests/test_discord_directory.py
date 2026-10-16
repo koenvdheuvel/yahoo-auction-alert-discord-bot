@@ -122,12 +122,13 @@ class SidebarTests(unittest.TestCase):
                    [(row["name"], [thread["name"] for thread in row["threads"]]) for row in section["channels"]])
                   for section in result["sections"]]
         # Channels without a category first, then categories by position; text before voice in each;
-        # voice channels and threads only when they have searches or hidden listings, newest thread first;
-        # an empty category is left out.
+        # voice and forum channels only when they have searches or hidden listings; a text channel's
+        # active threads, newest first; an empty category is left out.
         self.assertEqual(layout, [
             (None, [("channel-4", [])]),
             ("channel-200", [("channel-5", [])]),
-            ("channel-100", [("channel-1", ["channel-9", "channel-7"]), ("channel-3", []), ("channel-2", [])]),
+            ("channel-100", [("channel-1", ["channel-9", "channel-8", "channel-7"]), ("channel-3", []),
+                             ("channel-2", [])]),
         ])
         self.assertEqual(result["unknown"], [])
 
