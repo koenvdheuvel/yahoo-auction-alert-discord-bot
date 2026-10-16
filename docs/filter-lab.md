@@ -190,9 +190,13 @@ Confirming checks each chosen post against the published rules again, and asks
 you to check again if other rules were published meanwhile.
 
 Removals go through the same queue as posts, so they survive restarts and
-retry on errors. New alert posts always go first, and posts are deleted one at
-a time at Discord's pace, so a large run can take a while. Versions shows the
-progress of the latest run. Queued posts of the same listings are cancelled, so
+retry on errors. New alert posts always go first. Posts under 14 days old are
+deleted with Discord's bulk delete, up to 100 per request; that needs the
+**Manage Messages** permission in the channel. Older posts, and all posts in a
+channel where Discord refuses the bulk delete, go one request each, a few at a
+time, so a large run of old posts can take a while. After a refusal the bot
+tries bulk again in that channel an hour later. Versions shows the progress of
+the latest run. Queued posts of the same listings are cancelled, so
 nothing comes back. A removed listing is not blocked the way 🗑️ blocks it: if
 later rules allow it again, the bot does not post it again as new, and only a
 later price or stock change would post an update. When Filter Lab runs without

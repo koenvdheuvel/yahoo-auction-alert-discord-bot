@@ -1,17 +1,30 @@
 """Marketplace facts and deterministic notification policy, independent of I/O."""
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 
 import regex
 
 FILTER_TIMEOUT_SECONDS = 0.05
+DISCORD_EPOCH_MS = 1420070400000
 
 
 class FilterTimeout(TimeoutError):
     def __init__(self, filter_id):
         self.filter_id = filter_id
         super().__init__(f"Filter {filter_id} exceeded its evaluation deadline")
+
+
+def discord_time(message_id):
+    """When Discord created a message: its ID starts with milliseconds since 2015."""
+    return datetime.fromtimestamp(((message_id >> 22) + DISCORD_EPOCH_MS) / 1000, timezone.utc)
+
+
+def first_discord_id_at(moment):
+    """The smallest message ID Discord could have created at `moment` (naive times are UTC)."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return max(0, int(moment.timestamp() * 1000) - DISCORD_EPOCH_MS) << 22
 
 
 @dataclass(frozen=True)

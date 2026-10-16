@@ -1,6 +1,7 @@
 """Real outbox persistence with a fake Discord REST adapter."""
 import asyncio
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import tempfile
@@ -12,11 +13,18 @@ import hikari
 
 from config import Settings
 from delivery import DeliveryWorker
-from domain import Listing
+from domain import Listing, first_discord_id_at
 from filtering import default_ruleset
 from models import DeliveryJob, Item, Message, configure_database, create_tables, database, utcnow
 from observability import Metrics
 from repositories import Repository
+
+
+def bulk_error(cause):
+    """The error hikari raises when a bulk delete fails, with Discord's answer as its cause."""
+    error = hikari.BulkDeleteError([])
+    error.__cause__ = cause
+    return error
 
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):
@@ -152,12 +160,19 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.rows(DeliveryJob))[0]["status"], "sent")
         self.assertEqual(self.rest.create_message.await_count, 1)
 
-    async def post(self, *external_ids):
-        """Post one listing per ID; the fake Discord numbers the messages from 50001."""
+    async def post(self, *external_ids, ages=None):
+        """Post one listing per ID and return the message IDs. The fake Discord numbers messages
+        from 50001, which dates them to 2015; `ages` gives each post an ID from that long ago instead."""
+        ids = None
+        if ages is not None:
+            now = datetime.now(timezone.utc)
+            ids = [first_discord_id_at(now - age) + index for index, age in enumerate(ages)]
+            self.rest.create_message.side_effect = [SimpleNamespace(id=message_id) for message_id in ids]
         for external_id in external_ids:
             await self.repository.observe(self.alert, replace(self.listing, id=external_id))
         for job in await self.repository.due_deliveries():
             await self.worker.deliver(job)
+        return ids or [row["message_id"] for row in await self.rows(Message)]
 
     async def queue_removals(self, *message_ids):
         version = await self.repository.publish_review_rules(self.alert["id"], default_ruleset(), None)
@@ -216,10 +231,77 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.rest.delete_message.assert_not_awaited()
         self.assertEqual(await self.removals(), {50001: "cancelled", 50002: "cancelled"})
 
-    async def test_post_removals_come_a_few_at_a_time(self):
-        await self.post(*(f"listing-{index}" for index in range(7)))
-        self.assertEqual(await self.queue_removals(*range(50001, 50008)), 7)
-        self.assertEqual(len(await self.repository.due_deliveries()), 5)
+    async def remove_due(self):
+        await self.worker.remove_due(await self.repository.due_deliveries())
+
+    async def test_recent_posts_go_in_one_bulk_request_and_older_ones_one_at_a_time(self):
+        ids = await self.post("new", "newer", "old", ages=[timedelta(hours=3), timedelta(hours=1), timedelta(days=20)])
+        self.rest.delete_messages, self.rest.delete_message = AsyncMock(), AsyncMock()
+        self.assertEqual(await self.queue_removals(*ids), 3)
+        await self.remove_due()
+        self.rest.delete_messages.assert_awaited_once_with(1111, [ids[1], ids[0]])
+        self.rest.delete_message.assert_awaited_once_with(1111, ids[2])
+        self.assertEqual(set((await self.removals()).values()), {"sent"})
+        for message_id in ids:
+            self.assertIsNone(await self.repository.lookup_message(1111, message_id))
+        self.assertEqual(self.metrics.registry.get_sample_value(
+            "auction_bot_delivery_attempts_total", {"kind": "delete", "outcome": "sent"}), 3)
+
+    async def test_bulk_delete_names_each_post_once(self):
+        ids = await self.post("first", "second", ages=[timedelta(hours=2), timedelta(hours=1)])
+        self.rest.delete_messages = AsyncMock()
+        await self.queue_removals(*ids)
+        # A failed removal put back with outbox-retry can wait next to a newer one for the same post.
+        item = (await self.repository.lookup_message(1111, ids[0]))["item_id"]
+        await self.repository._call("test_repeat", lambda: DeliveryJob.create(
+            item=item, alert=self.alert["id"], kind="delete", destination_id=1111, message_id=ids[0], payload="{}"))
+        await self.remove_due()
+        self.rest.delete_messages.assert_awaited_once_with(1111, [ids[1], ids[0]])
+        self.assertEqual([job["status"] for job in await self.rows(DeliveryJob) if job["kind"] == "delete"], ["sent"] * 3)
+
+    async def test_a_lone_recent_post_is_deleted_without_bulk(self):
+        ids = await self.post("only", ages=[timedelta(hours=1)])
+        self.rest.delete_messages, self.rest.delete_message = AsyncMock(), AsyncMock()
+        await self.queue_removals(*ids)
+        await self.remove_due()
+        self.rest.delete_messages.assert_not_awaited()
+        self.rest.delete_message.assert_awaited_once_with(1111, ids[0])
+
+    async def test_refused_bulk_delete_falls_back_to_one_post_at_a_time(self):
+        ids = await self.post("first", "second", ages=[timedelta(hours=2), timedelta(hours=1)])
+        forbidden = hikari.ForbiddenError("https://discord.test", {}, "", message="Missing Permissions", code=50013)
+        self.rest.delete_messages = AsyncMock(side_effect=bulk_error(forbidden))
+        self.rest.delete_message = AsyncMock()
+        await self.queue_removals(*ids)
+        await self.remove_due()
+        self.rest.delete_message.assert_not_awaited()
+        removals = [job for job in await self.rows(DeliveryJob) if job["kind"] == "delete"]
+        self.assertEqual({(job["status"], job["attempts"], job["last_error"]) for job in removals},
+                         {("pending", 1, "ForbiddenError")})
+        # Due again at once; this channel is not tried in bulk again for a while.
+        await self.remove_due()
+        self.rest.delete_messages.assert_awaited_once()
+        self.assertEqual(self.rest.delete_message.await_count, 2)
+        self.assertEqual(set((await self.removals()).values()), {"sent"})
+
+    async def test_failed_bulk_delete_is_retried_later(self):
+        ids = await self.post("first", "second", ages=[timedelta(hours=2), timedelta(hours=1)])
+        self.rest.delete_messages = AsyncMock(side_effect=bulk_error(RuntimeError("Discord outage")))
+        await self.queue_removals(*ids)
+        await self.remove_due()
+        removals = [job for job in await self.rows(DeliveryJob) if job["kind"] == "delete"]
+        self.assertEqual({(job["status"], job["last_error"]) for job in removals}, {("pending", "RuntimeError")})
+        self.assertEqual(await self.repository.due_deliveries(), [])
+        self.assertEqual(self.metrics.registry.get_sample_value(
+            "auction_bot_delivery_attempts_total", {"kind": "delete", "outcome": "retry"}), 2)
+
+    async def test_older_posts_go_a_few_per_round(self):
+        ids = await self.post(*(f"listing-{index}" for index in range(7)))
+        self.rest.delete_message = AsyncMock()
+        self.assertEqual(await self.queue_removals(*ids), 7)
+        await self.remove_due()
+        self.assertEqual(self.rest.delete_message.await_count, 5)
+        self.assertEqual(sorted((await self.removals()).values()), ["pending"] * 2 + ["sent"] * 5)
 
 
 if __name__ == "__main__":

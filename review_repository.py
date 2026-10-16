@@ -11,6 +11,7 @@ import json
 
 from peewee import JOIN, Case, chunked, fn
 
+from domain import discord_time, first_discord_id_at
 from models import (ActiveReviewRules, Alert, AlertItem, CandidateFeedback,
                     CandidateObservation, DeliveryJob, Filter, Item, Message, Notification,
                     ReviewRuleVersion, database, utcnow)
@@ -30,7 +31,6 @@ MAX_FEEDBACK_BATCH = 200
 POST_REMOVAL_DAYS = (7, 30, 90, None)
 POST_REMOVAL_LIMIT = 1000
 POST_REMOVAL_SCAN_LIMIT = 20000
-DISCORD_EPOCH_MS = 1420070400000
 
 
 class ReviewConflict(RuntimeError):
@@ -148,18 +148,6 @@ def _timestamp(value):
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _posted_at(message_id):
-    """When Discord created a message: its ID starts with milliseconds since 2015."""
-    return datetime.fromtimestamp(((message_id >> 22) + DISCORD_EPOCH_MS) / 1000, timezone.utc)
-
-
-def _first_message_id_since(moment):
-    """The smallest message ID Discord could have created at `moment` (naive times are UTC)."""
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return max(0, int(moment.timestamp() * 1000) - DISCORD_EPOCH_MS) << 22
 
 
 def _alert_json(alert, stats=None, active_version_id=None):
@@ -708,12 +696,12 @@ class ReviewRepositoryMixin:
                      .join(Item)
                      .where(Message.alert == alert, Message.channel_id == alert.channel_id, ~Message.deleted))
             if days is not None:
-                query = query.where(Message.message_id >= _first_message_id_since(utcnow() - timedelta(days=days)))
+                query = query.where(Message.message_id >= first_discord_id_at(utcnow() - timedelta(days=days)))
             if message_ids is not None:
                 query = query.where(Message.message_id.in_(message_ids))
             rows = list(query.order_by(Message.message_id.desc()).limit(limit).dicts())
             posts = [{
-                "message_id": row["message_id"], "posted_at": _timestamp(_posted_at(row["message_id"])),
+                "message_id": row["message_id"], "posted_at": _timestamp(discord_time(row["message_id"])),
                 "subscribed": bool(row["subscribed"]), "queued": bool(row["queued"]),
                 "listing": {"id": row["item_id"], "source": row["checker"], "title": row["title"],
                             "price": row["price"], "stock": row["stock"], "buyout_price": row["buyout_price"],

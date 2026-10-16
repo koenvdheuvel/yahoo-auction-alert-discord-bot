@@ -240,14 +240,15 @@ class Repository(ReviewRepositoryMixin):
                 return bool(count)
         return await self._call("unsubscribe", delete)
 
-    async def due_deliveries(self, limit=50, removal_limit=5):
-        """Posts and DMs first. Post removals from Filter Lab come a few at a time when nothing
-        else waits, so a long cleanup never holds up an alert."""
+    async def due_deliveries(self, limit=50, removal_limit=100):
+        """Posts and DMs first. Post removals from Filter Lab come only when nothing else waits,
+        newest post first, so the ones young enough for Discord's bulk delete come together."""
         def select():
             due = DeliveryJob.select().where(DeliveryJob.status == "pending", DeliveryJob.next_attempt_at <= utcnow())
-            ordered = (DeliveryJob.created_at, DeliveryJob.id)
-            jobs = list(due.where(DeliveryJob.kind != "delete").order_by(*ordered).limit(limit).dicts())
-            return jobs or list(due.where(DeliveryJob.kind == "delete").order_by(*ordered).limit(removal_limit).dicts())
+            jobs = list(due.where(DeliveryJob.kind != "delete").order_by(DeliveryJob.created_at, DeliveryJob.id)
+                        .limit(limit).dicts())
+            return jobs or list(due.where(DeliveryJob.kind == "delete").order_by(DeliveryJob.message_id.desc())
+                                .limit(removal_limit).dicts())
         return await self._call("due_deliveries", select)
 
     async def begin_delivery(self, job_id):
@@ -285,14 +286,16 @@ class Repository(ReviewRepositoryMixin):
                                    channel_id=job.destination_id).on_conflict_ignore().execute()
         await self._call("acknowledge_delivery", acknowledge)
 
-    async def complete_removal(self, job_id, channel_id, message_id):
+    async def complete_removals(self, jobs):
+        """Mark the posts of finished removal jobs deleted and the jobs done, in one transaction."""
         def complete():
             with database.atomic():
-                Message.update(deleted=True).where(Message.channel_id == channel_id,
-                                                   Message.message_id == message_id).execute()
+                for job in jobs:
+                    Message.update(deleted=True).where(Message.channel_id == job["destination_id"],
+                                                       Message.message_id == job["message_id"]).execute()
                 DeliveryJob.update(status="sent", completed_at=utcnow(), last_error=None).where(
-                    DeliveryJob.id == job_id, DeliveryJob.status == "pending").execute()
-        await self._call("complete_removal", complete)
+                    DeliveryJob.id.in_([job["id"] for job in jobs]), DeliveryJob.status == "pending").execute()
+        await self._call("complete_removals", complete)
 
     async def complete_delivery(self, job_id):
         await self._call("complete_delivery", lambda: DeliveryJob.update(status="sent", completed_at=utcnow(), last_error=None)
