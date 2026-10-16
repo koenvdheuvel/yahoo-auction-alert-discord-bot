@@ -12,11 +12,14 @@ import { keys } from "../../api/hooks";
 import type { AlertSummary, RuleVersion, RulesResponse } from "../../api/types";
 import { describeRuleset } from "../../lib/describe";
 import { errorMessage } from "../../lib/errors";
-import { formatCount, formatDateTime } from "../../lib/format";
+import { formatCount, formatDateTime, plural } from "../../lib/format";
 import type { Draft } from "../../lib/useDraft";
+import { usePostRemoval } from "../../lib/usePostRemoval";
 import { figures } from "../../theme";
 import { ConfirmDialog, EmptyState, LoadError } from "../common/Feedback";
 import { useNotify } from "../common/notify";
+import { PostRemovalPreview } from "../removal/PostRemovalPreview";
+import { RemovalProgress } from "../removal/RemovalProgress";
 import { RulesetSummary } from "./RulesetSummary";
 
 interface Props {
@@ -55,6 +58,31 @@ export function VersionsPanel({ alert, rules, draft, onEditRules }: Props) {
     },
   });
 
+  const [removing, setRemoving] = useState(false);
+  const removal = usePostRemoval(alert?.id ?? null, undefined, removing);
+  const closeRemoval = () => {
+    setRemoving(false);
+    removal.reset();
+  };
+  const removePosts = useMutation({
+    mutationFn: (ids: string[]) => api.removePosts(alert!.id, rules.data!.active_version!.id, ids),
+    onSuccess: (result) => {
+      closeRemoval();
+      const skipped = result.skipped ? ` ${plural(result.skipped, "post was", "posts were")} skipped because ${result.skipped === 1 ? "it" : "they"} changed meanwhile.` : "";
+      notify(`${plural(result.queued, "post")} will be removed from Discord${result.bot_running ? "" : " when the bot runs next"}.${skipped}`);
+      void client.invalidateQueries({ queryKey: keys.removalStatus(alert!.id) });
+    },
+    onError: (error) => {
+      closeRemoval();
+      if (error instanceof ApiError && error.code === "version_conflict") {
+        void client.invalidateQueries({ queryKey: keys.rules(alert!.id) });
+        notify("Other rules were published meanwhile, so nothing was removed. Check the posts again.", "warning");
+      } else {
+        notify(`Removing the posts failed: ${errorMessage(error)}`, "error");
+      }
+    },
+  });
+
   if (!alert) {
     return <EmptyState title="Choose a search to see its rule versions">Each search keeps every version of its rules that was published.</EmptyState>;
   }
@@ -79,6 +107,7 @@ export function VersionsPanel({ alert, rules, draft, onEditRules }: Props) {
 
   return (
     <Box>
+      <RemovalProgress alertId={alert.id} />
       <Box component="ol" sx={{ listStyle: "none", p: 0, m: 0, border: 1, borderColor: "divider", borderRadius: 1, bgcolor: "background.paper" }}>
         {versions.map((version) => {
           const current = version.id === active?.id;
@@ -110,6 +139,11 @@ export function VersionsPanel({ alert, rules, draft, onEditRules }: Props) {
                   {!current && (
                     <Button size="small" variant="outlined" color="inherit" onClick={() => setRestoring(version)}>Restore</Button>
                   )}
+                  {current && (
+                    <Button size="small" variant="outlined" color="inherit" onClick={() => setRemoving(true)}>
+                      Remove filtered posts
+                    </Button>
+                  )}
                 </Stack>
               </Stack>
               <Collapse in={open === version.id} unmountOnExit>
@@ -136,6 +170,16 @@ export function VersionsPanel({ alert, rules, draft, onEditRules }: Props) {
         <Typography variant="body2">
           Your draft has unpublished changes. Loading version {loading?.version} replaces them.
         </Typography>
+      </ConfirmDialog>
+      <ConfirmDialog open={removing} maxWidth="sm" title="Remove the Discord posts the published rules filter?"
+        confirm={removal.selected.length ? `Remove ${plural(removal.selected.length, "post")}` : "Remove posts"}
+        confirmDisabled={!removal.selected.length || removal.preview.isFetching}
+        busy={removePosts.isPending} onConfirm={() => removePosts.mutate(removal.selected)} onClose={closeRemoval}>
+        <Typography variant="body2" sx={{ mb: 1.5 }}>
+          Version {active?.version} decides which of the posts for “{alert.search_query}” go. Nothing is removed until you
+          confirm.
+        </Typography>
+        <PostRemovalPreview removal={removal} />
       </ConfirmDialog>
     </Box>
   );

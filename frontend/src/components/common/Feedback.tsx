@@ -38,18 +38,23 @@ interface ConfirmProps {
   children: ReactNode;
   confirm: string;
   busy?: boolean;
+  /** For example while something the confirmation depends on still loads. */
+  confirmDisabled?: boolean;
+  maxWidth?: "xs" | "sm";
   onConfirm: () => void;
   onClose: () => void;
 }
 
-export function ConfirmDialog({ open, title, children, confirm, busy = false, onConfirm, onClose }: ConfirmProps) {
+export function ConfirmDialog(props: ConfirmProps) {
+  const { open, title, children, confirm, busy = false, confirmDisabled = false, maxWidth = "xs", onConfirm, onClose } = props;
   return (
-    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth="xs" aria-labelledby="confirm-title">
+    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth={maxWidth} fullWidth={maxWidth !== "xs"}
+      aria-labelledby="confirm-title">
       <DialogTitle id="confirm-title">{title}</DialogTitle>
       <DialogContent>{children}</DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={busy} color="inherit">Cancel</Button>
-        <Button onClick={onConfirm} disabled={busy} variant="contained" autoFocus>{busy ? "Working" : confirm}</Button>
+        <Button onClick={onConfirm} disabled={busy || confirmDisabled} variant="contained" autoFocus>{busy ? "Working" : confirm}</Button>
       </DialogActions>
     </Dialog>
   );

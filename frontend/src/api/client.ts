@@ -6,6 +6,10 @@ import type {
   ImportResult,
   Label,
   LabelFilter,
+  RemovalDays,
+  RemovalPreview,
+  RemovalResult,
+  RemovalStatus,
   ReplayResult,
   RulesResponse,
   RuleVersion,
@@ -118,4 +122,18 @@ export const api = {
       body: { version_id: versionId, expected_version_id: expectedVersionId },
     }),
   importHistory: () => request<ImportResult>("/api/history/import", { method: "POST", body: {} }),
+  /** The search's posts that `ruleset`, or else the published rules, filter. Changes nothing. */
+  removalPreview: (alertId: string, days: RemovalDays, ruleset?: Ruleset, signal?: AbortSignal) =>
+    request<RemovalPreview>(`/api/alerts/${encodeURIComponent(alertId)}/posts/removal-preview`, {
+      method: "POST",
+      body: ruleset ? { days, ruleset } : { days },
+      signal,
+    }),
+  removePosts: (alertId: string, versionId: string, messageIds: string[]) =>
+    request<RemovalResult>(`/api/alerts/${encodeURIComponent(alertId)}/posts/removal`, {
+      method: "POST",
+      body: { version_id: versionId, message_ids: messageIds },
+    }),
+  removalStatus: (alertId: string, signal?: AbortSignal) =>
+    request<RemovalStatus>(`/api/alerts/${encodeURIComponent(alertId)}/posts/removal`, { signal }),
 };

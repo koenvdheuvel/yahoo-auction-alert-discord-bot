@@ -220,3 +220,63 @@ export interface ImportResult {
   incomplete: number;
   truncated: boolean;
 }
+
+/** A Discord post that the rules filter. Message IDs are text: they do not fit in a JavaScript number. */
+export interface RemovablePost {
+  message_id: string;
+  posted_at: string;
+  title: string;
+  source: string;
+  external_id: string;
+  price: number | null;
+  image_url: string | null;
+  url: string | null;
+  /** Key of the reason in RemovalPreview.reasons. */
+  reason: string;
+}
+
+export interface RemovalReason {
+  key: string;
+  message: string;
+  count: number;
+}
+
+/** How far back to look, in days; null is all posts. */
+export type RemovalDays = 7 | 30 | 90 | null;
+
+export interface RemovalPreview {
+  days: RemovalDays;
+  posts_in_range: number;
+  checked: number;
+  partial: boolean;
+  removable_total: number;
+  limit: number;
+  /** This run's posts, newest first; at most `limit`. */
+  posts: RemovablePost[];
+  reasons: RemovalReason[];
+  kept: { allowed: number; review: number; subscribed: number; incomplete: number; unchecked: number; queued: number };
+  channel_id: string;
+  guild_id: string | null;
+  active_version_id: string | null;
+  bot_running: boolean;
+}
+
+export interface RemovalResult {
+  queued: number;
+  skipped: number;
+  bot_running: boolean;
+}
+
+export interface RemovalRun {
+  queued_at: string;
+  total: number;
+  pending: number;
+  removed: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface RemovalStatus {
+  run: RemovalRun | null;
+  bot_running: boolean;
+}

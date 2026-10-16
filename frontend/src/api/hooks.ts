@@ -8,8 +8,9 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 
+import { canonical } from "../lib/ruleset";
 import { ApiError, api, type CandidateQuery } from "./client";
-import type { Candidate, CandidatePage, Label, Ruleset } from "./types";
+import type { Candidate, CandidatePage, Label, RemovalDays, Ruleset } from "./types";
 
 export const PAGE_SIZE = 48;
 
@@ -19,7 +20,31 @@ export const keys = {
   rules: (alertId: string) => ["rules", alertId] as const,
   candidates: (query: CandidateQuery) => ["candidates", query] as const,
   allCandidates: ["candidates"] as const,
+  removalStatus: (alertId: string) => ["removal-status", alertId] as const,
 };
+
+/** The search's posts that `ruleset`, or the published rules when it is undefined, filter. */
+export function useRemovalPreview(alertId: string | null, days: RemovalDays, ruleset: Ruleset | undefined, enabled: boolean) {
+  const rules = ruleset ? JSON.stringify(canonical(ruleset)) : "published";
+  return useQuery({
+    queryKey: ["removal-preview", alertId, days, rules],
+    queryFn: ({ signal }) => api.removalPreview(alertId!, days, ruleset, signal),
+    enabled: enabled && alertId !== null,
+    // Posts come and go with every check, so each opening checks again.
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+/** Progress of the search's latest post removal; checked again every few seconds while posts are waiting. */
+export function useRemovalStatus(alertId: string | null) {
+  return useQuery({
+    queryKey: keys.removalStatus(alertId ?? "none"),
+    queryFn: ({ signal }) => api.removalStatus(alertId!, signal),
+    enabled: alertId !== null,
+    refetchInterval: (query) => (query.state.data?.run?.pending ? 5000 : false),
+  });
+}
 
 export function useSession() {
   return useQuery({ queryKey: keys.session, queryFn: ({ signal }) => api.session(signal), staleTime: 60_000 });

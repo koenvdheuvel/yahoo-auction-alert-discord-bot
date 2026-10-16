@@ -5,7 +5,9 @@ import WarningAmberOutlined from "@mui/icons-material/WarningAmberOutlined";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
 import CircularProgress from "@mui/material/CircularProgress";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
@@ -14,15 +16,17 @@ import { useState } from "react";
 
 import { ApiError, api } from "../../api/client";
 import { keys, useValidation } from "../../api/hooks";
-import type { AlertSummary, Policy, RuleGroup, RulesResponse, Ruleset } from "../../api/types";
+import type { AlertSummary, Policy, RemovalResult, RuleGroup, RulesResponse, Ruleset } from "../../api/types";
 import { errorMessage } from "../../lib/errors";
-import { formatRelative } from "../../lib/format";
+import { formatRelative, plural } from "../../lib/format";
 import { useDebounced } from "../../lib/hooks";
 import { LIMITS, cannotAddTerm, fieldLocation, groupsFromSearch, newGroup } from "../../lib/ruleset";
 import type { Draft } from "../../lib/useDraft";
+import { usePostRemoval } from "../../lib/usePostRemoval";
 import type { StoredReplay } from "../Workspace";
 import { ConfirmDialog, EmptyState, LoadError } from "../common/Feedback";
 import { useNotify } from "../common/notify";
+import { PostRemovalPreview } from "../removal/PostRemovalPreview";
 import { GroupEditor } from "./GroupEditor";
 import { JsonEditor } from "./JsonEditor";
 import { RuleSettings } from "./RuleSettings";
@@ -50,21 +54,52 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay 
   const ruleset = draft.ruleset;
   const replayed = replay !== null && replay.serialized === draft.serialized;
 
+  const [removeAlso, setRemoveAlso] = useState(false);
+  const removal = usePostRemoval(alert?.id ?? null, ruleset, confirming && removeAlso);
+  const closePublish = () => {
+    setConfirming(false);
+    setRemoveAlso(false);
+    removal.reset();
+  };
+
   const publish = useMutation({
-    mutationFn: () => api.publish(alert!.id, ruleset, draft.baseVersionId),
-    onSuccess: (version) => {
+    // Removal is queued only once the rules are published. A failure there does not undo the publication.
+    mutationFn: async (removeIds: string[]) => {
+      const version = await api.publish(alert!.id, ruleset, draft.baseVersionId);
+      let removed: RemovalResult | null = null;
+      let removalError: unknown = null;
+      if (removeIds.length) {
+        try {
+          removed = await api.removePosts(alert!.id, version.id, removeIds);
+        } catch (error) {
+          removalError = error;
+        }
+      }
+      return { version, removed, removalError };
+    },
+    onSuccess: ({ version, removed, removalError }) => {
       // Show the new version at once, so the old rules do not flash back while reloading.
       client.setQueryData<RulesResponse>(keys.rules(alert!.id), (current) => current && {
         ...current, active_version: version, versions: [version, ...current.versions], versions_total: current.versions_total + 1,
       });
       draft.discard();
-      setConfirming(false);
-      notify(`Published version ${version.version}. The next check of “${alert!.search_query}” uses it.`);
+      closePublish();
+      if (removalError) {
+        notify(`Published version ${version.version}, but its posts were not queued for removal: ${errorMessage(removalError)} `
+          + "You can remove them from Versions.", "warning");
+      } else if (removed) {
+        const skipped = removed.skipped ? ` ${plural(removed.skipped, "post was", "posts were")} skipped because ${removed.skipped === 1 ? "it" : "they"} changed meanwhile.` : "";
+        notify(`Published version ${version.version}. ${plural(removed.queued, "post")} will be removed from Discord`
+          + `${removed.bot_running ? "" : " when the bot runs next"}; Versions shows the progress.${skipped}`);
+        void client.invalidateQueries({ queryKey: keys.removalStatus(alert!.id) });
+      } else {
+        notify(`Published version ${version.version}. The next check of “${alert!.search_query}” uses it.`);
+      }
       void client.invalidateQueries({ queryKey: keys.rules(alert!.id) });
       void client.invalidateQueries({ queryKey: keys.alerts });
     },
     onError: (error) => {
-      setConfirming(false);
+      closePublish();
       if (error instanceof ApiError && error.code === "version_conflict") {
         void client.invalidateQueries({ queryKey: keys.rules(alert!.id) });
         notify("Other rules were published first. Your draft is kept; see the note above it.", "warning");
@@ -208,17 +243,22 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay 
       </Box>
 
       {alert && (
-        <ConfirmDialog open={confirming} title={`Publish rules for “${alert.search_query}”?`} confirm="Publish"
-          busy={publish.isPending} onConfirm={() => publish.mutate()} onClose={() => setConfirming(false)}>
+        <ConfirmDialog open={confirming} title={`Publish rules for “${alert.search_query}”?`} maxWidth={removeAlso ? "sm" : "xs"}
+          confirm={removeAlso && removal.selected.length ? `Publish and remove ${plural(removal.selected.length, "post")}` : "Publish"}
+          confirmDisabled={removeAlso && (removal.preview.isFetching || removal.preview.isError)}
+          busy={publish.isPending} onConfirm={() => publish.mutate(removeAlso ? removal.selected : [])} onClose={closePublish}>
           <Typography variant="body2" sx={{ mb: 1.5 }}>
             They become version {nextVersion}, and the next check of this search uses them. Listings that were already
             posted are not posted again, and publishing posts nothing by itself.
           </Typography>
           {!replayed && (
-            <Typography variant="body2" color="warning.main">
+            <Typography variant="body2" color="warning.main" sx={{ mb: 1.5 }}>
               You have not replayed this draft. A replay shows which recent listings it would allow or filter.
             </Typography>
           )}
+          <FormControlLabel label="Also remove Discord posts these rules filter"
+            control={<Checkbox checked={removeAlso} onChange={(event) => setRemoveAlso(event.target.checked)} />} />
+          {removeAlso && <Box sx={{ mt: 1 }}><PostRemovalPreview removal={removal} /></Box>}
         </ConfirmDialog>
       )}
     </Box>
