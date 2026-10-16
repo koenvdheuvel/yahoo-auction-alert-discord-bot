@@ -74,7 +74,17 @@ def create_application(settings=None):
     ingestion = Ingestion(repository, metrics, settings)
     delivery = DeliveryWorker(bot, repository, metrics, settings)
     providers = {source: PROVIDERS[source](http, settings) for source in settings.enabled_sources}
-    review = ReviewServer(settings, repository, metrics)
+
+    def channel_names(channel_ids):
+        """Filter Lab shows channel names from the gateway cache instead of bare IDs."""
+        names = {}
+        for channel_id in channel_ids:
+            channel = bot.cache.get_guild_channel(int(channel_id)) or bot.cache.get_thread(int(channel_id))
+            if channel is not None and channel.name:
+                names[channel_id] = channel.name
+        return names
+
+    review = ReviewServer(settings, repository, metrics, channel_names=channel_names)
     runtime = Runtime(bot, settings, repository, http, ingestion, delivery, providers, metrics,
                       review_server=review)
     bot.services = ApplicationServices(repository, runtime, metrics, client)

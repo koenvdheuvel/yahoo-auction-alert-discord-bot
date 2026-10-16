@@ -20,6 +20,14 @@ EVALUATION_BUDGET_SECONDS = 0.25
 SOURCES = frozenset({"yahooauction", "mercari", "surugaya"})
 
 
+class RulesetError(ValueError):
+    """An invalid ruleset. `path` names the field, for example "groups.1.terms.0"."""
+
+    def __init__(self, message, path=""):
+        super().__init__(message)
+        self.path = path
+
+
 def default_ruleset():
     """No active presets: existing filters remain the default live policy."""
     return {"version": 1, "normalization": validate_options(), "include_legacy": True,
@@ -45,79 +53,107 @@ def _text(value, name, maximum):
     return value
 
 
+def _term(term, normalized, normalization):
+    _object(term, {"method", "value"}, "term")
+    method = term.get("method", "contains")
+    if not isinstance(method, str) or method not in {"contains", "exact", "regex"}:
+        raise ValueError("Unknown term method")
+    value = _text(term.get("value"), "term.value", 256 if method == "regex" else 1024)
+    if method == "regex":
+        for repetition in re.finditer(r"(?<!\\)\{(\d+)(?:,(\d*))?\}", value):
+            if any(int(bound) > 10_000 for bound in repetition.groups() if bound):
+                raise ValueError("Regular expression repetitions must not exceed 10000")
+        try:
+            re.compile(value)
+            regex.compile(value, regex.VERSION0)
+        except (re.error, regex.error, OverflowError):
+            raise ValueError("Invalid regular expression") from None
+    elif normalized:
+        if not normalize_title(value, normalization):
+            raise ValueError("Normalized term must not be empty")
+    return {"method": method, "value": value}
+
+
+def _group(group, path, identifiers, normalization):
+    _object(group, {"id", "label", "policy", "match", "normalize", "terms"}, "group")
+    identifier = _text(group.get("id"), "group.id", 64)
+    if re.fullmatch(r"[A-Za-z0-9_-]+", identifier) is None or identifier in identifiers:
+        raise ValueError("Group identifiers must be unique and contain letters, digits, underscores or hyphens")
+    identifiers.add(identifier)
+    label = _text(group.get("label", identifier), "group.label", 100)
+    policy, combine = group.get("policy"), group.get("match", "any")
+    if not isinstance(policy, str) or policy not in {"require", "exclude", "review"}:
+        raise ValueError("Unknown group policy")
+    if not isinstance(combine, str) or combine not in {"any", "all"}:
+        raise ValueError("Group match must be any or all")
+    normalized = _boolean(group.get("normalize", True), "group.normalize")
+    terms = group.get("terms")
+    if not isinstance(terms, list) or not 1 <= len(terms) <= MAX_TERMS_PER_GROUP:
+        raise ValueError(f"Each group needs 1 to {MAX_TERMS_PER_GROUP} terms")
+    canonical_terms = []
+    for index, term in enumerate(terms):
+        try:
+            canonical_terms.append(_term(term, normalized, normalization))
+        except ValueError as error:
+            raise RulesetError(f"Term {index + 1}: {error}", f"{path}.terms.{index}") from None
+    return {"id": identifier, "label": label, "policy": policy, "match": combine,
+            "normalize": normalized, "terms": canonical_terms}
+
+
 def validate_ruleset(data):
-    """Validate every supplied field and return an independent canonical object."""
+    """Validate every supplied field and return an independent canonical object.
+
+    Errors are RulesetError (a ValueError) with the path of the field at fault.
+    """
     result = default_ruleset()
     _object(data, result, "ruleset")
     version = data.get("version", 1)
     if type(version) is not int or version != 1:
-        raise ValueError("Unsupported ruleset version")
+        raise RulesetError("Unsupported ruleset version", "version")
     normalization = data.get("normalization", {})
-    _object(normalization, result["normalization"], "normalization")
-    result["normalization"] = validate_options(normalization)
-    result["include_legacy"] = _boolean(data.get("include_legacy", True), "include_legacy")
+    try:
+        _object(normalization, result["normalization"], "normalization")
+        result["normalization"] = validate_options(normalization)
+    except ValueError as error:
+        raise RulesetError(str(error), "normalization") from None
+    try:
+        result["include_legacy"] = _boolean(data.get("include_legacy", True), "include_legacy")
+    except ValueError as error:
+        raise RulesetError(str(error), "include_legacy") from None
     groups = data.get("groups", [])
     if not isinstance(groups, list) or len(groups) > MAX_GROUPS:
-        raise ValueError(f"groups must be a list with at most {MAX_GROUPS} groups")
-    identifiers, total_terms, regex_terms = set(), 0, 0
-    for group in groups:
-        _object(group, {"id", "label", "policy", "match", "normalize", "terms"}, "group")
-        identifier = _text(group.get("id"), "group.id", 64)
-        if re.fullmatch(r"[A-Za-z0-9_-]+", identifier) is None or identifier in identifiers:
-            raise ValueError("Group identifiers must be unique and contain letters, digits, underscores or hyphens")
-        identifiers.add(identifier)
-        policy, combine = group.get("policy"), group.get("match", "any")
-        if not isinstance(policy, str) or policy not in {"require", "exclude", "review"}:
-            raise ValueError("Unknown group policy")
-        if not isinstance(combine, str) or combine not in {"any", "all"}:
-            raise ValueError("Group match must be any or all")
-        normalized = _boolean(group.get("normalize", True), "group.normalize")
-        terms = group.get("terms")
-        if not isinstance(terms, list) or not 1 <= len(terms) <= MAX_TERMS_PER_GROUP:
-            raise ValueError(f"Each group needs 1 to {MAX_TERMS_PER_GROUP} terms")
-        canonical_terms = []
-        for term in terms:
-            _object(term, {"method", "value"}, "term")
-            method = term.get("method", "contains")
-            if not isinstance(method, str) or method not in {"contains", "exact", "regex"}:
-                raise ValueError("Unknown term method")
-            value = _text(term.get("value"), "term.value", 256 if method == "regex" else 1024)
-            if method == "regex":
-                regex_terms += 1
-                for repetition in re.finditer(r"(?<!\\)\{(\d+)(?:,(\d*))?\}", value):
-                    if any(int(bound) > 10_000 for bound in repetition.groups() if bound):
-                        raise ValueError("Regular expression repetitions must not exceed 10000")
-                try:
-                    re.compile(value)
-                    regex.compile(value, regex.VERSION0)
-                except (re.error, regex.error, OverflowError):
-                    raise ValueError("Invalid regular expression") from None
-            elif normalized:
-                if not normalize_title(value, result["normalization"]):
-                    raise ValueError("Normalized term must not be empty")
-            canonical_terms.append({"method": method, "value": value})
-        total_terms += len(terms)
-        result["groups"].append({"id": identifier,
-            "label": _text(group.get("label", identifier), "group.label", 100),
-            "policy": policy, "match": combine, "normalize": normalized, "terms": canonical_terms})
-    if total_terms > MAX_TERMS or regex_terms > MAX_REGEX_TERMS:
-        raise ValueError(f"Rulesets allow at most {MAX_TERMS} terms and {MAX_REGEX_TERMS} regex terms")
+        raise RulesetError(f"groups must be a list with at most {MAX_GROUPS} groups", "groups")
+    identifiers = set()
+    for index, group in enumerate(groups):
+        path = f"groups.{index}"
+        try:
+            result["groups"].append(_group(group, path, identifiers, result["normalization"]))
+        except RulesetError as error:
+            raise RulesetError(f"Group {index + 1}, {error}", error.path) from None
+        except ValueError as error:
+            raise RulesetError(f"Group {index + 1}: {error}", path) from None
+    terms = [term for group in result["groups"] for term in group["terms"]]
+    if len(terms) > MAX_TERMS or sum(term["method"] == "regex" for term in terms) > MAX_REGEX_TERMS:
+        raise RulesetError(f"Rulesets allow at most {MAX_TERMS} terms and {MAX_REGEX_TERMS} regex terms", "groups")
     price = data.get("price", {})
-    _object(price, {"min", "max"}, "price")
+    try:
+        _object(price, {"min", "max"}, "price")
+    except ValueError as error:
+        raise RulesetError(str(error), "price") from None
     for bound in ("min", "max"):
         value = price.get(bound)
         if value is not None and (type(value) is not int or not 0 <= value <= 2 ** 63 - 1):
-            raise ValueError(f"price.{bound} must be a nonnegative integer or null")
+            raise RulesetError(f"price.{bound} must be a nonnegative integer or null", f"price.{bound}")
         result["price"][bound] = value
     minimum, maximum = result["price"]["min"], result["price"]["max"]
     if minimum is not None and maximum is not None and minimum > maximum:
-        raise ValueError("Minimum price must not exceed maximum price")
+        raise RulesetError("Minimum price must not exceed maximum price", "price")
     sources = data.get("sources", [])
     if not isinstance(sources, list) or len(sources) > len(SOURCES) or any(
             not isinstance(source, str) or source not in SOURCES for source in sources):
-        raise ValueError("sources must contain supported marketplace names")
+        raise RulesetError("sources must contain supported marketplace names", "sources")
     if len(sources) != len(set(sources)):
-        raise ValueError("sources must not contain duplicates")
+        raise RulesetError("sources must not contain duplicates", "sources")
     result["sources"] = sorted(sources)
     return result
 

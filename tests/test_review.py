@@ -2,6 +2,7 @@
 from dataclasses import replace
 import asyncio
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -16,11 +17,14 @@ from models import Item, configure_database, create_tables, database
 from observability import Metrics
 from providers import YahooAuctionsAdapter
 from repositories import Repository
-from review import ReviewServer, review_key
+from review import NONCE_PLACEHOLDER, ReviewServer, review_key
 from storechecker import Ingestion
 
 
 TOKEN = "filter-lab-test-access-key-123456789"
+INDEX = (f'<!doctype html><html><head><meta property="csp-nonce" nonce="{NONCE_PLACEHOLDER}">'
+         '<title>Filter Lab</title><script type="module" crossorigin src="/assets/index-abc123.js"></script>'
+         '</head><body><div id="root"></div></body></html>')
 
 
 def product_rules():
@@ -60,7 +64,13 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         await self.repository.register_alert(9007199254740993, "BABYMETAL posters", guild_id=9007199254740995)
         self.alert = (await self.repository.list_alerts())[0]
         settings = replace(Settings(), database_path=self.path, review_token=TOKEN)
-        self.review = ReviewServer(settings, self.repository, self.metrics)
+        # A stand-in for the Vite build, so these tests do not depend on Node.
+        self.assets = Path(self.directory.name) / "dist"
+        (self.assets / "assets").mkdir(parents=True)
+        (self.assets / "index.html").write_text(INDEX, encoding="utf-8")
+        (self.assets / "assets" / "index-abc123.js").write_text("export {};\n")
+        (self.assets / "assets" / "index-abc123.py").write_text("print()\n")
+        self.review = ReviewServer(settings, self.repository, self.metrics, assets=self.assets)
         self.client = TestClient(TestServer(self.review.application(TOKEN)), cookie_jar=CookieJar(unsafe=True))
         await self.client.start_server()
         self.origin = str(self.client.make_url("/")).rstrip("/")
@@ -261,9 +271,129 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("Filter Lab", await response.text())
         self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
-        self.assertEqual((await self.client.get("/assets/app.js")).status, 200)
+        self.assertEqual((await self.client.get("/assets/index-abc123.js")).status, 200)
         self.assertEqual((await self.client.get("/assets/not-a-file")).status, 404)
         self.assertEqual((await self.client.get("/api/candidates")).status, 401)
+
+    async def test_each_page_view_gets_its_own_style_nonce_and_hashed_assets_are_cached(self):
+        pages = [await self.client.get("/") for _ in range(2)]
+        nonces = []
+        for page in pages:
+            policy = page.headers["Content-Security-Policy"]
+            nonce = re.search(r"style-src 'self' 'nonce-([A-Za-z0-9_-]+)'", policy).group(1)
+            html = await page.text()
+            self.assertIn(f'nonce="{nonce}"', html)
+            self.assertNotIn(NONCE_PLACEHOLDER, html)
+            self.assertIn("script-src 'self';", policy)
+            self.assertEqual(page.headers["Cache-Control"], "no-store")
+            nonces.append(nonce)
+        self.assertNotEqual(*nonces)
+        asset = await self.client.get("/assets/index-abc123.js")
+        self.assertEqual((asset.status, asset.headers["Content-Type"]), (200, "text/javascript"))
+        self.assertEqual(asset.headers["Cache-Control"], "public, max-age=31536000, immutable")
+        self.assertEqual(asset.headers["X-Content-Type-Options"], "nosniff")
+        self.assertNotIn("nonce", asset.headers["Content-Security-Policy"])
+        for path in ("/assets/index-abc123.py", "/assets/.index-abc123.js", "/assets/%2e%2e%2findex.html",
+                     "/assets/..%2Findex.html", "/assets/missing.js", "/index.html"):
+            with self.subTest(path=path):
+                self.assertEqual((await self.client.get(path)).status, 404)
+
+    async def test_missing_build_returns_a_clear_error_instead_of_a_blank_page(self):
+        self.review.assets = Path(self.directory.name) / "not-built"
+        response = await self.client.get("/")
+        self.assertEqual(response.status, 503)
+        self.assertIn("npm run build", await response.text())
+
+    async def test_session_reports_time_left_and_api_errors_use_specific_codes(self):
+        self.assertEqual(await (await self.client.get("/api/session")).json(), {"authenticated": False})
+        self.assertEqual((await (await self.client.get("/api/alerts")).json())["error"], "unauthorized")
+        await self.login()
+        session = await (await self.client.get("/api/session")).json()
+        self.assertTrue(session["authenticated"])
+        self.assertGreater(session["expires_in"], 11 * 3600)
+        self.assertEqual(session["replay_limit"], 500)
+        response = await self.client.get("/api/nothing-here")
+        self.assertEqual((response.status, (await response.json())["error"]), (404, "not_found"))
+        for path, data in (("/api/preview", {"title": "x", "source": ["not", "text"]}),
+                           ("/api/candidates/1/feedback", {"label": {"not": "text"}}),
+                           ("/api/candidates/feedback", {"ids": ["1"], "label": ["bundle"]})):
+            with self.subTest(path=path):
+                response = await self.post(path, data)
+                self.assertEqual((response.status, (await response.json())["error"]), (400, "invalid_request"))
+
+    async def test_validate_returns_the_canonical_ruleset_or_the_field_at_fault(self):
+        await self.login()
+        response = await self.post("/api/rules/validate", {"ruleset": product_rules()})
+        self.assertEqual(response.status, 200)
+        self.assertEqual([group["id"] for group in (await response.json())["ruleset"]["groups"]],
+                         ["subject", "product", "exclude"])
+        broken = product_rules()
+        broken["groups"][1]["terms"].append({"method": "regex", "value": "("})
+        response = await self.post("/api/rules/validate", {"ruleset": broken})
+        body = await response.json()
+        self.assertEqual((response.status, body["error"], body["field"]), (400, "invalid_request", "groups.1.terms.2"))
+        self.assertEqual(body["message"], "Group 2, Term 3: Invalid regular expression")
+        response = await self.post("/api/rules/validate", {"ruleset": {**default_ruleset(),
+                                                                       "price": {"min": 5, "max": 1}}})
+        self.assertEqual((await response.json())["field"], "price")
+        self.assertEqual((await self.post("/api/rules/validate", {})).status, 400)
+
+    async def test_candidate_pages_facets_and_bulk_labels_over_http(self):
+        await self.login()
+        await self.seed()
+        params = {"alert_id": self.alert["id"], "limit": "3", "latest": "1", "facets": "1"}
+        page = await (await self.client.get("/api/candidates", params=params)).json()
+        self.assertEqual((len(page["items"]), page["total"], page["has_more"]), (3, 4, True))
+        self.assertEqual(page["facets"]["verdict"], {"accepted": 4, "filtered": 0, "review": 0})
+        rest = await (await self.client.get("/api/candidates", params={**params, "cursor": page["next_cursor"]})).json()
+        self.assertEqual((len(rest["items"]), rest["has_more"]), (1, False))
+        ids = [row["id"] for row in page["items"]]
+        response = await self.client.post("/api/candidates/feedback", json={"ids": ids, "label": "bundle"})
+        self.assertEqual(response.status, 403)
+        response = await self.post("/api/candidates/feedback", {"ids": ids + ["999999"], "label": "bundle"})
+        body = await response.json()
+        self.assertEqual(([row["id"] for row in body["items"]], body["missing"]), (ids, ["999999"]))
+        self.assertEqual({row["feedback"] for row in body["items"]}, {"bundle"})
+        for bad in ({"limit": "0"}, {"limit": "abc"}, {"latest": "maybe"}, {"verdict": "nope"}, {"cursor": "bad"},
+                    {"source": "ebay"}, {"feedback": "great"}, {"search": "x" * 257}):
+            with self.subTest(params=bad):
+                self.assertEqual((await self.client.get("/api/candidates", params=bad)).status, 400)
+
+    async def test_alerts_include_counts_and_channel_names_when_the_bot_cache_has_them(self):
+        await self.login()
+        await self.seed()
+        self.review.channel_names = lambda ids: {channel_id: "posters" for channel_id in ids}
+        body = await (await self.client.get("/api/alerts")).json()
+        alert = body["alerts"][0]
+        self.assertEqual((alert["channel_name"], alert["listing_count"], alert["accepted_count"]), ("posters", 4, 4))
+        self.assertEqual(body["totals"], {"archived_count": 4, "unassigned_count": 0})
+
+        def unavailable(ids):
+            raise RuntimeError("cache unavailable")
+        self.review.channel_names = unavailable
+        response = await self.client.get("/api/alerts")
+        self.assertEqual(response.status, 200)
+        self.assertIsNone((await response.json())["alerts"][0]["channel_name"])
+
+    async def test_replay_checks_labeled_listings_outside_the_recent_sample(self):
+        await self.login()
+        saved = await self.seed()
+        labels = {"old-0": "relevant", "old-1": "accessory"}
+        for candidate in saved["items"]:
+            if candidate["external_id"] in labels:
+                await self.post(f'/api/candidates/{candidate["id"]}/feedback', {"label": labels[candidate["external_id"]]})
+        response = await self.post("/api/replay", {"alert_id": self.alert["id"], "ruleset": product_rules(), "limit": 1})
+        replay = await response.json()
+        summary = replay["summary"]
+        self.assertEqual((summary["recent"], summary["labeled_extra"], summary["available"], summary["total"]),
+                         (1, 2, 4, 3))
+        self.assertTrue(summary["truncated"])
+        self.assertFalse(summary["budget_exceeded"])
+        self.assertEqual((summary["labeled"], summary["relevant_allowed"], summary["unwanted_blocked"]), (2, 1, 1))
+        candidate = replay["items"][0]["candidate"]
+        self.assertEqual(candidate["external_id"], "old-3")
+        self.assertNotIn("payload", candidate)
+        self.assertEqual(candidate["price"], 5000)
 
     async def test_access_key_is_persisted_privately_and_reused(self):
         settings = replace(Settings(), database_path=self.path)

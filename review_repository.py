@@ -3,22 +3,28 @@
 All methods run through the repository's existing dedicated SQLite executor.
 History is independent of live listing/change baselines and delivery jobs.
 """
+import base64
+import binascii
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 
-from peewee import JOIN, fn
+from peewee import JOIN, Case, fn
 
 from models import (ActiveReviewRules, Alert, AlertItem, CandidateFeedback,
-                    CandidateObservation, DeliveryJob, Item, ReviewRuleVersion,
+                    CandidateObservation, DeliveryJob, Filter, Item, ReviewRuleVersion,
                     database, utcnow)
 
 
 FEEDBACK_LABELS = frozenset({"relevant", "wrong_product", "accessory", "bundle", "unsure"})
+# Labels that say whether a listing belongs in the alert; "unsure" says neither.
+JUDGED_LABELS = FEEDBACK_LABELS - {"unsure"}
+VERDICTS = ("accepted", "filtered", "review")
 ORIGINS = frozenset({"live", "delivery_import", "item_import"})
 MAX_JSON_BYTES = 128 * 1024
 MAX_TITLE_LENGTH = 10000
 MAX_VERSIONS_RETURNED = 30
+MAX_FEEDBACK_BATCH = 200
 
 
 class ReviewConflict(RuntimeError):
@@ -49,6 +55,20 @@ def _bounded_integer(value, name, minimum, maximum):
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
         raise ReviewValidation(f"{name} must be between {minimum} and {maximum}")
     return value
+
+
+def _feedback_label(label):
+    if label is not None and (not isinstance(label, str) or label not in FEEDBACK_LABELS):
+        raise ReviewValidation("Unknown feedback label")
+    return label
+
+
+def _counts(query, column, keys):
+    """Row counts per value of column, with zero for values that have no rows."""
+    counts = dict.fromkeys(keys, 0)
+    for value, count in query.select(column, fn.COUNT(CandidateObservation.id)).group_by(column).tuples():
+        counts["unlabeled" if value is None else value] = count
+    return counts
 
 
 def _json_object(value, name, max_bytes=MAX_JSON_BYTES):
@@ -124,12 +144,12 @@ def _timestamp(value):
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _alert_json(alert, archived_count=None, active_version_id=None):
+def _alert_json(alert, stats=None, active_version_id=None):
     result = {"id": str(alert.id), "channel_id": str(alert.channel_id),
               "guild_id": str(alert.guild_id) if alert.guild_id is not None else None,
               "search_query": alert.search_query}
-    if archived_count is not None:
-        result["archived_count"] = archived_count
+    if stats is not None:
+        result.update(stats)
         result["active_version_id"] = str(active_version_id) if active_version_id is not None else None
     return result
 
@@ -143,6 +163,41 @@ def _version_json(version):
             "search_query": version.search_query, "ruleset": json.loads(version.ruleset),
             "restored_from_version_id": str(version.restored_from_id) if version.restored_from_id else None,
             "created_at": _timestamp(version.created_at)}
+
+
+def _encode_cursor(row):
+    """An opaque position after this row in newest-first order."""
+    text = f'{_timestamp(row["observed_at"])}|{row["id"]}'
+    return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+
+def _decode_cursor(cursor):
+    if not isinstance(cursor, str) or not 1 <= len(cursor) <= 128:
+        raise ReviewValidation("The page cursor is invalid; reload the list")
+    try:
+        text = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        observed, identifier = text.split("|")
+        observed_at = datetime.fromisoformat(observed.replace("Z", "+00:00"))
+        if observed_at.tzinfo is None:
+            raise ValueError("A cursor time includes its time zone")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        raise ReviewValidation("The page cursor is invalid; reload the list") from None
+    return observed_at.astimezone(timezone.utc).replace(tzinfo=None), _identifier(identifier, "cursor")
+
+
+def _latest_condition(alert=None):
+    """Keep the newest row of each listing per alert; older rows hold decisions it no longer gets.
+
+    Rows without an alert or a listing ID cannot be matched to later sightings, so they count
+    as their own latest row.
+    """
+    newest = CandidateObservation.alias()
+    latest = newest.select(fn.MAX(newest.id)).where(newest.alert.is_null(False), newest.external_id != "")
+    if alert is not None:
+        latest = latest.where(newest.alert == alert)
+    latest = latest.group_by(newest.alert, newest.source, newest.external_id)
+    return (CandidateObservation.id.in_(latest) | CandidateObservation.alert.is_null()
+            | (CandidateObservation.external_id == ""))
 
 
 def _candidate_json(row):
@@ -159,6 +214,7 @@ def _candidate_json(row):
             "ruleset_version_id": str(row["ruleset_version"]) if row["ruleset_version"] is not None else None,
             "observation_kind": row["observation_kind"], "origin": row["origin"],
             "incomplete": bool(row["incomplete"]), "observed_at": _timestamp(row["observed_at"]),
+            "last_seen_at": _timestamp(row.get("last_seen_at")),
             "feedback": row.get("feedback"), "feedback_updated_at": _timestamp(row.get("feedback_updated_at"))}
 
 
@@ -190,14 +246,39 @@ class ReviewRepositoryMixin:
         return version
 
     async def review_alerts(self):
+        """Alerts with counts over each listing's latest decision, plus archive totals."""
         def select():
-            query = (Alert.select(Alert, fn.COUNT(CandidateObservation.id).alias("archived_count"),
-                                  ActiveReviewRules.version.alias("active_version_id"))
-                     .join(CandidateObservation, JOIN.LEFT_OUTER, on=CandidateObservation.alert == Alert.id)
-                     .switch(Alert).join(ActiveReviewRules, JOIN.LEFT_OUTER, on=ActiveReviewRules.alert == Alert.id)
-                     .group_by(Alert).order_by(Alert.channel_id, Alert.id))
-            return [_alert_json(alert, alert.archived_count, alert.active_version_id) for alert in query.objects()]
+            archived = dict(CandidateObservation.select(CandidateObservation.alert, fn.COUNT(CandidateObservation.id))
+                            .group_by(CandidateObservation.alert).tuples())
+            counts = [fn.SUM(Case(None, [(CandidateObservation.verdict == verdict, 1)], 0)) for verdict in VERDICTS]
+            latest = (CandidateObservation
+                      .select(CandidateObservation.alert, fn.COUNT(CandidateObservation.id), *counts,
+                              fn.COUNT(CandidateFeedback.candidate), fn.MAX(CandidateObservation.last_seen_at))
+                      .join(CandidateFeedback, JOIN.LEFT_OUTER, on=CandidateFeedback.candidate == CandidateObservation.id)
+                      .where(CandidateObservation.alert.is_null(False), _latest_condition())
+                      .group_by(CandidateObservation.alert).tuples())
+            stats = {row[0]: row[1:] for row in latest}
+            active = dict(ActiveReviewRules.select(ActiveReviewRules.alert, ActiveReviewRules.version).tuples())
+            alerts = []
+            for alert in Alert.select().order_by(Alert.channel_id, Alert.id):
+                listings, accepted, filtered, review, labeled, last_seen = stats.get(alert.id, (0, 0, 0, 0, 0, None))
+                alerts.append(_alert_json(alert, {
+                    "archived_count": archived.get(alert.id, 0), "listing_count": listings,
+                    "accepted_count": accepted, "filtered_count": filtered, "review_count": review,
+                    "labeled_count": labeled, "last_seen_at": _timestamp(last_seen),
+                }, active.get(alert.id)))
+            return {"alerts": alerts, "totals": {"archived_count": sum(archived.values()),
+                                                 "unassigned_count": archived.get(None, 0)}}
         return await self._call("review_alerts", select)
+
+    async def review_filters(self, alert_id):
+        """Every Discord filter on the alert, including disabled ones, for display."""
+        def select():
+            alert = self._review_alert(alert_id)
+            return [{"id": row.id, "method": row.method, "policy": row.type, "value": row.value,
+                     "enabled": row.enabled, "matches": row.matches}
+                    for row in Filter.select().where(Filter.alert == alert).order_by(Filter.id)]
+        return await self._call("review_filters", select)
 
     async def get_review_rules(self, alert_id):
         def select():
@@ -263,6 +344,24 @@ class ReviewRepositoryMixin:
                     # An archived version also identifies the previous alert
                     # generation when SQLite has reused an identical live ID.
                     alert = None
+            now = observed_at or utcnow()
+            previous = None
+            if origin == "live" and alert is not None and external_id:
+                previous = (CandidateObservation
+                            .select(CandidateObservation.id, CandidateObservation.decision,
+                                    CandidateObservation.observation_kind, CandidateObservation.origin)
+                            .where(CandidateObservation.alert == alert, CandidateObservation.source == source,
+                                   CandidateObservation.external_id == external_id)
+                            .order_by(CandidateObservation.id.desc()).first())
+                if (previous is not None and previous.origin == "live" and previous.decision == encoded_decision
+                        and previous.observation_kind == observation_kind):
+                    # Each poll sees most listings again. The same decision refreshes the
+                    # latest facts on the existing row instead of archiving another copy.
+                    CandidateObservation.update(
+                        guild_id=guild, title=title[:MAX_TITLE_LENGTH], payload=encoded_payload,
+                        ruleset_version=version_id, incomplete=incomplete, last_seen_at=now,
+                    ).where(CandidateObservation.id == previous.id).execute()
+                    return str(previous.id)
             row = CandidateObservation.create(
                 alert=alert, alert_snapshot_id=snapshot_id, channel_id=channel, guild_id=guild,
                 search_query=query, source=source, external_id=external_id,
@@ -270,8 +369,13 @@ class ReviewRepositoryMixin:
                 payload=encoded_payload, decision=encoded_decision, verdict=verdict,
                 normalization_version=normalization_version, ruleset_version=version_id,
                 observation_kind=observation_kind, origin=origin, incomplete=incomplete,
-                observed_at=observed_at or utcnow(), import_key=import_key,
+                observed_at=now, last_seen_at=now, import_key=import_key,
             )
+            if previous is not None:
+                # A label describes the listing, so it stays with the listing when its decision changes.
+                label = CandidateFeedback.get_or_none(CandidateFeedback.candidate == previous.id)
+                if label is not None:
+                    CandidateFeedback.create(candidate=row.id, label=label.label, updated_at=label.updated_at)
             return str(row.id)
 
     async def archive_candidate(self, alert_data, listing_payload, decision_payload,
@@ -279,16 +383,20 @@ class ReviewRepositoryMixin:
         return await self._call("review_archive", self._archive_candidate_sync,
                                 alert_data, listing_payload, decision_payload, ruleset_version_id, origin)
 
-    def _review_candidates_query(self, alert_id=None, search="", source="", verdict="", feedback=""):
+    def _review_candidates_query(self, alert_id=None, search="", source="", verdict="", feedback="",
+                                 latest=False):
         query = (CandidateObservation.select(CandidateObservation, CandidateFeedback.label.alias("feedback"),
                                              CandidateFeedback.updated_at.alias("feedback_updated_at"))
                  .join(CandidateFeedback, JOIN.LEFT_OUTER,
                        on=CandidateFeedback.candidate == CandidateObservation.id))
+        alert = None
         if alert_id is not None:
             alert = self._review_alert(alert_id)
             query = query.where(CandidateObservation.alert == alert,
                                 CandidateObservation.channel_id == alert.channel_id,
                                 CandidateObservation.search_query == alert.search_query)
+        if latest:
+            query = query.where(_latest_condition(alert))
         if not isinstance(search, str) or len(search) > 256:
             raise ReviewValidation("search must contain at most 256 characters")
         if search:
@@ -315,39 +423,99 @@ class ReviewRepositoryMixin:
                 raise ReviewValidation("Unknown feedback label")
         return query
 
-    async def list_candidates(self, alert_id=None, search="", source="", verdict="", feedback="", limit=50, offset=0):
+    async def list_candidates(self, alert_id=None, search="", source="", verdict="", feedback="", limit=50,
+                              offset=0, cursor=None, latest=False, facets=False):
+        """Newest first. A cursor continues after the last row of the previous page, so labeling
+        rows or new polls between pages neither skip nor repeat rows; offset remains available."""
         _bounded_integer(limit, "limit", 1, 500)
         _bounded_integer(offset, "offset", 0, 10000000)
+        position = _decode_cursor(cursor) if cursor is not None else None
+
         def select():
-            query = self._review_candidates_query(alert_id, search, source, verdict, feedback)
-            total = query.count()
-            items = [_candidate_json(row) for row in query.order_by(
-                CandidateObservation.observed_at.desc(), CandidateObservation.id.desc()).limit(limit).offset(offset).dicts()]
-            return {"items": items, "total": total, "limit": limit, "offset": offset,
-                    "has_more": offset + len(items) < total,
-                    "next_offset": offset + len(items) if offset + len(items) < total else None}
+            def scoped(**changes):
+                filters = {"search": search, "source": source, "verdict": verdict, "feedback": feedback}
+                return self._review_candidates_query(alert_id, latest=latest, **{**filters, **changes})
+
+            query = scoped()
+            page = query.order_by(CandidateObservation.observed_at.desc(), CandidateObservation.id.desc())
+            if position is not None:
+                observed, identifier = position
+                page = page.where((CandidateObservation.observed_at < observed) | (
+                    (CandidateObservation.observed_at == observed) & (CandidateObservation.id < identifier)))
+            else:
+                page = page.offset(offset)
+            rows = list(page.limit(limit + 1).dicts())
+            more = len(rows) > limit
+            items = [_candidate_json(row) for row in rows[:limit]]
+            result = {"items": items, "total": query.count(), "limit": limit, "offset": offset,
+                      "has_more": more, "next_offset": offset + len(items) if more and position is None else None,
+                      "next_cursor": _encode_cursor(rows[limit - 1]) if more else None}
+            if facets:
+                # Each facet counts what selecting one of its values would show.
+                result["facets"] = {
+                    "verdict": _counts(scoped(verdict=""), CandidateObservation.verdict, VERDICTS),
+                    "feedback": _counts(scoped(feedback=""), CandidateFeedback.label,
+                                        ("unlabeled", *sorted(FEEDBACK_LABELS)))}
+            return result
         return await self._call("review_candidates", select)
 
-    async def review_candidates(self, alert_id, limit=500, offset=0):
-        return await self.list_candidates(alert_id=alert_id, limit=limit, offset=offset)
+    async def replay_candidates(self, alert_id, limit=500, labeled_limit=1000):
+        """The latest decision of the most recently seen listings, then labeled listings beyond them."""
+        _bounded_integer(limit, "limit", 1, 500)
+        _bounded_integer(labeled_limit, "labeled_limit", 0, 5000)
+
+        def select():
+            query = self._review_candidates_query(alert_id, latest=True)
+            ordered = query.order_by(CandidateObservation.last_seen_at.desc(), CandidateObservation.id.desc())
+            recent = list(ordered.limit(limit).dicts())
+            seen = {row["id"] for row in recent}
+            extra = []
+            if labeled_limit:
+                labeled = ordered.where(CandidateFeedback.label.in_(JUDGED_LABELS)).limit(labeled_limit + len(seen))
+                extra = [row for row in labeled.dicts() if row["id"] not in seen][:labeled_limit]
+            return {"items": [_candidate_json(row) for row in recent + extra], "available": query.count(),
+                    "recent": len(recent), "labeled_extra": len(extra)}
+        return await self._call("review_replay_candidates", select)
+
+    def _write_feedback(self, identifiers, label):
+        """Set or clear labels on the candidates that still exist and return their IDs."""
+        existing = [row.id for row in CandidateObservation.select(CandidateObservation.id)
+                    .where(CandidateObservation.id.in_(identifiers))]
+        if existing and label is None:
+            CandidateFeedback.delete().where(CandidateFeedback.candidate.in_(existing)).execute()
+        elif existing:
+            now = utcnow()
+            CandidateFeedback.insert_many([{"candidate": identifier, "label": label, "updated_at": now}
+                                           for identifier in existing]).on_conflict(
+                conflict_target=[CandidateFeedback.candidate],
+                update={CandidateFeedback.label: label, CandidateFeedback.updated_at: now}).execute()
+        return existing
 
     async def set_candidate_feedback(self, candidate_id, label):
         identifier = _identifier(candidate_id, "candidate_id")
-        if label is not None and (not isinstance(label, str) or label not in FEEDBACK_LABELS):
-            raise ReviewValidation("Unknown feedback label")
+        _feedback_label(label)
         def update():
             with database.atomic():
-                if not CandidateObservation.select().where(CandidateObservation.id == identifier).exists():
+                if not self._write_feedback([identifier], label):
                     raise ReviewNotFound("Candidate no longer exists")
-                if label is None:
-                    CandidateFeedback.delete().where(CandidateFeedback.candidate == identifier).execute()
-                else:
-                    CandidateFeedback.insert(candidate=identifier, label=label, updated_at=utcnow()).on_conflict(
-                        conflict_target=[CandidateFeedback.candidate],
-                        update={CandidateFeedback.label: label, CandidateFeedback.updated_at: utcnow()}).execute()
                 row = self._review_candidates_query().where(CandidateObservation.id == identifier).dicts().get()
                 return _candidate_json(row)
         return await self._call("review_feedback", update)
+
+    async def set_candidates_feedback(self, candidate_ids, label):
+        """Label several candidates at once. Candidates removed by retention are reported, not fatal."""
+        if not isinstance(candidate_ids, list) or not 1 <= len(candidate_ids) <= MAX_FEEDBACK_BATCH:
+            raise ReviewValidation(f"Select between 1 and {MAX_FEEDBACK_BATCH} listings")
+        identifiers = list(dict.fromkeys(_identifier(value, "candidate_id") for value in candidate_ids))
+        _feedback_label(label)
+        def update():
+            with database.atomic():
+                existing = self._write_feedback(identifiers, label)
+                rows = self._review_candidates_query().where(CandidateObservation.id.in_(existing)).dicts()
+                items = {row["id"]: _candidate_json(row) for row in rows} if existing else {}
+                return {"items": [items[identifier] for identifier in identifiers if identifier in items],
+                        "missing": [str(identifier) for identifier in identifiers if identifier not in items]}
+        return await self._call("review_feedback_bulk", update)
 
     def _publish_review_rules_sync(self, alert_id, ruleset, expected_version_id, restored_from_id=None):
         encoded = _json_object(ruleset, "ruleset")
@@ -388,6 +556,11 @@ class ReviewRepositoryMixin:
         return await self._call("review_activate", activate)
 
     async def prune_candidates(self, days=90, max_rows=50000, limit=1000):
+        """Remove the rows seen least recently, by age first and then down to max_rows.
+
+        Labeled rows are kept: they are the examples replay measures drafts against, and
+        clearing a label lets retention remove the row again.
+        """
         _bounded_integer(days, "days", 1, 36500)
         _bounded_integer(limit, "limit", 1, 1000)
         if max_rows is not None:
@@ -395,9 +568,12 @@ class ReviewRepositoryMixin:
         def prune():
             with database.atomic():
                 cutoff = utcnow() - timedelta(days=days)
-                ordered = CandidateObservation.select(CandidateObservation.id).order_by(
-                    CandidateObservation.observed_at, CandidateObservation.id)
-                ids = [row.id for row in ordered.where(CandidateObservation.observed_at < cutoff).limit(limit)]
+                unlabeled = (CandidateObservation.select(CandidateObservation.id)
+                             .join(CandidateFeedback, JOIN.LEFT_OUTER,
+                                   on=CandidateFeedback.candidate == CandidateObservation.id)
+                             .where(CandidateFeedback.candidate.is_null()))
+                ordered = unlabeled.order_by(CandidateObservation.last_seen_at, CandidateObservation.id)
+                ids = [row.id for row in ordered.where(CandidateObservation.last_seen_at < cutoff).limit(limit)]
                 count = CandidateObservation.select().count()
                 excess = max(0, count - len(ids) - max_rows) if max_rows is not None else 0
                 if excess and len(ids) < limit:
@@ -405,8 +581,9 @@ class ReviewRepositoryMixin:
                     ids.extend(row.id for row in query.limit(min(excess, limit - len(ids))))
                 deleted = CandidateObservation.delete().where(CandidateObservation.id.in_(ids)).execute() if ids else 0
                 remaining = count - deleted
-                more = CandidateObservation.select().where(CandidateObservation.observed_at < cutoff).exists()
-                more = more or (max_rows is not None and remaining > max_rows)
+                more = unlabeled.where(CandidateObservation.last_seen_at < cutoff).exists()
+                if not more and max_rows is not None and remaining > max_rows:
+                    more = unlabeled.exists()
                 return {"deleted": deleted, "remaining": remaining, "has_more": more}
         return await self._call("review_prune", prune)
 

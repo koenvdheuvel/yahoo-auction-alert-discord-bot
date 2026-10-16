@@ -1,15 +1,17 @@
 """Versioned SQLite schema. Configuration and migration are explicit startup work."""
 from datetime import datetime, timezone
 import logging
+import os
 from pathlib import Path
 import sqlite3
+import stat
 
 from peewee import (BigIntegerField, BooleanField, CharField, DateTimeField,
                     ForeignKeyField, IntegerField, Model, SqliteDatabase, TextField)
 from playhouse.sqlite_ext import AutoIncrementField
 
 logger = logging.getLogger(__name__)
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 database = SqliteDatabase(None)
 
 
@@ -149,7 +151,12 @@ class ActiveReviewRules(BaseModel):
 
 
 class CandidateObservation(BaseModel):
-    """Archive facts and decisions independently of live Items and baselines."""
+    """Archive facts and decisions independently of live Items and baselines.
+
+    A row is one decision a listing received for an alert. When a later poll gives the same
+    decision, the row's facts and `last_seen_at` are refreshed instead of adding a row, so
+    `observed_at` is when this decision was first seen.
+    """
     id = AutoIncrementField()
     alert = ForeignKeyField(Alert, null=True, backref="candidates", on_delete="SET NULL")
     alert_snapshot_id = IntegerField(null=True)
@@ -170,10 +177,11 @@ class CandidateObservation(BaseModel):
     incomplete = BooleanField(default=False)
     import_key = CharField(null=True, unique=True)
     observed_at = DateTimeField(default=utcnow, index=True)
+    last_seen_at = DateTimeField(default=utcnow, index=True)
 
     class Meta:
         table_name = "candidate_observation"
-        indexes = ((("alert", "observed_at"), False), (("source", "external_id"), False))
+        indexes = ((("alert", "observed_at"), False), (("alert", "source", "external_id"), False))
 
 
 class CandidateFeedback(BaseModel):
@@ -205,8 +213,13 @@ def _backup():
     path = Path(database.database)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     target = path.with_name(path.name + f".pre-v{SCHEMA_VERSION}.{timestamp}.bak")
-    with sqlite3.connect(target) as backup:
+    # The copy holds the same data, so it gets the database's permissions rather than the umask's.
+    os.close(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IMODE(path.stat().st_mode)))
+    backup = sqlite3.connect(target)
+    try:
         database.connection().backup(backup)
+    finally:
+        backup.close()
     return target
 
 
@@ -289,23 +302,71 @@ def _migrate_legacy(existing):
     }})
 
 
+def _fold_repeated_snapshots():
+    """Before v4 every poll archived another copy of each listing it saw.
+
+    For each run of identical decisions on one listing, keep the last row and set its
+    `observed_at` to the run's first sighting. Labeled rows and imported history stay as
+    they are. Returns the number of removed rows.
+    """
+    labeled = {row[0] for row in database.execute_sql('SELECT "candidate_id" FROM "candidate_feedback"')}
+    rows = database.execute_sql(
+        'SELECT "id", "alert_id", "source", "external_id", "decision", "observed_at" '
+        "FROM \"candidate_observation\" WHERE \"origin\" = 'live' AND \"alert_id\" IS NOT NULL "
+        "AND \"external_id\" != '' ORDER BY \"alert_id\", \"source\", \"external_id\", \"id\"").fetchall()
+    removed, first_seen, run = [], [], []
+
+    def close(run):
+        if len(run) > 1:
+            removed.extend((row[0],) for row in run[:-1] if row[0] not in labeled)
+            first_seen.append((run[0][5], run[-1][0]))
+
+    for row in rows:
+        if run and row[1:5] != run[-1][1:5]:
+            close(run)
+            run = []
+        run.append(row)
+    close(run)
+    connection = database.connection()
+    connection.executemany('DELETE FROM "candidate_observation" WHERE "id" = ?', removed)
+    connection.executemany('UPDATE "candidate_observation" SET "observed_at" = ? WHERE "id" = ?', first_seen)
+    return len(removed)
+
+
+def _upgrade(previous):
+    """Bring a versioned database to SCHEMA_VERSION in one transaction, after a backup."""
+    backup = _backup()
+    details = {}
+    with database.atomic():
+        if previous == 2:
+            # Filter Lab tables did not exist yet, so they are created in their current shape.
+            database.create_tables(REVIEW_TABLES)
+        else:
+            # SQLite needs a constant default to add a NOT NULL column. Every row is set next.
+            database.execute_sql('ALTER TABLE "candidate_observation" ADD COLUMN "last_seen_at" '
+                                 "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'")
+            database.execute_sql('UPDATE "candidate_observation" SET "last_seen_at" = "observed_at"')
+            # Nothing queried (source, external_id). Repeat sightings are matched per alert now.
+            database.execute_sql('DROP INDEX IF EXISTS "candidateobservation_source_external_id"')
+            CandidateObservation._schema.create_indexes(safe=True)
+            details["repeated_snapshots_removed"] = _fold_repeated_snapshots()
+        SchemaVersion.update(version=SCHEMA_VERSION).where(SchemaVersion.id == 1).execute()
+        if database.execute_sql("PRAGMA foreign_key_check").fetchall():
+            raise RuntimeError("Foreign key validation failed; migration rolled back")
+    logger.warning("database_migrated", extra={"fields": {
+        "schema_version": SCHEMA_VERSION, "previous_version": previous,
+        "backup": str(backup) if backup else None, **details,
+    }})
+
+
 def create_tables():
     database.connect(reuse_if_open=True)
     try:
         existing = set(database.get_tables())
         if "schema_version" in existing:
             version = SchemaVersion.get_by_id(1).version
-            if version == 2:
-                backup = _backup()
-                with database.atomic():
-                    database.create_tables(REVIEW_TABLES)
-                    SchemaVersion.update(version=SCHEMA_VERSION).where(SchemaVersion.id == 1).execute()
-                    if database.execute_sql("PRAGMA foreign_key_check").fetchall():
-                        raise RuntimeError("Foreign key validation failed; migration rolled back")
-                logger.warning("database_migrated", extra={"fields": {
-                    "schema_version": SCHEMA_VERSION, "previous_version": 2,
-                    "backup": str(backup) if backup else None,
-                }})
+            if version in {2, 3}:
+                _upgrade(version)
             elif version != SCHEMA_VERSION:
                 raise RuntimeError(f"Unsupported database schema version {version}")
         elif existing.intersection({"alert", "item", "filter", "notification", "blacklist"}):
