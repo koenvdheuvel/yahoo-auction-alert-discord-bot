@@ -140,6 +140,8 @@ promtool test rules monitoring/grafana.test.yml
 
 ## Dashboards and alert response
 
+[monitoring/grafana-dashboard.json](../monitoring/grafana-dashboard.json) is a ready-made Grafana dashboard (uid `auction-bot`) for the `auction-bot` scrape job. It covers health, polling, per-search checks, marketplace requests, Discord delivery, runtime and Loki logs (by `container` label). Import it and choose the Prometheus and Loki data sources; the `instance` variable selects bot instances.
+
 Useful initial dashboard queries:
 
 ```promql
