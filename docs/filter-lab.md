@@ -6,12 +6,113 @@ while the bot is running. The listener is separate from Prometheus on port 9100.
 
 ## Sign in and run
 
-By default startup creates a random access key in
+Filter Lab has two ways in. With Discord sign-in set up, people sign in with
+their Discord account and see only the servers they manage. Without it, one
+shared access key opens everything; that is meant for local and standalone use.
+
+### Discord sign-in
+
+The sign-in page sends you to Discord, which asks you to share who you are
+(the `identify` scope) and nothing else. Back in Filter Lab, the bot checks
+with its own token which of its servers you are in and what your roles there
+allow. You get in when you have the Manage Channels permission in at least one
+of them. That is the permission the bot's management commands need, such as
+`/register`. The server owner and members with Administrator have it too, and
+a member in timeout does not. Filter Lab works out the permission for the
+whole server from your roles; channel overrides do not count.
+
+You then see only those servers: their searches, listings, labels, rules,
+replays, versions, history imports and post removals. A search in another server answers
+exactly like one that does not exist. If you manage more than one server, pick
+one in the side panel; All listings and its counts follow the picked server.
+
+Discord's access token is used once, to read your ID, name and avatar, and is
+then dropped. Filter Lab does not store it and does not use it to list your
+servers. The sign-in uses a random `state` value tied to a short-lived cookie,
+plus PKCE. Discord's OAuth2 page does not describe PKCE, but Discord accepts
+it; the `state` check protects the sign-in either way.
+
+The bot checks your servers again after 5 minutes, on your next request. If
+you lost the permission in one server, that server disappears. If you lost it
+in all of them, you are signed out and the sign-in page says why. If Discord
+does not answer, Filter Lab refuses requests with "can't reach Discord" and
+asks again after 30 seconds; it does not fall back on the earlier answer.
+
+Sign-in is refused, with a message on the sign-in page and a
+`review_login_denied` log line with the reason, when you are in none of the
+bot's servers, lack Manage Channels in all of them, cancel on Discord, or the
+sign-in expired or was started in another browser. A sign-in attempt is valid
+for 10 minutes and works once.
+
+#### Cookies
+
+Discord sends the browser back from discord.com, another site. Browsers leave
+out SameSite=Strict cookies on that request, and on any redirect that follows
+it. So the sign-in uses a second cookie, `filter_lab_login`, which is
+SameSite=Lax, lives 10 minutes and is only sent to `/auth/discord`. When
+Discord sends you back, Filter Lab sets the usual Strict session cookie and
+answers with a small page that moves on to `/auth/discord/finish` by itself.
+That request comes from Filter Lab's own page, so the browser sends the Strict
+cookie, and `/auth/discord/finish` checks that it arrived before showing the
+UI. If a browser blocks the cookie, the sign-in page says so.
+
+#### Set it up
+
+1. In the [Discord Developer Portal](https://discord.com/developers/applications),
+   open the bot's application. For the dev bot that is PosterFinderDev.
+2. Under **OAuth2**, **Redirects**, add the address Filter Lab is opened at
+   followed by `/auth/discord/callback`. For the dev instance that is
+   `https://yahoo.internal.waxdt.com/auth/discord/callback`. It must match
+   exactly: https, no trailing slash.
+3. Under **OAuth2**, **Client Secret**, reset the secret if it is not shown and
+   copy it. The client ID is the application ID; Filter Lab reads it from
+   Discord with the bot token, so there is nothing to set for it.
+4. Set these in the bot's `.env`, then restart the bot:
+
+   ```bash
+   REVIEW_PUBLIC_URL=https://yahoo.internal.waxdt.com
+   REVIEW_DISCORD_CLIENT_SECRET=the-client-secret
+   # Or keep the secret in a file instead:
+   # REVIEW_DISCORD_CLIENT_SECRET_FILE=/run/secrets/filter-lab-client-secret
+   ```
+
+   Remove `REVIEW_TOKEN` and `REVIEW_TOKEN_FILE`. An old
+   `alerts.db.review-token` file is no longer used and can be deleted.
+
+The bot needs no new permissions, scopes or privileged intents. Startup stops
+with a clear error when the secret is set without `REVIEW_PUBLIC_URL` or the
+other way round, when the address has a path or uses plain http (only
+`localhost` may use http), when both the secret and the secret file are set,
+when the access-key settings are still set, or when `BOT_TOKEN` is missing.
+The secret is removed from log output if it ever appears there.
+
+Behind a reverse proxy, keep the browser's Host header and send
+`X-Forwarded-Proto: https`; traefik does both by default. When someone opens
+Filter Lab at another address, such as an SSH tunnel, the sign-in button first
+moves them to `REVIEW_PUBLIC_URL`, because Discord only returns to that
+address.
+
+#### Searches without a server
+
+Alerts store the server they belong to. Alerts from before that existed were
+given their server at startup, from the channels the bot can see. An old alert
+whose channel was deleted, or that the bot can no longer see, has no server.
+New alerts always have one, because `/register` only works in a server.
+Discord sign-in never shows alerts without a server, or history saved without
+one. Running `/register` for the same search in its channel again gives the
+alert its server. The access key still shows them.
+
+### Access key
+
+Without Discord sign-in, startup creates a random access key in
 `<DATABASE_URL>.review-token`, for example `alerts.db.review-token`. Read that
 file locally and paste the key into the sign-in form. The file has mode `0600`;
 the key is never placed in a URL, browser storage, or application logs. Set
 `REVIEW_TOKEN` to provide your own key of at least 16 characters, or
-`REVIEW_TOKEN_FILE` to choose another private file location.
+`REVIEW_TOKEN_FILE` to choose another private file location. The access key
+sees every server, including searches without one.
+
+### Running Filter Lab
 
 To open an existing database without starting the Discord gateway, polling or
 delivery workers:
@@ -23,23 +124,36 @@ python review.py --database alerts.db
 The command refuses a missing database unless `--init` is explicitly supplied.
 It performs the same backed-up migrations as the bot. Run one application
 process per database; use the bot's embedded listener when the bot is already
-running.
+running. With Discord sign-in set up, this mode checks servers through
+Discord's REST API with `BOT_TOKEN`, without the gateway.
 
 The UI is a React app in `frontend/`. The Docker image builds it, so a container
 needs nothing extra. When the bot or `review.py` runs from a checkout, build the
 UI once first (see [Developing the UI](#developing-the-ui)). Until then the page
 says how to build it.
 
-The key grants operator access to every alert and archived record. Sessions use
-an HttpOnly, SameSite Strict cookie and expire after 12 hours. Mutations require
-same-origin JSON requests, and failed logins are rate limited. The bot serves
-the UI's files itself; nothing loads from a CDN. The page's content security
-policy allows only those files, plus style tags that carry a new random value
-(a nonce) on every page view. The default listener binds to loopback. For
+Sessions use an HttpOnly, SameSite Strict cookie and expire after 12 hours; at
+most 128 are kept. Mutations require same-origin JSON requests. Failed
+sign-ins, with the access key or with Discord, are limited to 10 a minute. The
+bot serves the UI's files itself; nothing loads from a CDN. The page's content
+security policy allows only those files, plus style tags that carry a new
+random value (a nonce) on every page view. Discord avatars and server icons
+load from Discord's image server. The default listener binds to loopback. For
 remote operation, use an SSH tunnel or a private HTTPS reverse proxy; preserve
 the browser's Host and Origin. Cookies are marked Secure when the request
-reaching the application uses HTTPS. Multi-user roles and Discord OAuth are
-future extensions, not part of this operator interface.
+reaching the application uses HTTPS.
+
+### Logs
+
+Sign-in logs `review_login_succeeded` and `review_login_denied` with the
+method, the reason and the Discord user ID when it is known.
+`review_access_revoked` names the servers someone lost, and
+`review_access_check_failed` says Discord did not answer a check. Labels,
+publishing, restoring, history imports and queued post removals log
+`review_labels_changed`, `review_rules_published`, `review_rules_restored`,
+`review_history_imported` and `review_post_removal_queued` with `actor_id`, the
+Discord user ID, and `sign_in` (`discord` or `access_key`). Codes, tokens, the PKCE verifier and the
+client secret are never logged.
 
 ## Rules for wrong products, accessories and bundles
 
@@ -201,7 +315,9 @@ nothing comes back. A removed listing is not blocked the way 🗑️ blocks it: 
 later rules allow it again, the bot does not post it again as new, and only a
 later price or stock change would post an update. When Filter Lab runs without
 the bot (`review.py`), removals wait in the queue until the bot runs. Removed
-posts cannot be brought back; the listings and labels in Filter Lab stay.
+posts cannot be brought back; the listings and labels in Filter Lab stay. With
+Discord sign-in, people preview and remove posts only for searches in the
+servers they manage.
 
 ## History and storage
 
@@ -236,13 +352,15 @@ this background pruning. Rule-version history is retained independently.
 Existing delivery and reaction history retains its previous behavior.
 
 Configuration is listed in [.env.example](../.env.example): `REVIEW_ENABLED`,
-`REVIEW_HOST`, `REVIEW_PORT`, `REVIEW_TOKEN`, `REVIEW_TOKEN_FILE`,
+`REVIEW_HOST`, `REVIEW_PORT`, `REVIEW_PUBLIC_URL`, `REVIEW_DISCORD_CLIENT_SECRET`,
+`REVIEW_DISCORD_CLIENT_SECRET_FILE`, `REVIEW_TOKEN`, `REVIEW_TOKEN_FILE`,
 `REVIEW_REPLAY_LIMIT`, `HISTORY_RETENTION_DAYS` and `HISTORY_MAX_ROWS`.
 
 For a local Docker deployment, add `-e REVIEW_HOST=0.0.0.0` and
 `-p 127.0.0.1:9101:9101` to the README's container command. This maps the UI to
-the host's loopback interface. With `DATABASE_URL=/data/alerts.db`, the generated
-key is `data/alerts.db.review-token` on the host's mounted data directory.
+the host's loopback interface. Without Discord sign-in and with
+`DATABASE_URL=/data/alerts.db`, the generated key is
+`data/alerts.db.review-token` on the host's mounted data directory.
 
 Behind an HTTPS reverse proxy (for example traefik, which does this by default),
 the proxy must send `X-Forwarded-Proto: https`; the UI uses it for the same-origin
@@ -264,6 +382,16 @@ under the published version, and `GET` on the same path reports the latest run.
 Discord message IDs travel as text, because they do not fit in a JavaScript
 number. Errors are JSON with `error` and `message`; ruleset errors add `field`,
 such as `groups.1.terms.2`.
+
+`GET /api/session` says whether the browser is signed in and which sign-in this
+Filter Lab uses (`method` is `discord` or `access_key`). With Discord it also
+returns the `user` and the `guilds` (servers) the person manages. With Discord
+sign-in, `guild_id` on `/api/candidates` limits All listings to one of those
+servers, and `/api/alerts` totals list each server under `guilds`. A request
+gets 401 `access_revoked` when the latest check found that the person lost
+every server, and 503 `access_unknown` while Discord does not answer a check.
+With Discord sign-in, `POST /api/login` does not exist; a script needs the
+session cookie of a browser that signed in.
 
 ## Developing the UI
 
@@ -295,3 +423,25 @@ npm run typecheck
 npm test
 npm run build
 ```
+
+### Trying Discord sign-in
+
+`devtools/filter_lab_harness.py` runs Filter Lab with Discord sign-in against a
+small fake Discord on this computer, so no Discord application is needed. Use a
+copy of a database, never the bot's own file:
+
+```bash
+cp alerts.db filterlab-scratch.db
+python -m devtools.filter_lab_harness --database filterlab-scratch.db --recheck 20
+```
+
+Open http://127.0.0.1:9101. The fake Discord runs at http://localhost:9199,
+which the browser treats as another site, like discord.com. Its sign-in page
+offers five people: alice manages the first server, erin manages every server,
+bob is a member without Manage Channels, carol is in no server, and dave owns
+the last server. http://localhost:9199/fake removes members, changes roles and
+can make Discord stop answering. `--recheck` shortens the 5 minutes between
+access checks. The servers come from the alerts in the database; to try the
+server picker, give some alerts in the copy another `guild_id`. The tests use
+the same fake (`devtools/fake_discord.py`), so nothing in them reaches Discord.
+

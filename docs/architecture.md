@@ -42,6 +42,8 @@ flowchart LR
 | `review_repository.py` | Candidate snapshots, feedback, immutable rule versions, atomic activation and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
 | `review.py` | Authenticated same-origin operator API that also serves the built UI; separate listener from monitoring |
+| `review_auth.py` | Discord sign-in: the OAuth2 code grant for `identify`, and the bot's own check of a person's servers and Manage Channels permission |
+| `devtools/` | A fake Discord for tests and a harness for trying Discord sign-in in a browser; never used by the bot |
 | `frontend/` | Filter Lab's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
 | `delivery.py` | Formats embeds and sends durable channel/DM jobs with independent retries |
 | `observability.py` | Bounded-label Prometheus collectors, JSON correlation/redaction, health endpoints |
@@ -180,6 +182,6 @@ See [monitoring.md](monitoring.md) for metric names, health semantics, Prometheu
 
 Per-alert check metrics carry `alert_id`. The `auction_bot_alert_info` metadata series maps it to the query and channel so Grafana can join in friendly names without repeating query text on every counter and histogram. Metadata refreshes between polls; removed alerts retire their live collectors. Global metrics retain their original label sets.
 
-Tests use temporary databases, fake Discord REST, and temporary local HTTP servers. They cover migrations/backups, identity and alert isolation, filters, delivery failure windows, HTTP retries/pagination, command permissions, reactions, bounded scheduling, cancellation, metrics, readiness, and token redaction. GitHub Actions runs Ruff, pytest and the UI's lint, type check, tests and build before building or deploying.
+Tests use temporary databases, fake Discord REST, and temporary local HTTP servers. Discord sign-in tests run hikari's REST client and the OAuth2 calls against `devtools/fake_discord.py`. They cover migrations/backups, identity and alert isolation, filters, delivery failure windows, HTTP retries/pagination, command permissions, reactions, bounded scheduling, cancellation, metrics, readiness, and token redaction. GitHub Actions runs Ruff, pytest and the UI's lint, type check, tests and build before building or deploying.
 
 The runtime dependency list now includes only directly used libraries, and Docker caches dependency installation before copying source. A Node stage builds the UI, and the runtime image receives only the built files. A `.dockerignore` excludes credentials, databases, backups, virtual environments, and caches. The deployment mounts the entire database directory so migration backups survive container replacement, uses an explicit database path, and configures restart behavior and a container readiness probe.

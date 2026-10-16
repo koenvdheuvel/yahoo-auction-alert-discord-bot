@@ -30,10 +30,13 @@ Price decreases greater than ¥500, buyout changes greater than ¥500 in either 
 
 ## Filter Lab and title normalization
 
-The operator UI opens at **http://127.0.0.1:9101** when the bot starts. Sign in with
-the key in `alerts.db.review-token` next to your configured database, or set
-`REVIEW_TOKEN` in `.env`. The generated file is private and excluded from Git and
-container builds. `REVIEW_ENABLED=false` disables the listener. The container
+The operator UI opens at **http://127.0.0.1:9101** when the bot starts. With
+Discord sign-in set up (`REVIEW_PUBLIC_URL` and `REVIEW_DISCORD_CLIENT_SECRET`),
+anyone with Manage Channels in one of the bot's servers signs in with Discord
+and sees only those servers. Without it, sign in with the key in
+`alerts.db.review-token` next to your configured database, or set
+`REVIEW_TOKEN` in `.env`. The generated file is private and excluded from Git
+and container builds. `REVIEW_ENABLED=false` disables the listener. The container
 image includes the built UI; from a checkout, build it once with Node 22.12 or
 newer:
 
