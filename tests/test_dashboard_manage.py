@@ -443,6 +443,25 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
         guilds = (await (await self.client.get("/api/guilds")).json())["guilds"]
         self.assertEqual(guilds[0]["failing_searches"], 1)
 
+    async def test_channel_ids_outside_your_servers_never_reach_discord(self):
+        def channel_calls():
+            return [path for _, path in self.fake.calls if path.startswith("/api/v10/channels/")]
+        for members, levels in (({GUILD_A: Member((MANAGER,))}, None), ({GUILD_A: Member(())}, {GUILD_A: "member"})):
+            self.client.session.cookie_jar.clear()
+            self.sign_in(ALICE, members, levels)
+            before = len(channel_calls())
+            # Made-up IDs and another server's channel: answered from the servers' own channel lists.
+            for channel in (987654321987654321, 987654321987654322, VINYL):
+                for response in (await self.client.get(f"/api/channels/{channel}/hidden"),
+                                 await self.call("POST", "/api/alerts", channel_id=str(channel), search_query="x")):
+                    self.assertEqual(response.status, 404)
+            self.assertEqual(channel_calls()[before:], [])
+        # A channel with a search in a server you manage is looked up: Discord says it was deleted.
+        self.client.session.cookie_jar.clear()
+        self.sign_in(ALICE)
+        self.assertEqual((await self.client.get(f"/api/channels/{GONE}/hidden")).status, 200)
+        self.assertEqual(channel_calls()[-1], f"/api/v10/channels/{GONE}")
+
     async def test_the_access_key_has_no_notifications(self):
         cookie = self.dashboard.open_session(Session(time.monotonic() + 3600))
         self.client.session.cookie_jar.update_cookies({COOKIE: cookie})

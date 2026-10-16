@@ -89,8 +89,27 @@ class Management:
             raise ReviewNotFound("Server not found")
         return guild_id
 
-    async def lookup(self, channel_id):
-        return await self.directory.find(channel_id) if self.directory.available else Lookup()
+    async def lookup(self, channel_id, guilds, *, ask=True):
+        """Look a channel up in these servers (None means every server, with the access key).
+
+        The servers' channel lists come from the cache, or from Discord at most once a minute
+        per server. Discord is only asked about one more channel when a search in these servers
+        is saved for it, such as an archived thread or a deleted channel, and not at all with
+        ask=False. So nobody can make the bot ask Discord about any channel ID they like: Discord
+        blocks addresses that make many failing calls, and the bot shares its address.
+        """
+        channel_id = int(channel_id)
+        if not self.directory.available:
+            return Lookup()
+        if guilds is None:
+            return await self.directory.find(channel_id)
+        for guild_id in sorted(guilds):
+            guild = await self.directory.guild(guild_id)
+            if guild is not None and channel_id in guild.channels:
+                return Lookup(guild, guild.channels[channel_id])
+        if ask and await self.repository.alert_guilds(channel_id) & guilds:
+            return await self.directory.find(channel_id)
+        return Lookup()
 
     async def channel_in_scope(self, request, raw, *, change=False, gone_ok=False):
         """(server ID, Lookup) for a channel in one of the person's servers; ChannelNotFound otherwise.
@@ -102,7 +121,7 @@ class Management:
         """
         channel_id = identifier(raw, "channel_id")
         guilds = self.server.guilds(request)
-        lookup = await self.lookup(channel_id)
+        lookup = await self.lookup(channel_id, guilds)
         if lookup.channel is not None:
             if guilds is not None and lookup.guild.id not in guilds:
                 raise ChannelNotFound()
@@ -276,7 +295,7 @@ class Management:
         alert_id = identifier(request.match_info["id"], "alert_id")
         alert = await self.repository.review_alert(alert_id, self.server.guilds(request))
         try:
-            lookup = await self.lookup(int(alert["channel_id"]))
+            lookup = await self.lookup(int(alert["channel_id"]), self.server.guilds(request))
         except DiscordUnavailable:
             lookup = Lookup()
         channel = None
@@ -470,7 +489,8 @@ class Management:
         async def viewable(channel_id):
             if channel_id not in seen:
                 try:
-                    lookup = await self.lookup(channel_id)
+                    # Only the channel lists of your servers: an archived thread there is left out.
+                    lookup = await self.lookup(channel_id, guilds, ask=False)
                 except DiscordUnavailable:
                     lookup = Lookup()
                 member = (session.members or {}).get(lookup.guild.id) if lookup.guild else None
