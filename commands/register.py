@@ -1,7 +1,7 @@
 import lightbulb
 from commands.base import (
-    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS,
-    log_change, management_hooks, respond,
+    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, SEARCH_QUERY_MAX_LENGTH,
+    clean_search_query, log_change, management_hooks, respond,
 )
 
 
@@ -11,14 +11,16 @@ class RegisterCommand(
     integration_types=GUILD_INSTALLS, hooks=management_hooks(),
 ):
     search_query = lightbulb.string(
-        "search_query", "Search query to monitor in this channel.", min_length=1, max_length=100,
+        "search_query", "Search query to monitor in this channel.", min_length=1,
+        max_length=SEARCH_QUERY_MAX_LENGTH,
     )
 
     @lightbulb.invoke
     async def invoke(self, ctx: lightbulb.Context, services: CommandServices):
-        search_query = self.search_query.strip()
-        if not search_query:
-            await respond(ctx, "Enter a non-empty search query.", ephemeral=True)
+        try:
+            search_query = clean_search_query(self.search_query)
+        except ValueError as error:
+            await respond(ctx, str(error), ephemeral=True)
             return
         created = await services.repository.register_alert(
             ctx.channel_id, search_query, guild_id=ctx.guild_id,

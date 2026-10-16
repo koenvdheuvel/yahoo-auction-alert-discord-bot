@@ -2,14 +2,14 @@ import logging
 
 import hikari
 import lightbulb
+from channel_maintenance import MAX_DELETE_COUNT, Progress, delete_recent_bot_posts
 from commands.base import (
     ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, HISTORY_SCAN_LIMIT,
-    is_bot_post, log_change, management_hooks, respond,
+    log_change, management_hooks, respond,
 )
 
 
 logger = logging.getLogger(__name__)
-MAX_DELETE_COUNT = 100
 
 
 class CleanupCommand(
@@ -32,31 +32,21 @@ class CleanupCommand(
         if bot_user is None:
             await respond(ctx, "The bot is not connected yet. Try again shortly.", ephemeral=True)
             return
-        deleted = 0
+        progress = Progress()
         try:
-            async for message in services.bot.rest.fetch_messages(ctx.channel_id).limit(HISTORY_SCAN_LIMIT):
-                if not is_bot_post(message, bot_user.id):
-                    continue
-                try:
-                    await services.bot.rest.delete_message(ctx.channel_id, message.id)
-                except hikari.NotFoundError:
-                    await services.repository.mark_message_deleted(ctx.channel_id, message.id)
-                    continue
-                await services.repository.mark_message_deleted(ctx.channel_id, message.id)
-                deleted += 1
-                if deleted >= count:
-                    break
+            await delete_recent_bot_posts(services.bot.rest, services.repository, bot_user.id, ctx.channel_id,
+                                          count, progress)
         except hikari.ForbiddenError:
             logger.warning("cleanup_forbidden", exc_info=True,
                            extra={"fields": {"channel_id": int(ctx.channel_id)}})
-            await respond(ctx, f"Deleted {deleted} posts. I need permission to read history and "
+            await respond(ctx, f"Deleted {progress.done} posts. I need permission to read history and "
                           "delete messages.", ephemeral=True)
             return
         except Exception:
             logger.exception("cleanup_failed", extra={"fields": {"channel_id": int(ctx.channel_id)}})
-            await respond(ctx, f"Deleted {deleted} posts before an error. See the bot logs for details.",
+            await respond(ctx, f"Deleted {progress.done} posts before an error. See the bot logs for details.",
                           ephemeral=True)
             return
-        log_change("cleanup_completed", ctx, deleted=deleted, history_limit=HISTORY_SCAN_LIMIT)
-        await respond(ctx, f"Deleted {deleted} bot posts from the most recent {HISTORY_SCAN_LIMIT} "
+        log_change("cleanup_completed", ctx, deleted=progress.done, history_limit=HISTORY_SCAN_LIMIT)
+        await respond(ctx, f"Deleted {progress.done} bot posts from the most recent {HISTORY_SCAN_LIMIT} "
                       "channel messages.", ephemeral=True)
