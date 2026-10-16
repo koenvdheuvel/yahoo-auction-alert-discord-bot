@@ -1,7 +1,8 @@
 """A small local stand-in for Discord, for tests and for trying the dashboard's Discord sign-in.
 
 It serves what the dashboard asks Discord for: the authorize page, the token exchange and
-/users/@me with the person's token, and the bot's calls for its servers, roles and members.
+/users/@me with the person's token, and the bot's calls for its servers, roles, members,
+channels and threads.
 It is never used in production; the dashboard only talks to it when a test or the harness in
 devtools/dashboard_harness.py passes its URLs in code.
 """
@@ -17,8 +18,20 @@ from aiohttp import web
 
 APPLICATION_ID = 900000000000000001
 BOT_ID = APPLICATION_ID
-PERMISSIONS = {"administrator": 1 << 3, "manage_channels": 1 << 4, "view_channel": 1 << 10,
-               "send_messages": 1 << 11}
+PERMISSIONS = {"administrator": 1 << 3, "manage_channels": 1 << 4, "add_reactions": 1 << 6,
+               "view_channel": 1 << 10, "send_messages": 1 << 11, "manage_messages": 1 << 13,
+               "embed_links": 1 << 14, "read_message_history": 1 << 16, "manage_threads": 1 << 34,
+               "send_messages_in_threads": 1 << 38}
+# What a bot role usually has: enough to post listings with their reactions.
+BOT_PERMISSIONS = sum(PERMISSIONS[name] for name in (
+    "view_channel", "send_messages", "embed_links", "add_reactions", "read_message_history",
+    "send_messages_in_threads"))
+CHANNEL_TYPES = {"text": 0, "voice": 2, "category": 4, "announcement": 5, "announcement_thread": 10,
+                 "thread": 11, "private_thread": 12, "stage": 13, "forum": 15}
+THREAD_TYPES = {10, 11, 12}
+BOT_USER = {"id": str(BOT_ID), "username": "PosterFinderDev", "global_name": None, "avatar": None,
+            "discriminator": "0", "bot": True, "public_flags": 0, "flags": 0, "mfa_enabled": False,
+            "verified": True, "locale": "en-US", "premium_type": 0}
 
 
 @dataclass
@@ -32,6 +45,10 @@ class FakeGuild:
     members: dict = field(default_factory=dict)
     # User ID to an ISO 8601 time until which the member is in timeout.
     timeouts: dict = field(default_factory=dict)
+    # Channel ID to its Discord payload, threads included. add_channel fills it in.
+    channels: dict = field(default_factory=dict)
+    # Threads the bot has been added to.
+    joined: set = field(default_factory=set)
 
 
 def _not_found(code, message):
@@ -72,10 +89,45 @@ class FakeDiscord:
         self.users[user_id] = {"id": str(user_id), "username": username, "global_name": global_name,
                                "avatar": avatar, "discriminator": "0", "public_flags": 0}
 
-    def add_guild(self, guild_id, name, owner_id, everyone=PERMISSIONS["view_channel"]):
+    def add_guild(self, guild_id, name, owner_id, everyone=PERMISSIONS["view_channel"], bot_role=True):
+        """A server the bot is in. The bot gets a role of its own with BOT_PERMISSIONS, as when
+        it is invited, unless bot_role is False."""
         guild = FakeGuild(guild_id, name, owner_id, roles={guild_id: everyone})
+        guild.members[BOT_ID] = []
+        if bot_role:
+            guild.roles[guild_id + 9] = BOT_PERMISSIONS
+            guild.members[BOT_ID] = [guild_id + 9]
         self.guilds[guild_id] = guild
         return guild
+
+    def add_channel(self, guild_id, channel_id, name, kind="text", *, parent_id=None, position=0,
+                    overwrites=(), archived=False, locked=False, joined=True):
+        """A channel or thread. overwrites holds (role or user ID, "role" or "member", allow, deny)."""
+        guild = self.guilds[guild_id]
+        number = CHANNEL_TYPES[kind]
+        payload = {"id": str(channel_id), "type": number, "guild_id": str(guild_id), "name": name,
+                   "parent_id": str(parent_id) if parent_id else None, "flags": 0}
+        if number in THREAD_TYPES:
+            payload.update({
+                "owner_id": "1", "last_message_id": None, "rate_limit_per_user": 0, "message_count": 0,
+                "member_count": 1, "total_message_sent": 0, "applied_tags": [],
+                "thread_metadata": {"archived": archived, "auto_archive_duration": 1440,
+                                    "archive_timestamp": "2024-01-01T00:00:00+00:00", "locked": locked,
+                                    "invitable": True}})
+            if joined:
+                guild.joined.add(channel_id)
+        else:
+            payload.update({
+                "position": position, "nsfw": False, "topic": None, "last_message_id": None,
+                "rate_limit_per_user": 0, "last_pin_timestamp": None, "default_auto_archive_duration": 1440,
+                "bitrate": 64000, "user_limit": 0, "rtc_region": None, "video_quality_mode": 1,
+                "available_tags": [], "default_reaction_emoji": None, "default_thread_rate_limit_per_user": 0,
+                "default_sort_order": None, "default_forum_layout": 0,
+                "permission_overwrites": [
+                    {"id": str(target), "type": 0 if target_type == "role" else 1, "allow": str(allow),
+                     "deny": str(deny)} for target, target_type, allow, deny in overwrites]})
+        guild.channels[channel_id] = payload
+        return payload
 
     async def start(self):
         app = web.Application()
@@ -88,6 +140,9 @@ class FakeDiscord:
             web.get("/api/v10/users/@me/guilds", self.my_guilds),
             web.get("/api/v10/guilds/{guild}", self.guild),
             web.get("/api/v10/guilds/{guild}/members/{user}", self.member),
+            web.get("/api/v10/guilds/{guild}/channels", self.guild_channels),
+            web.get("/api/v10/guilds/{guild}/threads/active", self.active_threads),
+            web.get("/api/v10/channels/{channel}", self.channel),
             web.get("/api/v10/oauth2/applications/@me", self.application),
             web.get("/embed/avatars/{name}", self.avatar),
             web.get("/fake", self.control_page),
@@ -208,8 +263,7 @@ button.cancel{{background:#4e5058}}</style></head>
         if authorization.startswith("Bearer ") and authorization[7:] in self.tokens:
             return web.json_response(self.users[self.tokens[authorization[7:]]])
         if authorization == f"Bot {self.bot_token}":
-            return web.json_response({"id": str(BOT_ID), "username": "PosterFinderDev", "global_name": None,
-                                      "avatar": None, "discriminator": "0", "bot": True})
+            return web.json_response(BOT_USER)
         return web.json_response({"message": "401: Unauthorized", "code": 0}, status=401)
 
     # The bot's REST calls, as hikari makes them.
@@ -258,10 +312,37 @@ button.cancel{{background:#4e5058}}</style></head>
         if user_id not in guild.members:
             return _not_found(10007, "Unknown Member")
         return web.json_response({
-            "user": self.users[user_id], "nick": None, "avatar": None, "roles": [str(role) for role in guild.members[user_id]],
+            "user": BOT_USER if user_id == BOT_ID else self.users[user_id], "nick": None, "avatar": None, "roles": [str(role) for role in guild.members[user_id]],
             "joined_at": "2024-01-01T00:00:00+00:00", "premium_since": None, "deaf": False, "mute": False,
             "flags": 0, "pending": False, "communication_disabled_until": guild.timeouts.get(user_id),
         })
+
+    async def guild_channels(self, request):
+        self._bot(request)
+        guild = self.guilds.get(int(request.match_info["guild"]))
+        if guild is None:
+            return _not_found(10004, "Unknown Guild")
+        return web.json_response([payload for payload in guild.channels.values()
+                                  if payload["type"] not in THREAD_TYPES])
+
+    async def active_threads(self, request):
+        self._bot(request)
+        guild = self.guilds.get(int(request.match_info["guild"]))
+        if guild is None:
+            return _not_found(10004, "Unknown Guild")
+        threads = [payload for payload in guild.channels.values()
+                   if payload["type"] in THREAD_TYPES and not payload["thread_metadata"]["archived"]]
+        members = [{"id": payload["id"], "user_id": str(BOT_ID), "join_timestamp": "2024-01-01T00:00:00+00:00",
+                    "flags": 0} for payload in threads if int(payload["id"]) in guild.joined]
+        return web.json_response({"threads": threads, "members": members})
+
+    async def channel(self, request):
+        self._bot(request)
+        channel_id = int(request.match_info["channel"])
+        for guild in self.guilds.values():
+            if channel_id in guild.channels:
+                return web.json_response(guild.channels[channel_id])
+        return _not_found(10003, "Unknown Channel")
 
     async def application(self, request):
         self._bot(request)
