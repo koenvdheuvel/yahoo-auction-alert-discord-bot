@@ -8,6 +8,7 @@ import asyncio
 import base64
 from dataclasses import dataclass
 import hashlib
+import logging
 import re
 from urllib.parse import urlencode
 
@@ -16,6 +17,7 @@ import hikari
 
 from commands.base import ADMIN_PERMISSION
 
+logger = logging.getLogger(__name__)
 
 AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
 API_URL = "https://discord.com/api/v10"
@@ -174,8 +176,8 @@ async def _json(response):
 class DiscordOAuth:
     """Discord's OAuth2 code grant for the `identify` scope.
 
-    The access token is used once, to read the person's ID, name and avatar, and is then dropped.
-    It is not stored and not used to list the person's servers.
+    The access token is used once, to read the person's ID, name and avatar, and is then revoked
+    at Discord. It is not stored and not used to list the person's servers.
 
     PKCE is sent with every sign-in. Discord's OAuth2 page does not describe it, but Discord
     accepts S256 challenges. The state value and the login cookie protect the sign-in either way.
@@ -193,10 +195,11 @@ class DiscordOAuth:
         return cls(settings.review_discord_client_secret, settings.review_public_url + CALLBACK_PATH, **urls)
 
     def authorize_url(self, client_id, state, verifier):
-        # prompt=none skips Discord's consent screen for people who already approved Filter Lab.
+        # No prompt=none: Discord does not document what it does for someone who never approved
+        # Filter Lab, so Discord shows its consent screen every time.
         return self.authorize + "?" + urlencode({
             "response_type": "code", "client_id": str(client_id), "scope": "identify",
-            "redirect_uri": self.redirect_uri, "state": state, "prompt": "none",
+            "redirect_uri": self.redirect_uri, "state": state,
             "code_challenge": code_challenge(verifier), "code_challenge_method": "S256",
         })
 
@@ -204,11 +207,12 @@ class DiscordOAuth:
         """Exchange the code and return the person's ID, display name, username and avatar."""
         if self.session is None:
             self.session = aiohttp.ClientSession(timeout=self.timeout, headers={"User-Agent": USER_AGENT})
+        client = {"Authorization": aiohttp.encode_basic_auth(str(client_id), self.client_secret)}
         try:
             async with self.session.post(self.api + "/oauth2/token", data={
                 "grant_type": "authorization_code", "code": code, "redirect_uri": self.redirect_uri,
                 "code_verifier": verifier,
-            }, headers={"Authorization": aiohttp.encode_basic_auth(str(client_id), self.client_secret)}) as response:
+            }, headers=client) as response:
                 body = await _json(response)
                 if response.status in {400, 401}:
                     # invalid_grant: an expired or reused code. invalid_client: a wrong client secret.
@@ -227,12 +231,24 @@ class DiscordOAuth:
                     raise DiscordUnavailable(f"The user request answered {response.status}")
         except (aiohttp.ClientError, TimeoutError) as error:
             raise DiscordUnavailable(f"Discord could not be reached: {describe(error)}") from error
+        await self._revoke(token, client)
         identifier = user.get("id")
         if not isinstance(identifier, str) or not identifier.isdigit() or len(identifier) > 20:
             raise DiscordUnavailable("Discord sent a user without an ID")
         username = str(user.get("username") or "")[:64]
         name = str(user.get("global_name") or username)[:64]
         return {"id": identifier, "name": name, "username": username, "avatar_url": self.avatar_url(user)}
+
+    async def _revoke(self, token, client):
+        """End the token at Discord. Sign-in does not wait on this: a failure only means the token
+        lives until Discord expires it."""
+        try:
+            async with self.session.post(self.api + "/oauth2/token/revoke", data={
+                    "token": token, "token_type_hint": "access_token"}, headers=client) as response:
+                if response.status != 200:
+                    logger.info("discord_token_revoke_failed", extra={"fields": {"status": response.status}})
+        except (aiohttp.ClientError, TimeoutError) as error:
+            logger.info("discord_token_revoke_failed", extra={"fields": {"error": describe(error)}})
 
     def avatar_url(self, user):
         identifier, avatar = int(user["id"]), user.get("avatar")

@@ -52,7 +52,11 @@ def public_url(value):
         raise ValueError("REVIEW_PUBLIC_URL must start with https:// (http:// only works for localhost)")
     if parts.path not in {"", "/"} or parts.query or parts.fragment or parts.username or parts.password:
         raise ValueError("REVIEW_PUBLIC_URL must be the site address only, such as https://filterlab.example.com")
-    return f"{parts.scheme}://{parts.netloc.lower()}"
+    # Browsers leave the default port out of the Host header, so it is left out here too.
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    default = {"https": 443, "http": 80}[parts.scheme]
+    port = f":{parts.port}" if parts.port not in {None, default} else ""
+    return f"{parts.scheme}://{host}{port}"
 
 
 @dataclass(frozen=True)

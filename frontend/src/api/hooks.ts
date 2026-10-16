@@ -8,9 +8,10 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 
+import { claimDrafts } from "../lib/drafts";
 import { canonical } from "../lib/ruleset";
 import { ApiError, api, type CandidateQuery } from "./client";
-import type { Candidate, CandidatePage, Label, RemovalDays, Ruleset } from "./types";
+import type { Candidate, CandidatePage, Label, RemovalDays, Ruleset, Session } from "./types";
 
 export const PAGE_SIZE = 48;
 
@@ -46,10 +47,24 @@ export function useRemovalStatus(alertId: string | null) {
   });
 }
 
+/** Who owns the drafts in this browser for a signed-in session. */
+export function draftOwner(session: Session): string {
+  return session.user?.id ?? "access_key";
+}
+
 export function useSession() {
   // Asking again now and then picks up servers the person gained or lost on Discord.
-  return useQuery({ queryKey: keys.session, queryFn: ({ signal }) => api.session(signal), staleTime: 60_000,
-    refetchInterval: 5 * 60_000 });
+  return useQuery({
+    queryKey: keys.session,
+    queryFn: async ({ signal }) => {
+      const session = await api.session(signal);
+      // Before the workspace reads any draft, drop drafts another person left in this browser.
+      if (session.authenticated) claimDrafts(draftOwner(session));
+      return session;
+    },
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  });
 }
 
 export function useAlerts() {

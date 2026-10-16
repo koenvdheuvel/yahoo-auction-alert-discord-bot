@@ -51,7 +51,9 @@ class FakeDiscord:
         # Seconds every API call waits before answering, as if Discord were slow.
         self.delay = 0
         self.codes = {}
+        # Live access tokens to their user, and every token ever handed out.
         self.tokens = {}
+        self.issued = []
         self.runner = None
 
     @property
@@ -81,6 +83,7 @@ class FakeDiscord:
             web.get("/oauth2/authorize", self.authorize_page),
             web.post("/oauth2/authorize", self.authorize_decision),
             web.post("/api/v10/oauth2/token", self.token),
+            web.post("/api/v10/oauth2/token/revoke", self.revoke),
             web.get("/api/v10/users/@me", self.me),
             web.get("/api/v10/users/@me/guilds", self.my_guilds),
             web.get("/api/v10/guilds/{guild}", self.guild),
@@ -172,9 +175,12 @@ button.cancel{{background:#4e5058}}</style></head>
             raise web.HTTPFound(self.cancel(self.authorize_url + "?" + urlencode(params)))
         raise web.HTTPFound(self._back(params, code=self.issue_code(params, int(form["user"]))))
 
-    async def token(self, request):
+    def _client(self, request):
         expected = "Basic " + base64.b64encode(f"{APPLICATION_ID}:{self.client_secret}".encode()).decode()
-        if request.headers.get("Authorization") != expected:
+        return request.headers.get("Authorization") == expected
+
+    async def token(self, request):
+        if not self._client(request):
             return web.json_response({"error": "invalid_client"}, status=401)
         form = dict(await request.post())
         grant = self.codes.pop(form.get("code", ""), None)
@@ -187,8 +193,15 @@ button.cancel{{background:#4e5058}}</style></head>
             return web.json_response({"error": "invalid_grant"}, status=400)
         token = secrets.token_urlsafe(24)
         self.tokens[token] = grant["user_id"]
+        self.issued.append(token)
         return web.json_response({"access_token": token, "token_type": "Bearer", "expires_in": 604800,
                                   "refresh_token": secrets.token_urlsafe(24), "scope": "identify"})
+
+    async def revoke(self, request):
+        if not self._client(request):
+            return web.json_response({"error": "invalid_client"}, status=401)
+        self.tokens.pop(dict(await request.post()).get("token", ""), None)
+        return web.json_response({})
 
     async def me(self, request):
         authorization = request.headers.get("Authorization", "")

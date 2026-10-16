@@ -27,10 +27,12 @@ exactly like one that does not exist. If you manage more than one server, pick
 one in the side panel; All listings and its counts follow the picked server.
 
 Discord's access token is used once, to read your ID, name and avatar, and is
-then dropped. Filter Lab does not store it and does not use it to list your
-servers. The sign-in uses a random `state` value tied to a short-lived cookie,
-plus PKCE. Discord's OAuth2 page does not describe PKCE, but Discord accepts
-it; the `state` check protects the sign-in either way.
+then revoked at Discord. Filter Lab does not store it and does not use it to
+list your servers. Discord shows its consent screen at every sign-in: Discord
+does not document what skipping it does for someone who never approved the
+app, so Filter Lab does not ask to skip it. The sign-in uses a `state` value tied to a short-lived cookie, plus
+PKCE. Discord's OAuth2 page does not describe PKCE, but Discord accepts it; the
+`state` check protects the sign-in either way.
 
 The bot checks your servers again after 5 minutes, on your next request. If
 you lost the permission in one server, that server disappears. If you lost it
@@ -42,7 +44,12 @@ Sign-in is refused, with a message on the sign-in page and a
 `review_login_denied` log line with the reason, when you are in none of the
 bot's servers, lack Manage Channels in all of them, cancel on Discord, or the
 sign-in expired or was started in another browser. A sign-in attempt is valid
-for 10 minutes and works once.
+for 10 minutes, only in the browser that started it, and its cookie is removed
+when Discord sends the person back. Filter Lab keeps nothing on the server for
+a sign-in in progress: the `state` carries when it started and a signature
+over that time and the browser's login cookie, made with a key that is new at
+every start of the bot. So starting many sign-ins cannot push out anyone
+else's, and a restart only cancels sign-ins that were in progress.
 
 #### Cookies
 
@@ -87,7 +94,9 @@ when the access-key settings are still set, or when `BOT_TOKEN` is missing.
 The secret is removed from log output if it ever appears there.
 
 Behind a reverse proxy, keep the browser's Host header and send
-`X-Forwarded-Proto: https`; traefik does both by default. When someone opens
+`X-Forwarded-Proto: https`; traefik does both by default. Without that header
+the sign-in button answers with an error that names it, instead of sending the
+browser in circles. When someone opens
 Filter Lab at another address, such as an SSH tunnel, the sign-in button first
 moves them to `REVIEW_PUBLIC_URL`, because Discord only returns to that
 address.
@@ -133,8 +142,12 @@ UI once first (see [Developing the UI](#developing-the-ui)). Until then the page
 says how to build it.
 
 Sessions use an HttpOnly, SameSite Strict cookie and expire after 12 hours; at
-most 128 are kept. Mutations require same-origin JSON requests. Failed
-sign-ins, with the access key or with Discord, are limited to 10 a minute. The
+most 128 are kept, and at most 5 per Discord user, so one person cannot push
+everyone else out. Mutations require same-origin JSON requests. Failed
+sign-ins are limited to 10 a minute: wrong access keys, and Discord sign-ins
+that Discord sent back and that then failed, such as a cancel or a missing
+permission. A broken or foreign sign-in link does not count, because anyone can
+send those and they would otherwise block sign-in for everyone. The
 bot serves the UI's files itself; nothing loads from a CDN. The page's content
 security policy allows only those files, plus style tags that carry a new
 random value (a nonce) on every page view. Discord avatars and server icons
@@ -246,7 +259,8 @@ of them at once.
 
 The draft for each search is kept in the browser until it is published or
 discarded. It survives a reload and an expired session, and signing out removes
-it. If someone publishes while you edit, the draft says it was based on an older
+it. When someone else signs in on the same browser, the earlier person's drafts
+are removed. If someone publishes while you edit, the draft says it was based on an older
 version: keep it on top of the new version, or discard it.
 
 Use **Test a title** (`t`) for a specific example. Run replay to compare the

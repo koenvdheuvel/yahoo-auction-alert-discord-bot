@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from urllib.parse import parse_qs, urlsplit
 
-from aiohttp import CookieJar
+from aiohttp import ClientSession, CookieJar
 from aiohttp.test_utils import TestClient, TestServer
 import hikari
 import pytest
@@ -271,9 +271,11 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         query = parse_qs(urlsplit(location).query)
         self.assertTrue(location.startswith(self.fake.authorize_url + "?"))
         self.assertEqual({name: query[name][0] for name in (
-            "response_type", "scope", "client_id", "redirect_uri", "code_challenge_method", "prompt")}, {
+            "response_type", "scope", "client_id", "redirect_uri", "code_challenge_method")}, {
             "response_type": "code", "scope": "identify", "client_id": "900000000000000001",
-            "redirect_uri": self.public + "/auth/discord/callback", "code_challenge_method": "S256", "prompt": "none"})
+            "redirect_uri": self.public + "/auth/discord/callback", "code_challenge_method": "S256"})
+        # Discord shows its consent screen every time; prompt=none is not sent.
+        self.assertNotIn("prompt", query)
         handshake = start.cookies["filter_lab_login"]
         self.assertEqual((handshake["samesite"], handshake["path"], bool(handshake["httponly"])),
                          ("Lax", "/auth/discord", True))
@@ -299,9 +301,11 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["guilds"], [{"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None}])
         self.assertEqual(self.logins("success"), 1)
         self.assertEqual(self.events("review_login_succeeded")[0]["actor_id"], str(ALICE))
+        # The access token was revoked at Discord after its one use.
+        self.assertEqual((len(self.fake.issued), self.fake.tokens), (1, {}))
         # Neither the code, the token, the PKCE verifier nor the client secret is logged.
         output = "\n".join(self.logs)
-        for value in [SECRET, *self.fake.tokens, query["state"][0], handshake.value, session.value]:
+        for value in [SECRET, *self.fake.issued, query["state"][0], handshake.value, session.value]:
             self.assertNotIn(value, output)
 
     async def test_the_session_survives_behind_a_tls_proxy_with_secure_cookies(self):
@@ -310,13 +314,22 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
                                          allow_redirects=False)
         self.assertTrue(response.cookies["filter_lab_login"]["secure"])
 
+    async def test_a_proxy_that_hides_https_gets_a_clear_error_instead_of_a_redirect_loop(self):
+        self.review.public_url = self.public.replace("http:", "https:")
+        response = await self.client.get("/auth/discord", allow_redirects=False)
+        self.assertEqual(response.status, 500)
+        self.assertIn("X-Forwarded-Proto: https", await response.text())
+        self.assertNotIn("filter_lab_login", response.cookies)
+
     async def test_sign_in_starts_over_on_the_public_address(self):
         response = await self.client.get("/auth/discord", params={"next": "/?tab=rules"},
                                          headers={"Host": "filterlab.internal:9101"}, allow_redirects=False)
         self.assertEqual(response.headers["Location"], self.public + "/auth/discord?next=%2F%3Ftab%3Drules")
         self.assertNotIn("filter_lab_login", response.cookies)
-        response = await self.client.get("/auth/discord", params={"next": "//evil.example/"}, allow_redirects=False)
-        self.assertEqual(self.review.pending[parse_qs(urlsplit(response.headers["Location"]).query)["state"][0]].next, "/")
+        # Only Filter Lab's own page is a place to come back to.
+        location = (await self.start(next_page="//evil.example/")).headers["Location"]
+        page = await (await self.callback(self.fake.approve(location, ALICE))).text()
+        self.assertIn("url=/auth/discord/finish?next=%2F\"", page)
 
     async def test_each_denial_has_its_own_reason_and_creates_no_session(self):
         # Cancelled on Discord's consent screen.
@@ -340,25 +353,40 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.review.sessions, {})
 
     async def test_bad_expired_reused_or_foreign_state_is_refused(self):
-        # A state Filter Lab never issued.
+        # States Filter Lab never issued, or changed ones.
         location = (await self.start()).headers["Location"]
         callback = self.fake.approve(location, ALICE)
-        forged = callback.replace(parse_qs(urlsplit(callback).query)["state"][0], "forged-state")
-        self.denied(await self.callback(forged), "state")
-        # The real state still works once, and only once.
+        state = parse_qs(urlsplit(callback).query)["state"][0]
+        issued, signature = state.split(".")
+        for forged in ("forged-state", f"{int(issued) + 1}.{signature}", f"{issued}.{signature[:-1]}A"):
+            self.denied(await self.callback(callback.replace(state, forged)), "state")
+        # The real state still works once: the callback removes the login cookie.
         self.assertEqual((await self.callback(callback)).status, 200)
         self.denied(await self.callback(callback), "state")
         # Expired.
         location = (await self.start()).headers["Location"]
-        state = parse_qs(urlsplit(location).query)["state"][0]
-        self.review.pending[state] = replace(self.review.pending[state], expires=0)
+        self.review.login_seconds = -1
         self.denied(await self.callback(self.fake.approve(location, ALICE)), "state")
-        # Started in another browser: the handshake cookie is missing.
+        self.review.login_seconds = 600
+        # Started in another browser: the login cookie is missing.
         location = (await self.start()).headers["Location"]
         self.client.session.cookie_jar.clear(lambda cookie: cookie.key == "filter_lab_login")
         self.denied(await self.callback(self.fake.approve(location, ALICE)), "state")
+        # Started in another tab: a later sign-in replaced the login cookie.
+        first = (await self.start()).headers["Location"]
+        await self.start()
+        self.denied(await self.callback(self.fake.approve(first, ALICE)), "state")
         self.assertEqual([entry["detail"] for entry in self.events("review_login_denied")],
-                         ["unknown", "unknown", "expired", "other_browser"])
+                         ["invalid", "mismatch", "mismatch", "other_browser", "expired", "other_browser", "mismatch"])
+
+    async def test_many_sign_ins_started_elsewhere_do_not_break_one_in_progress(self):
+        location = (await self.start()).headers["Location"]
+        # Another browser starts 300 sign-ins; the server keeps nothing for them.
+        async with ClientSession(cookie_jar=CookieJar(unsafe=True)) as other:
+            for _ in range(300):
+                async with other.get(self.public + "/auth/discord", allow_redirects=False) as response:
+                    self.assertEqual(response.status, 302)
+        self.assertEqual((await self.callback(self.fake.approve(location, ALICE))).status, 200)
 
     async def test_a_code_discord_does_not_accept_is_refused(self):
         location = (await self.start()).headers["Location"]
@@ -370,14 +398,30 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_last_step_reports_a_session_cookie_the_browser_did_not_send(self):
         self.denied(await self.client.get("/auth/discord/finish", allow_redirects=False), "cookie")
 
-    async def test_failed_sign_ins_are_rate_limited(self):
-        for _ in range(10):
+    async def test_failed_sign_ins_are_rate_limited_but_broken_links_do_not_count(self):
+        # Anyone can send broken links; they must not block sign-in for everyone.
+        for _ in range(20):
             self.denied(await self.client.get("/auth/discord/callback", params={"state": "x", "code": "y"},
                                               allow_redirects=False), "state")
+        # Sign-ins that Discord sent back and that then failed do count.
+        for _ in range(10):
+            self.denied(await self.callback(self.fake.cancel((await self.start()).headers["Location"])), "cancelled")
+        self.denied(await self.client.get("/auth/discord", allow_redirects=False), "rate_limited")
         self.denied(await self.client.get("/auth/discord/callback", params={"state": "x", "code": "y"},
                                           allow_redirects=False), "rate_limited")
-        self.denied(await self.client.get("/auth/discord", allow_redirects=False), "rate_limited")
-        self.assertEqual(self.review.pending, {})
+        self.assertEqual(self.logins("rate_limited"), 2)
+        # Refusals while blocked are counted, and logged only at debug level.
+        self.assertEqual({(entry["reason"], entry["level"]) for entry in self.events("review_login_denied")},
+                         {("state", "WARNING"), ("cancelled", "WARNING"), ("rate_limited", "DEBUG")})
+
+    async def test_one_person_cannot_push_out_everyone_elses_sessions(self):
+        await self.sign_in(ERIN)
+        erin = next(cookie.value for cookie in self.client.session.cookie_jar if cookie.key == "filter_lab_session")
+        for _ in range(7):
+            await self.sign_in(ALICE)
+        users = [session.user["id"] for session in self.review.sessions.values()]
+        self.assertEqual((users.count(str(ALICE)), users.count(str(ERIN))), (5, 1))
+        self.assertIn(erin, self.review.sessions)
 
     async def test_the_access_key_is_turned_off(self):
         response = await self.client.post("/api/login", json={"token": "anything-at-all-123"}, headers=self.headers)
@@ -620,7 +664,7 @@ def configure(monkeypatch, **values):
 
 
 def test_discord_sign_in_settings_are_checked_at_startup(monkeypatch, tmp_path):
-    configure(monkeypatch, BOT_TOKEN="token", REVIEW_PUBLIC_URL="https://Yahoo.Internal.Waxdt.com/",
+    configure(monkeypatch, BOT_TOKEN="token", REVIEW_PUBLIC_URL="https://Yahoo.Internal.Waxdt.com:443/",
               REVIEW_DISCORD_CLIENT_SECRET=SECRET)
     settings = Settings.from_env()
     assert (settings.review_public_url, settings.discord_sign_in) == ("https://yahoo.internal.waxdt.com", True)

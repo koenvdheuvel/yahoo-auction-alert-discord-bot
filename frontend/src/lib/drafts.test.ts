@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { clearAllDrafts, clearDraft, countDrafts, saveDraft } from "./drafts";
+import { claimDrafts, clearAllDrafts, clearDraft, countDrafts, saveDraft } from "./drafts";
 import { defaultRuleset } from "./ruleset";
 
 describe("stored drafts", () => {
@@ -18,5 +18,19 @@ describe("stored drafts", () => {
     clearAllDrafts();
     expect(countDrafts()).toBe(0);
     expect(localStorage.getItem("filter-lab:view")).toBe("list");
+  });
+
+  it("keeps drafts for the same person and removes another person's", () => {
+    saveDraft("5", { ruleset: defaultRuleset(), baseVersionId: null });
+    // Drafts from before owners were recorded are kept.
+    claimDrafts("111");
+    expect(countDrafts()).toBe(1);
+    claimDrafts("111");
+    expect(countDrafts()).toBe(1);
+    claimDrafts("222");
+    expect(countDrafts()).toBe(0);
+    saveDraft("5", { ruleset: defaultRuleset(), baseVersionId: null });
+    claimDrafts("access_key");
+    expect(countDrafts()).toBe(0);
   });
 });

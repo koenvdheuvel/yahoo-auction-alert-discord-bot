@@ -6,11 +6,12 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider, useQueryCl
 import { useEffect, useState } from "react";
 
 import { ApiError, onSessionEnded } from "./api/client";
-import { keys, useSession } from "./api/hooks";
+import { draftOwner, keys, useSession } from "./api/hooks";
 import type { Session } from "./api/types";
 import { Login, type SessionEnd } from "./components/Login";
 import { Workspace } from "./components/Workspace";
 import { NoticeProvider } from "./components/common/Notices";
+import { claimDrafts } from "./lib/drafts";
 import { theme } from "./theme";
 
 // Something that disappears may be in a server the person just lost on Discord. Asking for the
@@ -75,6 +76,7 @@ function SessionGate() {
         onRetry={() => void session.refetch()}
         onSignedIn={(data) => {
           setEnded(null);
+          claimDrafts(draftOwner(data));
           client.setQueryData<Session>(keys.session, data);
         }}
       />

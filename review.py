@@ -1,9 +1,13 @@
 """Authenticated operator UI, served independently of Discord and monitoring."""
 import argparse
 import asyncio
+import base64
+import binascii
 from collections import deque
 from dataclasses import dataclass, replace
 from functools import partial
+import hashlib
+import hmac
 import html
 import json
 import logging
@@ -29,10 +33,11 @@ ASSETS = Path(__file__).resolve().parent / "frontend" / "dist"
 COOKIE = "filter_lab_session"
 SESSION_SECONDS = 12 * 3600
 MAX_SESSIONS = 128
+# Sessions one Discord user may hold, so nobody can push everyone else's sessions out.
+MAX_SESSIONS_PER_USER = 5
 # Discord sign-in. This cookie ties Discord's answer to the browser that started the sign-in.
 LOGIN_COOKIE = "filter_lab_login"
 LOGIN_SECONDS = 600
-MAX_PENDING_LOGINS = 256
 FINISH_PATH = LOGIN_PATH + "/finish"
 # How long one check of a person's Discord servers counts for. After Discord fails to answer,
 # requests are refused for this long before Discord is asked again.
@@ -135,6 +140,19 @@ def _redirect(location, status=302):
     return web.Response(status=status, headers={"Location": location})
 
 
+def _origin(scheme, host):
+    """scheme://host as REVIEW_PUBLIC_URL writes it: lowercase, without the default port."""
+    host = host.lower()
+    default = {"https": ":443", "http": ":80"}.get(scheme, "")
+    if default and host.endswith(default):
+        host = host[:-len(default)]
+    return f"{scheme}://{host}"
+
+
+def _b64(data):
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
 @dataclass(eq=False)
 class Session:
     expires: float
@@ -145,14 +163,6 @@ class Session:
     checked: float = 0.0
     failed: float = float("-inf")
     check: asyncio.Task | None = None
-
-
-@dataclass(frozen=True)
-class PendingLogin:
-    binding: str
-    verifier: str
-    next: str
-    expires: float
 
 
 # The request's session, set by the guard on every /api/ route that needs one.
@@ -192,7 +202,9 @@ class ReviewServer:
         self.site = None
         self.token = None
         self.sessions = {}
-        self.pending = {}
+        # Signs sign-in attempts, so the server does not keep them. A restart forgets attempts in progress.
+        self.login_key = secrets.token_bytes(32)
+        self.login_seconds = LOGIN_SECONDS
         # Cookies of sessions a check ended, to the time they are forgotten.
         self.revoked = {}
         self.login_failures = deque()
@@ -274,6 +286,41 @@ class ReviewServer:
         if metric is not None:
             metric.labels(*labels).inc()
 
+    def _sign(self, *parts):
+        return _b64(hmac.new(self.login_key, "|".join(parts).encode(), hashlib.sha256).digest())
+
+    def new_login(self, page):
+        """A Discord sign-in attempt, as (login cookie, state, PKCE verifier).
+
+        The server keeps nothing, so starting many sign-ins cannot push out anyone else's. The
+        cookie holds a random value and the page to return to. The state holds when the attempt
+        started and a signature over that time and the cookie, so only the browser with the
+        cookie can finish it, within LOGIN_SECONDS. The verifier is a signature of the state.
+        """
+        cookie = f"{secrets.token_urlsafe(24)}.{_b64(page.encode())}"
+        issued = str(int(time.time()))
+        state = f"{issued}.{self._sign('state', issued, cookie)}"
+        return cookie, state, self._sign("pkce", state)
+
+    def check_login(self, state, cookie):
+        """(problem, page to return to, PKCE verifier); problem is None when the state is good."""
+        issued, _, signature = state.partition(".")
+        if not issued.isdigit() or len(state) > 128:
+            return "invalid", None, None
+        if not cookie:
+            return "other_browser", None, None
+        if not hmac.compare_digest(signature.encode(), self._sign("state", issued, cookie).encode()):
+            # A forged state, or the cookie of a later sign-in started in another tab.
+            return "mismatch", None, None
+        if time.time() - int(issued) > self.login_seconds:
+            return "expired", None, None
+        try:
+            encoded = cookie.partition(".")[2]
+            page = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+        except (binascii.Error, UnicodeDecodeError):
+            page = "/"
+        return None, _next_page(page), self._sign("pkce", state)
+
     def login_blocked(self):
         now = time.monotonic()
         while self.login_failures and self.login_failures[0] < now - 60:
@@ -283,6 +330,11 @@ class ReviewServer:
     def open_session(self, session):
         now = time.monotonic()
         self.sessions = {key: value for key, value in self.sessions.items() if value.expires > now}
+        if session.user is not None:
+            own = [key for key, value in self.sessions.items()
+                   if value.user is not None and value.user["id"] == session.user["id"]]
+            if len(own) >= MAX_SESSIONS_PER_USER:
+                del self.sessions[min(own, key=lambda key: self.sessions[key].expires)]
         if len(self.sessions) >= MAX_SESSIONS:
             del self.sessions[min(self.sessions, key=lambda key: self.sessions[key].expires)]
         cookie = secrets.token_urlsafe(32)
@@ -441,7 +493,6 @@ class ReviewServer:
             check.cancel()
         await asyncio.gather(*checks, return_exceptions=True)
         self.sessions.clear()
-        self.pending.clear()
         self.revoked.clear()
         self.started = False
 
@@ -523,12 +574,14 @@ class ReviewServer:
     def signin_failed(self, reason, *, user=None, detail=None, counted=True, used_login=False):
         """Send the browser back to the sign-in page, which explains the reason.
 
-        used_login: the request used up a pending sign-in, so its login cookie goes too.
+        used_login: the request used up the sign-in attempt, so its login cookie goes too.
         """
         if counted:
             self.login_failures.append(time.monotonic())
         self.count("review_logins", "discord", reason)
-        logger.warning("review_login_denied", extra={"fields": {
+        # Refusals while blocked are not logged one by one; the metric still counts them.
+        log = logger.debug if reason == "rate_limited" else logger.warning
+        log("review_login_denied", extra={"fields": {
             "method": "discord", "reason": reason, "detail": detail, "actor_id": user["id"] if user else None}})
         response = _redirect("/?" + urlencode({"signin": reason}), status=303)
         if used_login:
@@ -537,7 +590,15 @@ class ReviewServer:
 
     async def discord_start(self, request):
         page = _next_page(request.query.get("next"))
-        if f"{request.scheme}://{request.host}".lower() != self.public_url:
+        here = _origin(request.scheme, request.host)
+        if here != self.public_url:
+            if urlsplit(here).netloc == urlsplit(self.public_url).netloc:
+                # Same host, other scheme: sending the browser on would come back here forever.
+                logger.error("review_public_url_mismatch", extra={"fields": {
+                    "request_scheme": request.scheme, "public_url": self.public_url}})
+                return web.Response(status=500, text=(
+                    f"Filter Lab was reached over {request.scheme}, but REVIEW_PUBLIC_URL is "
+                    f"{self.public_url}. A reverse proxy that ends TLS must send X-Forwarded-Proto: https."))
             # The login cookie has to be set on the address Discord sends people back to.
             return _redirect(f"{self.public_url}{LOGIN_PATH}?{urlencode({'next': page})}")
         if self.login_blocked():
@@ -546,30 +607,24 @@ class ReviewServer:
             client_id = await self.guild_access.application_id()
         except DiscordUnavailable as error:
             return self.signin_failed("discord_unavailable", detail=str(error)[:300], counted=False)
-        now = time.monotonic()
-        self.pending = {state: login for state, login in self.pending.items() if login.expires > now}
-        if len(self.pending) >= MAX_PENDING_LOGINS:
-            del self.pending[min(self.pending, key=lambda state: self.pending[state].expires)]
-        state, binding, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(32), secrets.token_urlsafe(48)
-        self.pending[state] = PendingLogin(binding, verifier, page, now + LOGIN_SECONDS)
+        cookie, state, verifier = self.new_login(page)
         response = _redirect(self.oauth.authorize_url(client_id, state, verifier))
         # Lax, so the browser sends it when Discord sends the person back; Strict would not be sent.
-        response.set_cookie(LOGIN_COOKIE, binding, httponly=True, samesite="Lax", secure=request.secure,
-                            max_age=LOGIN_SECONDS, path=LOGIN_PATH)
+        response.set_cookie(LOGIN_COOKIE, cookie, httponly=True, samesite="Lax", secure=request.secure,
+                            max_age=self.login_seconds, path=LOGIN_PATH)
         return response
 
     async def discord_callback(self, request):
         if self.login_blocked():
             return self.signin_failed("rate_limited", counted=False)
         query = request.query
-        # A state works once, whatever happens next.
-        login = self.pending.pop(query.get("state", ""), None)
-        if login is None:
-            return self.signin_failed("state", detail="unknown")
-        if login.expires <= time.monotonic():
-            return self.signin_failed("state", detail="expired", used_login=True)
-        if not secrets.compare_digest(request.cookies.get(LOGIN_COOKIE, "").encode(), login.binding.encode()):
-            return self.signin_failed("state", detail="other_browser")
+        problem, page, verifier = self.check_login(query.get("state", ""), request.cookies.get(LOGIN_COOKIE, ""))
+        if problem is not None:
+            # Not counted for the rate limit: anyone can send a broken link, and counting those
+            # would let them block every sign-in. Nothing here reaches Discord.
+            return self.signin_failed("state", detail=problem, used_login=problem == "expired", counted=False)
+        # From here the attempt is used up: the login cookie goes, so the same callback cannot run
+        # twice in this browser, and Discord accepts each code only once anyway.
         failed = partial(self.signin_failed, used_login=True)
         if "error" in query:
             error = query["error"] if query["error"].isidentifier() else "other"
@@ -578,7 +633,7 @@ class ReviewServer:
         if not 1 <= len(code) <= 512:
             return failed("discord_error", detail="no_code")
         try:
-            user = await self.oauth.identify(await self.guild_access.application_id(), code, login.verifier)
+            user = await self.oauth.identify(await self.guild_access.application_id(), code, verifier)
         except DiscordRefused as error:
             return failed("discord_error", detail=str(error))
         except DiscordUnavailable as error:
@@ -594,7 +649,7 @@ class ReviewServer:
         self.count("review_logins", "discord", "success")
         logger.info("review_login_succeeded", extra={"fields": {
             "method": "discord", "actor_id": user["id"], "guild_ids": [str(guild) for guild in access.guilds]}})
-        target = html.escape(f"{FINISH_PATH}?{urlencode({'next': login.next})}", quote=True)
+        target = html.escape(f"{FINISH_PATH}?{urlencode({'next': page})}", quote=True)
         response = web.Response(text=HOP_PAGE.format(target=target), content_type="text/html")
         self.set_session_cookie(response, request, cookie)
         response.del_cookie(LOGIN_COOKIE, path=LOGIN_PATH)
