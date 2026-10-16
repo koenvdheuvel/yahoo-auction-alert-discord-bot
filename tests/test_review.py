@@ -372,7 +372,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         body = await (await self.client.get("/api/alerts")).json()
         alert = body["alerts"][0]
         self.assertEqual((alert["channel_name"], alert["listing_count"], alert["accepted_count"]), ("posters", 4, 4))
-        self.assertEqual(body["totals"], {"archived_count": 4, "unassigned_count": 0})
+        self.assertEqual(body["totals"], {"archived_count": 4, "unassigned_count": 0, "guilds": {
+            "9007199254740995": {"archived_count": 4, "unassigned_count": 0}}})
 
         def unavailable(ids):
             raise RuntimeError("cache unavailable")
