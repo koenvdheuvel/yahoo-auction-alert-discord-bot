@@ -6,7 +6,7 @@ bot's own token: the servers the bot is in, the person's roles there and what th
 """
 import asyncio
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import logging
 import re
@@ -53,8 +53,8 @@ def guild_permissions(user_id, owner_id, guild_id, role_permissions, member_role
     """A member's server-wide permissions, worked out the way Discord works out base permissions.
 
     role_permissions maps every role ID in the server to what the role allows. The @everyone
-    role has the server's own ID. Channel overwrites are not included: the bot's management
-    commands also need the permission for the whole server.
+    role has the server's own ID. Channel overwrites are not included here: signing in needs the
+    permission for the whole server, and discord_directory adds a channel's overwrites for changes.
     """
     if user_id == owner_id:
         return hikari.Permissions.all_permissions()
@@ -75,12 +75,21 @@ def can_manage(permissions):
 
 
 @dataclass(frozen=True)
+class Member:
+    """The person in one server: their roles and whether they are in timeout."""
+    role_ids: tuple
+    timed_out: bool = False
+
+
+@dataclass(frozen=True)
 class Access:
     """What one check found."""
     # Server ID to its name and icon, for every server where the person holds ADMIN_PERMISSION.
     guilds: dict
     # How many of the bot's servers the person is in, with or without the permission.
     member_of: int
+    # Server ID to Member, for the servers in guilds. Changes to a channel check its overwrites with these.
+    members: dict = field(default_factory=dict)
 
 
 class DiscordGuilds:
@@ -123,21 +132,22 @@ class DiscordGuilds:
                 raise DiscordUnavailable(f"A server could not be checked: {describe(result)}") from result
             if isinstance(result, BaseException):
                 raise result
-        allowed = {int(guild.id): _guild_json(guild) for guild, (_, manage) in zip(guilds, results) if manage}
-        return Access(allowed, sum(member for member, _ in results))
+        allowed = {int(guild.id): _guild_json(guild) for guild, (_, manage, _) in zip(guilds, results) if manage}
+        members = {int(guild.id): member for guild, (_, manage, member) in zip(guilds, results) if manage}
+        return Access(allowed, sum(found for found, _, _ in results), members)
 
     async def _check_guild(self, guild_id, user_id, limit):
-        """(is a member, holds ADMIN_PERMISSION) for one server."""
+        """(is a member, holds ADMIN_PERMISSION, Member or None) for one server."""
         async with limit:
             try:
                 member = await self.rest.fetch_member(guild_id, user_id)
             except hikari.NotFoundError:
                 # Not in the server, or the bot has just left it.
-                return False, False
+                return False, False, None
             owner_id, roles = self._cached_roles(guild_id) or await self._fetched_roles(guild_id)
-        permissions = guild_permissions(user_id, owner_id, guild_id, roles, member.role_ids,
-                                        timed_out=member.communication_disabled_until() is not None)
-        return True, can_manage(permissions)
+        found = Member(tuple(int(role) for role in member.role_ids), member.communication_disabled_until() is not None)
+        permissions = guild_permissions(user_id, owner_id, guild_id, roles, found.role_ids, timed_out=found.timed_out)
+        return True, can_manage(permissions), found
 
     def _cached_roles(self, guild_id):
         if self.cache is None:

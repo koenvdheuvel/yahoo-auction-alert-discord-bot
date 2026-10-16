@@ -58,6 +58,20 @@ class MemoryProvider:
             yield row
 
 
+class Names:
+    """A channel directory that only knows names, from a function of the channel IDs."""
+    available = False
+
+    def __init__(self, names):
+        self.lookup = names
+
+    async def names(self, channel_ids, guild_ids=()):
+        return self.lookup(channel_ids)
+
+    async def bot(self):
+        return None
+
+
 class ReviewTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -312,7 +326,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_session_reports_time_left_and_api_errors_use_specific_codes(self):
         self.assertEqual(await (await self.client.get("/api/session")).json(),
-                         {"authenticated": False, "method": "access_key"})
+                         {"authenticated": False, "method": "access_key", "title": "Dashboard", "bot": None,
+                          "bot_running": False})
         self.assertEqual((await (await self.client.get("/api/alerts")).json())["error"], "unauthorized")
         await self.login()
         session = await (await self.client.get("/api/session")).json()
@@ -369,7 +384,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
     async def test_alerts_include_counts_and_channel_names_when_the_bot_cache_has_them(self):
         await self.login()
         await self.seed()
-        self.dashboard.channel_names = lambda ids: {channel_id: "posters" for channel_id in ids}
+        self.dashboard.directory = Names(lambda ids: {channel_id: "posters" for channel_id in ids})
         body = await (await self.client.get("/api/alerts")).json()
         alert = body["alerts"][0]
         self.assertEqual((alert["channel_name"], alert["listing_count"], alert["accepted_count"]), ("posters", 4, 4))
@@ -378,7 +393,7 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
         def unavailable(ids):
             raise RuntimeError("cache unavailable")
-        self.dashboard.channel_names = unavailable
+        self.dashboard.directory = Names(unavailable)
         response = await self.client.get("/api/alerts")
         self.assertEqual(response.status, 200)
         self.assertIsNone((await response.json())["alerts"][0]["channel_name"])

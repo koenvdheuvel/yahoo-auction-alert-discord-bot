@@ -22,12 +22,16 @@ from urllib.parse import urlencode, urlsplit
 from aiohttp import web
 
 from dashboard_auth import (CALLBACK_PATH, LOGIN_PATH, DiscordGuilds, DiscordOAuth, DiscordRefused,
-                         DiscordUnavailable)
+                            DiscordUnavailable)
+from dashboard_manage import Management
+from discord_directory import ChannelDirectory
 from review_repository import ReviewConflict, ReviewNotFound, ReviewValidation
 from review_service import ReviewBusy, ReviewService, identifier
 
 
 logger = logging.getLogger(__name__)
+# The dashboard's name. When the bot's Discord name is known it reads like "PosterFinder Dashboard".
+APP_NAME = "Dashboard"
 # The Vite build of frontend/. The container copies only this directory, not the sources.
 ASSETS = Path(__file__).resolve().parent / "frontend" / "dist"
 COOKIE = "dashboard_session"
@@ -57,15 +61,22 @@ ASSET_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}")
 ASSET_TYPES = {".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2", ".woff": "font/woff",
                ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 ERROR_CODES = {401: "unauthorized", 403: "forbidden", 404: "not_found", 405: "method_not_allowed",
-               413: "payload_too_large", 415: "unsupported_media_type", 429: "rate_limited"}
+               409: "conflict", 413: "payload_too_large", 415: "unsupported_media_type", 429: "rate_limited"}
 # Discord sends the browser back from discord.com, another site, so the browser leaves out the
 # SameSite=Strict session cookie on that request and on redirects that follow it. This page
 # moves on from the dashboard itself, which makes the next request same-site, so the cookie is sent.
 HOP_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Signing in to the dashboard</title>
+<html lang="en"><head><meta charset="utf-8"><title>Signing in to {title}</title>
 <meta http-equiv="refresh" content="0; url={target}"></head>
-<body><p>Signing in to the dashboard. <a href="{target}">Continue</a></p></body></html>
+<body><p>Signing in to {title}. <a href="{target}">Continue</a></p></body></html>
 """
+# Vite builds index.html with this title; each page view gets the bot's name in it.
+INDEX_TITLE = f"<title>{APP_NAME}</title>"
+
+
+def app_title(bot):
+    """The name the dashboard shows: the bot's Discord name with APP_NAME, or APP_NAME alone."""
+    return f"{bot['name']} {APP_NAME}" if bot and bot.get("name") else APP_NAME
 
 
 def content_security_policy(nonce=None):
@@ -160,6 +171,8 @@ class Session:
     user: dict | None = None
     # Server ID to name and icon for the servers this person may see. None means every server.
     guilds: dict | None = None
+    # Server ID to the person's roles there (dashboard_auth.Member), for checking a channel's overwrites.
+    members: dict | None = None
     checked: float = 0.0
     failed: float = float("-inf")
     check: asyncio.Task | None = None
@@ -178,17 +191,24 @@ class AccessUnknown(Exception):
 
 
 class DashboardServer:
-    def __init__(self, settings, repository, metrics=None, *, channel_names=None, bot_running=False, assets=ASSETS,
-                 guild_access=None, oauth=None, access_seconds=ACCESS_SECONDS):
-        """channel_names maps a set of channel IDs to display names; the bot passes its cache.
+    # The guard puts the request's Session under this key.
+    session_key = SESSION
+
+    def __init__(self, settings, repository, metrics=None, *, directory=None, bot=None, bot_running=False,
+                 assets=ASSETS, guild_access=None, oauth=None, access_seconds=ACCESS_SECONDS):
+        """directory gives servers, channels and the bot's permissions (a ChannelDirectory); without
+        one nothing is known from Discord. bot is the running GatewayBot, which reads channel history.
         bot_running says whether this process delivers to Discord, which is what removes queued posts.
 
         With Discord sign-in, guild_access checks people's servers with the bot's token and
         oauth runs the sign-in. Tests and the fake Discord harness pass their own oauth.
         """
         self.settings, self.repository, self.metrics = settings, repository, metrics
-        self.channel_names = channel_names
+        self.directory = directory or ChannelDirectory()
         self.bot_running = bot_running
+        # The bot's Runtime, for the status page. main.py sets it; the standalone dashboard has none.
+        self.runtime = None
+        self.management = Management(self, bot)
         self.assets = Path(assets)
         self.service = ReviewService(repository, settings.dashboard_replay_limit)
         self.discord = settings.discord_sign_in
@@ -266,7 +286,7 @@ class DashboardServer:
         finally:
             session.check = None
         lost = sorted(set(session.guilds) - set(access.guilds))
-        session.guilds, session.checked = access.guilds, time.monotonic()
+        session.guilds, session.members, session.checked = access.guilds, access.members, time.monotonic()
         if not access.guilds:
             self.sessions.pop(cookie, None)
             now = time.monotonic()
@@ -411,6 +431,10 @@ class DashboardServer:
                 response = web.json_response({"error": "access_unknown", "message": (
                     "The dashboard can't reach Discord to confirm your access. Try again in a minute.")},
                     status=503, headers={"Retry-After": str(ACCESS_RETRY_SECONDS)})
+            except DiscordUnavailable:
+                response = web.json_response({"error": "discord_unavailable", "message": (
+                    "Discord didn't answer, so the channel could not be checked. Try again in a minute.")},
+                    status=503, headers={"Retry-After": str(ACCESS_RETRY_SECONDS)})
             except web.HTTPException as error:
                 response = web.json_response({"error": ERROR_CODES.get(error.status, "http_error"),
                                               "message": error.reason}, status=error.status)
@@ -452,6 +476,7 @@ class DashboardServer:
             web.get("/api/alerts/{id}/posts/removal", self.post_removal_status, name="post_removal_status"),
             web.post("/api/alerts/{id}/posts/removal", self.post_removal, name="post_removal"),
             web.post("/api/history/import", self.import_history, name="history_import"),
+            *self.management.routes(),
         ])
         if self.discord:
             # Discord sign-in is then the only way in; the access-key route does not exist.
@@ -485,6 +510,7 @@ class DashboardServer:
         if self.runner is not None:
             await self.runner.cleanup()
             self.runner = None
+        await self.management.close()
         await self.service.close()
         if self.oauth is not None:
             await self.oauth.close()
@@ -515,7 +541,9 @@ class DashboardServer:
             return web.Response(status=503, text="The dashboard's interface is not built. "
                                 "Run `npm ci && npm run build` in frontend/, then reload.")
         nonce = secrets.token_urlsafe(18)
-        response = web.Response(text=page.replace(NONCE_PLACEHOLDER, nonce), content_type="text/html")
+        title = html.escape(app_title(await self.bot_identity()))
+        page = page.replace(NONCE_PLACEHOLDER, nonce).replace(INDEX_TITLE, f"<title>{title}</title>", 1)
+        response = web.Response(text=page, content_type="text/html")
         response.headers["Content-Security-Policy"] = content_security_policy(nonce)
         return response
 
@@ -528,23 +556,39 @@ class DashboardServer:
         return web.FileResponse(path, headers={"Content-Type": ASSET_TYPES[path.suffix],
                                                "Cache-Control": "public, max-age=31536000, immutable"})
 
+    async def bot_identity(self):
+        """The bot's ID, name and avatar for the page, or None when Discord does not say."""
+        try:
+            return await self.directory.bot()
+        except DiscordUnavailable:
+            return None
+
+    async def about(self):
+        """What every session answer says about this dashboard, signed in or not."""
+        bot = await self.bot_identity()
+        return {"method": self.method, "title": app_title(bot), "bot": bot, "bot_running": self.bot_running}
+
     async def session(self, request):
         session, cookie = self.current_session(request)
         if session is not None and session.user is not None:
             try:
                 await self.confirm_access(cookie, session)
             except AccessRevoked:
-                return web.json_response({"authenticated": False, "method": self.method, "reason": "access_revoked"})
+                return web.json_response({"authenticated": False, **await self.about(), "reason": "access_revoked"})
         if session is None and self.revoked.get(cookie, 0) > time.monotonic():
-            return web.json_response({"authenticated": False, "method": self.method, "reason": "access_revoked"})
+            return web.json_response({"authenticated": False, **await self.about(), "reason": "access_revoked"})
         if session is None:
-            return web.json_response({"authenticated": False, "method": self.method})
+            return web.json_response({"authenticated": False, **await self.about()})
+        return web.json_response(await self.session_json(session))
+
+    async def session_json(self, session):
         guilds = None if session.guilds is None else sorted(
             session.guilds.values(), key=lambda guild: (guild["name"].casefold(), guild["id"]))
-        return web.json_response({"authenticated": True, "method": self.method,
-                                  "expires_in": int(session.expires - time.monotonic()),
-                                  "replay_limit": self.settings.dashboard_replay_limit,
-                                  "user": session.user, "guilds": guilds})
+        return {"authenticated": True, **await self.about(),
+                "expires_in": int(session.expires - time.monotonic()),
+                "replay_limit": self.settings.dashboard_replay_limit, "user": session.user, "guilds": guilds,
+                # 🔔 notifications belong to a Discord user; the channel checks need Discord data.
+                "features": {"notifications": session.user is not None, "discord_data": self.directory.available}}
 
     async def login(self, request):
         """Access-key sign-in, only when Discord sign-in is not set up."""
@@ -561,13 +605,11 @@ class DashboardServer:
             self.count("dashboard_logins", "access_key", "wrong_key")
             logger.warning("dashboard_login_denied", extra={"fields": {"method": "access_key", "reason": "wrong_key"}})
             raise web.HTTPUnauthorized(reason="The access key is incorrect")
-        cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS))
+        session = Session(time.monotonic() + SESSION_SECONDS)
+        cookie = self.open_session(session)
         self.count("dashboard_logins", "access_key", "success")
         logger.info("dashboard_login_succeeded", extra={"fields": {"method": "access_key"}})
-        response = web.json_response({"authenticated": True, "method": self.method,
-                                      "expires_in": SESSION_SECONDS,
-                                      "replay_limit": self.settings.dashboard_replay_limit,
-                                      "user": None, "guilds": None})
+        response = web.json_response(await self.session_json(session))
         self.set_session_cookie(response, request, cookie)
         return response
 
@@ -644,13 +686,14 @@ class DashboardServer:
             return failed("discord_unavailable", user=user, detail=str(error)[:300])
         if not access.guilds:
             return failed("missing_permission" if access.member_of else "not_member", user=user)
-        cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS, user=user,
-                                           guilds=access.guilds, checked=time.monotonic()))
+        cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS, user=user, guilds=access.guilds,
+                                           members=access.members, checked=time.monotonic()))
         self.count("dashboard_logins", "discord", "success")
         logger.info("dashboard_login_succeeded", extra={"fields": {
             "method": "discord", "actor_id": user["id"], "guild_ids": [str(guild) for guild in access.guilds]}})
         target = html.escape(f"{FINISH_PATH}?{urlencode({'next': page})}", quote=True)
-        response = web.Response(text=HOP_PAGE.format(target=target), content_type="text/html")
+        title = html.escape(app_title(await self.bot_identity()))
+        response = web.Response(text=HOP_PAGE.format(target=target, title=title), content_type="text/html")
         self.set_session_cookie(response, request, cookie)
         response.del_cookie(LOGIN_COOKIE, path=LOGIN_PATH)
         return response
@@ -672,15 +715,20 @@ class DashboardServer:
         response.del_cookie(COOKIE, path="/")
         return response
 
+    async def channel_names(self, rows):
+        """Channel ID (a string) to its name, for rows with channel_id and guild_id."""
+        try:
+            names = await self.directory.names({int(row["channel_id"]) for row in rows},
+                                               {int(row["guild_id"]) for row in rows if row.get("guild_id")})
+        except Exception:
+            # Names are a convenience; the pages still work with channel IDs.
+            logger.exception("dashboard_channel_names_failed")
+            return {}
+        return {str(channel_id): name for channel_id, name in names.items()}
+
     async def alerts(self, request):
         result = await self.repository.review_alerts(guilds=self.guilds(request))
-        names = {}
-        if self.channel_names is not None:
-            try:
-                names = self.channel_names({alert["channel_id"] for alert in result["alerts"]})
-            except Exception:
-                # Names are a convenience; the list still works with channel IDs.
-                logger.exception("dashboard_channel_names_failed")
+        names = await self.channel_names(result["alerts"])
         for alert in result["alerts"]:
             alert["channel_name"] = names.get(alert["channel_id"])
         return web.json_response(result)
@@ -704,6 +752,15 @@ class DashboardServer:
             offset=_whole_number(query, "offset", 0, 0, 10 ** 7),
             cursor=query.get("cursor") or None, latest=_flag(query, "latest"), facets=_flag(query, "facets"),
             guilds=self.guilds(request), guild_id=guild_id)
+        # The stored listing behind each candidate, so the page can offer 🔔 for it. Filtered
+        # listings were never stored, so they have none.
+        user = request[SESSION].user
+        found = await self.repository.listing_items({(item["source"], item["external_id"]) for item in result["items"]},
+                                                    int(user["id"]) if user else None)
+        for item in result["items"]:
+            stored = found.get((item["source"], item["external_id"]))
+            item["item_id"] = stored["item_id"] if stored else None
+            item["subscribed"] = stored["subscribed"] if stored else False
         return web.json_response(result)
 
     async def validate(self, request):
@@ -768,9 +825,10 @@ class DashboardServer:
         data = await self.body(request)
         result = await self.service.remove_posts(request.match_info["id"], data, self.guilds(request))
         guild_id = result.pop("guild_id")
-        logger.info("review_post_removal_queued", extra={"fields": {
-            **self.actor(request), "alert_id": request.match_info["id"], "guild_id": guild_id,
-            "version_id": str(data.get("version_id")), "queued": result["queued"], "skipped": result["skipped"]}})
+        logger.info("post_removal_queued", extra={"fields": {
+            **self.actor(request), "via": "dashboard", "reason": "rules", "alert_id": request.match_info["id"],
+            "guild_id": guild_id, "version_id": str(data.get("version_id")), "queued": result["queued"],
+            "skipped": result["skipped"]}})
         return web.json_response({**result, "bot_running": self.bot_running})
 
     async def post_removal_status(self, request):
@@ -808,22 +866,27 @@ def main(argv=None):
     configure_database(settings.database_path)
     create_tables()
     repository = Repository(Metrics())
-    # Without the gateway there is no cache; Discord sign-in asks Discord's REST API with the bot token.
+    # Without the gateway there is no cache. With the bot token, Discord sign-in and the channel
+    # lists ask Discord's REST API; without it the pages show channel IDs and cannot change channels.
     guild_access = DiscordGuilds() if settings.discord_sign_in else None
-    rest_app = None
-    server = DashboardServer(settings, repository, repository.metrics, guild_access=guild_access)
+    directory = ChannelDirectory()
+    rest_app = rest = None
+    server = DashboardServer(settings, repository, repository.metrics, directory=directory, guild_access=guild_access)
     app = server.application(None if settings.discord_sign_in else dashboard_key(settings))
 
     async def startup(_):
-        nonlocal rest_app
+        nonlocal rest_app, rest
         await repository.start()
-        if guild_access is not None:
+        if settings.token:
             import hikari
 
             rest_app = hikari.RESTApp()
             await rest_app.start()
-            guild_access.rest = rest_app.acquire(settings.token, hikari.TokenType.BOT)
-            guild_access.rest.start()
+            rest = rest_app.acquire(settings.token, hikari.TokenType.BOT)
+            rest.start()
+            directory.rest = rest
+            if guild_access is not None:
+                guild_access.rest = rest
 
     async def cleanup(_):
         try:
@@ -831,7 +894,7 @@ def main(argv=None):
         finally:
             try:
                 if rest_app is not None:
-                    await guild_access.rest.close()
+                    await rest.close()
                     await rest_app.close()
             finally:
                 await repository.close()

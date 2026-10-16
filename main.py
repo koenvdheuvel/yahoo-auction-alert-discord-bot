@@ -55,6 +55,7 @@ def create_application(settings=None):
     from repositories import Repository
     from dashboard import DashboardServer
     from dashboard_auth import DiscordGuilds
+    from discord_directory import ChannelDirectory
     from runtime import Runtime
     from storechecker import Ingestion
 
@@ -77,21 +78,14 @@ def create_application(settings=None):
     delivery = DeliveryWorker(bot, repository, metrics, settings)
     providers = {source: PROVIDERS[source](http, settings) for source in settings.enabled_sources}
 
-    def channel_names(channel_ids):
-        """The dashboard shows channel names from the gateway cache instead of bare IDs."""
-        names = {}
-        for channel_id in channel_ids:
-            channel = bot.cache.get_guild_channel(int(channel_id)) or bot.cache.get_thread(int(channel_id))
-            if channel is not None and channel.name:
-                names[channel_id] = channel.name
-        return names
-
-    # Discord sign-in checks people's servers and roles with the bot's REST client and cache.
+    # Discord sign-in checks people's servers and roles with the bot's REST client and cache, and
+    # the dashboard's channel lists come from the same cache.
     guild_access = DiscordGuilds(bot.rest, bot.cache) if settings.discord_sign_in else None
-    dashboard = DashboardServer(settings, repository, metrics, channel_names=channel_names, bot_running=True,
-                          guild_access=guild_access)
+    dashboard = DashboardServer(settings, repository, metrics, directory=ChannelDirectory(bot.rest, bot.cache),
+                                bot=bot, bot_running=True, guild_access=guild_access)
     runtime = Runtime(bot, settings, repository, http, ingestion, delivery, providers, metrics,
                       dashboard_server=dashboard)
+    dashboard.runtime = runtime
     bot.services = ApplicationServices(repository, runtime, metrics, client)
     processor = HikariEventProcessor()
     load_commands(bot, client, repository)
