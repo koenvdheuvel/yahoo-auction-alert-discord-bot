@@ -35,18 +35,21 @@ function seedFrom(candidate: Candidate): TitleSeed {
 
 interface Props {
   alertId: string | null;
+  /** With no alert selected, the Discord server whose listings to show; null for every server. */
+  guildId: string | null;
   filters: ListingFilters;
   onFilters: (next: ListingFilters) => void;
   onTestTitle: (seed: TitleSeed) => void;
 }
 
-export function ListingsPanel({ alertId, filters, onFilters, onTestTitle }: Props) {
+export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitle }: Props) {
   const notify = useNotify();
   const [view, setView] = useState<View>(() => (localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid"));
   const search = useDebounced(filters.search.trim(), 300);
   const query = useMemo<CandidateQuery>(() => ({
-    alertId, search, source: filters.source, verdict: filters.verdict, feedback: filters.feedback, latest: filters.latest,
-  }), [alertId, search, filters.source, filters.verdict, filters.feedback, filters.latest]);
+    alertId, guildId: alertId ? null : guildId, search, source: filters.source, verdict: filters.verdict,
+    feedback: filters.feedback, latest: filters.latest,
+  }), [alertId, guildId, search, filters.source, filters.verdict, filters.feedback, filters.latest]);
   const candidates = useCandidates(query);
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = candidates;
   const items = useMemo(() => candidates.data?.pages.flatMap((page) => page.items) ?? [], [candidates.data]);

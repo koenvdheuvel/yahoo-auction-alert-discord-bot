@@ -7,7 +7,7 @@ import type { CandidateQuery } from "./client";
 import { keys, LABEL_BATCH, useLabelMutation } from "./hooks";
 import type { Candidate, CandidatePage } from "./types";
 
-const query: CandidateQuery = { alertId: "1", search: "", source: "", verdict: "", feedback: "", latest: true };
+const query: CandidateQuery = { alertId: "1", guildId: null, search: "", source: "", verdict: "", feedback: "", latest: true };
 
 function candidate(id: string): Candidate {
   return { id, feedback: null } as Candidate;

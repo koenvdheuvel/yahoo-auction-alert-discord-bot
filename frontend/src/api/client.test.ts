@@ -51,6 +51,15 @@ describe("request", () => {
     stop();
   });
 
+  it("tells the app why the session ended", async () => {
+    const ended = vi.fn();
+    const stop = onSessionEnded(ended);
+    respond(401, { error: "access_revoked", message: "You no longer have Manage Channels" });
+    await expect(request("/api/alerts")).rejects.toBeInstanceOf(ApiError);
+    expect(ended).toHaveBeenCalledWith(expect.objectContaining({ status: 401, code: "access_revoked" }));
+    stop();
+  });
+
   it("sends JSON bodies with a content type and no body for reads", async () => {
     const fetch = respond(200, {});
     await request("/api/alerts");
@@ -63,7 +72,7 @@ describe("request", () => {
 });
 
 describe("api.candidates", () => {
-  const query: CandidateQuery = { alertId: "5", search: "B1 ポスター", source: "mercari", verdict: "", feedback: "unlabeled", latest: true };
+  const query: CandidateQuery = { alertId: "5", guildId: null, search: "B1 ポスター", source: "mercari", verdict: "", feedback: "unlabeled", latest: true };
 
   it("asks for facet counts on the first page only", async () => {
     const fetch = respond(200, { items: [] });
@@ -78,5 +87,14 @@ describe("api.candidates", () => {
     expect(next.searchParams.get("cursor")).toBe("MjAyNi0xMC0xNlQwMDowMDowMFp8MTA");
     expect(next.searchParams.get("latest")).toBe("0");
     expect(next.searchParams.has("facets")).toBe(false);
+  });
+
+  it("asks for one server's listings only when no search is selected", async () => {
+    const fetch = respond(200, { items: [] });
+    await api.candidates({ ...query, alertId: null, guildId: "22" }, null, 48);
+    await api.candidates({ ...query, guildId: "22" }, null, 48);
+    const calls = fetch.mock.calls as unknown as [[string], [string]];
+    expect(new URL(calls[0][0], "http://filter.lab").searchParams.get("guild_id")).toBe("22");
+    expect(new URL(calls[1][0], "http://filter.lab").searchParams.has("guild_id")).toBe(false);
   });
 });

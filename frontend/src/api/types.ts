@@ -7,10 +7,34 @@ export type LabelFilter = Label | "unlabeled";
 export type Policy = "require" | "exclude" | "review";
 export type TermMethod = "contains" | "exact" | "regex";
 
+/** How this Filter Lab signs people in: with Discord, or with the access key when Discord sign-in is not set up. */
+export type SignInMethod = "discord" | "access_key";
+
+export interface DiscordUser {
+  id: string;
+  name: string;
+  username: string;
+  avatar_url: string;
+}
+
+/** A Discord server the signed-in person manages. */
+export interface Guild {
+  id: string;
+  name: string;
+  icon_url: string | null;
+}
+
 export interface Session {
   authenticated: boolean;
+  method?: SignInMethod;
+  /** Set when this check found that the person lost access to every server. */
+  reason?: "access_revoked";
   expires_in?: number;
   replay_limit?: number;
+  /** Null when signed in with the access key. */
+  user?: DiscordUser | null;
+  /** The servers this person may see; null with the access key, which sees every server. */
+  guilds?: Guild[] | null;
 }
 
 export interface AlertSummary {
@@ -29,9 +53,14 @@ export interface AlertSummary {
   active_version_id: string | null;
 }
 
+export interface ArchiveTotals {
+  archived_count: number;
+  unassigned_count: number;
+}
+
 export interface AlertsResponse {
   alerts: AlertSummary[];
-  totals: { archived_count: number; unassigned_count: number };
+  totals: ArchiveTotals & { guilds: Record<string, ArchiveTotals> };
 }
 
 export interface Reason {

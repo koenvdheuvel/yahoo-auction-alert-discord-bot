@@ -47,7 +47,9 @@ export function useRemovalStatus(alertId: string | null) {
 }
 
 export function useSession() {
-  return useQuery({ queryKey: keys.session, queryFn: ({ signal }) => api.session(signal), staleTime: 60_000 });
+  // Asking again now and then picks up servers the person gained or lost on Discord.
+  return useQuery({ queryKey: keys.session, queryFn: ({ signal }) => api.session(signal), staleTime: 60_000,
+    refetchInterval: 5 * 60_000 });
 }
 
 export function useAlerts() {
@@ -71,9 +73,10 @@ export function useCandidates(query: CandidateQuery) {
     getNextPageParam: (last) => last.next_cursor,
     staleTime: 30_000,
     // While another filter loads, keep showing the previous results of the same search
-    // instead of flashing placeholders; another search starts empty.
+    // instead of flashing placeholders; another search or server starts empty.
     placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey[1].alertId === query.alertId ? previous : undefined,
+      previousQuery?.queryKey[1].alertId === query.alertId && previousQuery.queryKey[1].guildId === query.guildId
+        ? previous : undefined,
   });
 }
 

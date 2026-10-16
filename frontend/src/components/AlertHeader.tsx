@@ -4,7 +4,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 
-import type { AlertSummary, AlertsResponse } from "../api/types";
+import type { AlertSummary, ArchiveTotals } from "../api/types";
 import { formatCount, formatDateTime, formatRelative } from "../lib/format";
 import type { Draft } from "../lib/useDraft";
 import { channelName } from "../lib/vocabulary";
@@ -21,11 +21,13 @@ function Fact({ value, children, tone }: { value: ReactNode; children: ReactNode
 
 interface Props {
   alert: AlertSummary | null;
-  totals: AlertsResponse["totals"] | undefined;
+  totals: ArchiveTotals | undefined;
+  /** The Discord server the totals cover, when the person picked one. */
+  guildName: string | null;
   draft: Draft;
 }
 
-export function AlertHeader({ alert, totals, draft }: Props) {
+export function AlertHeader({ alert, totals, guildName, draft }: Props) {
   return (
     <Box component="header" sx={{ px: { xs: 2, md: 3 }, pt: 3, pb: 2 }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ justifyContent: "space-between", alignItems: { sm: "flex-start" } }}>
@@ -57,7 +59,9 @@ export function AlertHeader({ alert, totals, draft }: Props) {
           </>
         ) : totals ? (
           <>
-            <Fact value={formatCount(totals.archived_count)}>saved decisions across all searches</Fact>
+            <Fact value={formatCount(totals.archived_count)}>
+              {guildName ? `saved decisions across the searches in ${guildName}` : "saved decisions across all searches"}
+            </Fact>
             {totals.unassigned_count > 0 && <Fact value={formatCount(totals.unassigned_count)}>from removed searches</Fact>}
           </>
         ) : null}

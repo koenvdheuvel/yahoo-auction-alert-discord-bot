@@ -6,14 +6,21 @@ const TABS: Tab[] = ["listings", "rules", "replay", "versions"];
 
 export interface Place {
   alertId: string | null;
+  /** The Discord server picked in the side panel, for people who manage more than one. */
+  guildId: string | null;
   tab: Tab;
 }
 
 function readPlace(): Place {
   const params = new URLSearchParams(window.location.search);
   const alert = params.get("alert");
+  const guild = params.get("guild");
   const tab = params.get("tab") as Tab | null;
-  return { alertId: alert && /^\d+$/.test(alert) ? alert : null, tab: tab && TABS.includes(tab) ? tab : "listings" };
+  return {
+    alertId: alert && /^\d+$/.test(alert) ? alert : null,
+    guildId: guild && /^\d+$/.test(guild) ? guild : null,
+    tab: tab && TABS.includes(tab) ? tab : "listings",
+  };
 }
 
 function subscribePlace(listener: () => void) {
@@ -35,6 +42,7 @@ export function usePlace(): [Place, (next: Partial<Place>) => void] {
     const target = { ...readPlace(), ...next };
     const params = new URLSearchParams();
     if (target.alertId) params.set("alert", target.alertId);
+    if (target.guildId) params.set("guild", target.guildId);
     if (target.tab !== "listings") params.set("tab", target.tab);
     const search = params.toString();
     const url = `${window.location.pathname}${search ? `?${search}` : ""}`;

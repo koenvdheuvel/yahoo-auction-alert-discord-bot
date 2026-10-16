@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-// `npm run dev` serves the UI on :5173 and forwards /api to a running review server.
+// `npm run dev` serves the UI on :5173 and forwards /api and Discord sign-in to a running review server.
 const backend = process.env.FILTER_LAB_BACKEND ?? "http://127.0.0.1:9101";
 
 export default defineConfig({
@@ -21,6 +21,8 @@ export default defineConfig({
         // review.py only accepts changes whose Origin is the host it serves.
         configure: (proxy) => proxy.on("proxyReq", (request) => request.setHeader("origin", backend)),
       },
+      // Sign-in pages. Discord sends people back to REVIEW_PUBLIC_URL, which is the review server itself.
+      "/auth": { target: backend, changeOrigin: true },
     },
   },
   test: {

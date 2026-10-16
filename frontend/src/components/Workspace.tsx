@@ -9,8 +9,8 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { useEffect, useState } from "react";
 
 import type { CandidateQuery } from "../api/client";
-import { useAlerts, useRules } from "../api/hooks";
-import type { ReplayResult } from "../api/types";
+import { useAlerts, useRules, useSession } from "../api/hooks";
+import type { ArchiveTotals, ReplayResult } from "../api/types";
 import { visuallyHidden } from "../lib/a11y";
 import { isTyping, usePlace, type Tab as TabName } from "../lib/hooks";
 import { useDraft } from "../lib/useDraft";
@@ -26,7 +26,7 @@ import { VersionsPanel } from "./versions/VersionsPanel";
 
 const NAV_WIDTH = 288;
 
-export type ListingFilters = Omit<CandidateQuery, "alertId">;
+export type ListingFilters = Omit<CandidateQuery, "alertId" | "guildId">;
 
 export interface StoredReplay {
   alertId: string;
@@ -37,11 +37,13 @@ export interface StoredReplay {
 }
 
 const TAB_LABELS: Record<TabName, string> = { listings: "Listings", rules: "Rules", replay: "Replay", versions: "Versions" };
+const NO_TOTALS: ArchiveTotals = { archived_count: 0, unassigned_count: 0 };
 
 export function Workspace() {
   const theme = useTheme();
   const wide = useMediaQuery(theme.breakpoints.up("md"));
   const [place, navigate] = usePlace();
+  const guilds = useSession().data?.guilds ?? null;
   const alerts = useAlerts();
   const rules = useRules(place.alertId);
   const draft = useDraft(place.alertId, rules.data);
@@ -60,6 +62,12 @@ export function Workspace() {
 
   const alert = alerts.data?.alerts.find((item) => item.id === place.alertId) ?? null;
   const missing = place.alertId !== null && alerts.isSuccess && alert === null;
+  // People who manage more than one Discord server work in one at a time. A search's own server wins.
+  const guildId = guilds && guilds.length > 1
+    ? alert?.guild_id ?? (guilds.some((guild) => guild.id === place.guildId) ? place.guildId : guilds[0]!.id)
+    : null;
+  const guild = guilds?.find((item) => item.id === guildId) ?? null;
+  const totals = alerts.data && (guildId ? alerts.data.totals.guilds[guildId] ?? NO_TOTALS : alerts.data.totals);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -82,7 +90,7 @@ export function Workspace() {
   }, [alert]);
 
   const select = (alertId: string | null) => {
-    navigate({ alertId });
+    navigate({ alertId, guildId });
     setNavOpen(false);
   };
 
@@ -103,13 +111,17 @@ export function Workspace() {
       case "versions":
         return <VersionsPanel alert={alert} rules={rules} draft={draft} onEditRules={() => navigate({ tab: "rules" })} />;
       default:
-        return <ListingsPanel alertId={place.alertId} filters={filters} onFilters={setFilters}
+        return <ListingsPanel alertId={place.alertId} guildId={guildId} filters={filters} onFilters={setFilters}
           onTestTitle={openTitleTest} />;
     }
   })();
 
   const navigation = (
-    <AlertNav alerts={alerts} selectedId={place.alertId} onSelect={select} />
+    <AlertNav alerts={alerts} selectedId={place.alertId} onSelect={select} guilds={guilds} guildId={guildId}
+      total={totals?.archived_count} onGuild={(next) => {
+        navigate({ guildId: next, alertId: null });
+        setNavOpen(false);
+      }} />
   );
 
   return (
@@ -132,10 +144,10 @@ export function Workspace() {
       <Box component="main" id="main" tabIndex={-1} sx={{ flex: 1, minWidth: 0, pt: `${HEADER_HEIGHT}px`, outline: "none" }}>
         {missing && (
           <Alert severity="warning" sx={{ m: 3, mb: 0 }} action={<Link component="button" onClick={() => select(null)}>Show all listings</Link>}>
-            This search is no longer registered. Its saved listings stay in All listings.
+            This search is no longer registered, or it is in a server you no longer manage.
           </Alert>
         )}
-        <AlertHeader alert={alert} totals={alerts.data?.totals} draft={draft} />
+        <AlertHeader alert={alert} totals={totals} guildName={guild?.name ?? null} draft={draft} />
         <Box sx={{ px: { xs: 2, md: 3 }, borderBottom: 1, borderColor: "divider", position: "sticky",
           top: HEADER_HEIGHT, bgcolor: "background.default", zIndex: 3 }}>
           <Tabs value={place.tab} onChange={(_, tab: TabName) => navigate({ tab })} aria-label="Workspace sections"

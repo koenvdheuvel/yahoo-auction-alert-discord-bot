@@ -1,11 +1,13 @@
 import Check from "@mui/icons-material/Check";
 import KeyboardOutlined from "@mui/icons-material/KeyboardOutlined";
+import KeyOutlined from "@mui/icons-material/KeyOutlined";
 import Logout from "@mui/icons-material/Logout";
 import MenuIcon from "@mui/icons-material/Menu";
 import MoreVert from "@mui/icons-material/MoreVert";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import UploadFileOutlined from "@mui/icons-material/UploadFileOutlined";
 import AppBar from "@mui/material/AppBar";
+import Avatar from "@mui/material/Avatar";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Divider from "@mui/material/Divider";
@@ -22,7 +24,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api } from "../api/client";
-import { keys } from "../api/hooks";
+import { keys, useSession } from "../api/hooks";
 import type { Session } from "../api/types";
 import { clearAllDrafts, countDrafts } from "../lib/drafts";
 import { errorMessage } from "../lib/errors";
@@ -47,16 +49,18 @@ export function AppHeader({ showMenu, onMenu, onTestTitle, onHelp }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
   const { mode, setMode } = useColorScheme();
+  const user = useSession().data?.user ?? null;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [accountAnchor, setAccountAnchor] = useState<HTMLElement | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [draftsToRemove, setDraftsToRemove] = useState(0);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
 
   const signOut = useMutation({
     mutationFn: api.logout,
-    onSuccess: () => {
+    onSuccess: (session) => {
       // Leave the workspace first, so clearing the drafts does not make it fetch again.
-      client.setQueryData<Session>(keys.session, { authenticated: false });
+      client.setQueryData<Session>(keys.session, session);
       clearAllDrafts();
       client.removeQueries({ predicate: (query) => query.queryKey[0] !== keys.session[0] });
     },
@@ -65,7 +69,7 @@ export function AppHeader({ showMenu, onMenu, onTestTitle, onHelp }: Props) {
 
   const close = () => setAnchor(null);
   const requestSignOut = () => {
-    close();
+    setAccountAnchor(null);
     const drafts = countDrafts();
     if (drafts) {
       setDraftsToRemove(drafts);
@@ -92,6 +96,33 @@ export function AppHeader({ showMenu, onMenu, onTestTitle, onHelp }: Props) {
           onClick={(event) => setAnchor(event.currentTarget)}>
           <MoreVert />
         </IconButton>
+        <Button color="inherit" aria-haspopup="menu" aria-expanded={accountAnchor !== null}
+          aria-label={`${user ? user.name : "Access key"}: account`} onClick={(event) => setAccountAnchor(event.currentTarget)}
+          sx={{ minWidth: 0, px: { xs: 0.5, sm: 1 } }}
+          startIcon={
+            <Avatar src={user?.avatar_url} alt="" sx={{ width: 28, height: 28, fontSize: "0.875rem" }}>
+              {user ? user.name.slice(0, 1).toUpperCase() : <KeyOutlined fontSize="small" />}
+            </Avatar>
+          }>
+          <Box component="span" sx={{ display: { xs: "none", sm: "inline" }, maxWidth: 160, overflow: "hidden",
+            textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {user ? user.name : "Access key"}
+          </Box>
+        </Button>
+        <Menu anchorEl={accountAnchor} open={accountAnchor !== null} onClose={() => setAccountAnchor(null)}
+          anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }}>
+          <Box sx={{ px: 2, pt: 1, pb: 1.5, maxWidth: 280 }}>
+            <Typography variant="subtitle1" noWrap>{user ? user.name : "Signed in with the access key"}</Typography>
+            <Typography variant="body2" color="text.secondary" noWrap>
+              {user ? `@${user.username} on Discord` : "It can see every server's searches."}
+            </Typography>
+          </Box>
+          <Divider />
+          <MenuItem onClick={requestSignOut} disabled={signOut.isPending}>
+            <ListItemIcon><Logout fontSize="small" /></ListItemIcon>
+            <ListItemText>Sign out</ListItemText>
+          </MenuItem>
+        </Menu>
         <Menu anchorEl={anchor} open={anchor !== null} onClose={close}
           anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }}>
           <MenuItem onClick={() => { close(); setImportOpen(true); }}>
@@ -111,11 +142,6 @@ export function AppHeader({ showMenu, onMenu, onTestTitle, onHelp }: Props) {
               <ListItemText>{name}</ListItemText>
             </MenuItem>
           ))}
-          <Divider />
-          <MenuItem onClick={requestSignOut} disabled={signOut.isPending}>
-            <ListItemIcon><Logout fontSize="small" /></ListItemIcon>
-            <ListItemText>Sign out</ListItemText>
-          </MenuItem>
         </Menu>
       </Toolbar>
       <ImportHistoryDialog open={importOpen} onClose={() => setImportOpen(false)} />

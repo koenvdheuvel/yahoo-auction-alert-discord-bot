@@ -2,18 +2,28 @@ import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
 import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider } from "@mui/material/styles";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { ApiError, onSessionEnded } from "./api/client";
 import { keys, useSession } from "./api/hooks";
 import type { Session } from "./api/types";
-import { Login } from "./components/Login";
+import { Login, type SessionEnd } from "./components/Login";
 import { Workspace } from "./components/Workspace";
 import { NoticeProvider } from "./components/common/Notices";
 import { theme } from "./theme";
 
-const queryClient = new QueryClient({
+// Something that disappears may be in a server the person just lost on Discord. Asking for the
+// session and the searches again then drops that server from the page.
+const notFound = (error: Error) => {
+  if (!(error instanceof ApiError) || error.status !== 404) return;
+  void queryClient.invalidateQueries({ queryKey: keys.session });
+  void queryClient.invalidateQueries({ queryKey: keys.alerts });
+};
+
+const queryClient: QueryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: notFound }),
+  mutationCache: new MutationCache({ onError: notFound }),
   defaultOptions: {
     queries: {
       // Retry network blips and server errors, not answers such as 400, 401 or 404.
@@ -39,13 +49,14 @@ export function App() {
 function SessionGate() {
   const client = useQueryClient();
   const session = useSession();
-  const [ended, setEnded] = useState(false);
+  const [ended, setEnded] = useState<SessionEnd | null>(null);
 
-  useEffect(() => onSessionEnded(() => {
+  useEffect(() => onSessionEnded((error) => {
     // After signing out on purpose, requests that were still on their way come back 401.
-    if (client.getQueryData<Session>(keys.session)?.authenticated === false) return;
-    setEnded(true);
-    client.setQueryData<Session>(keys.session, { authenticated: false });
+    const current = client.getQueryData<Session>(keys.session);
+    if (current?.authenticated === false) return;
+    setEnded(error.code === "access_revoked" ? "revoked" : "ended");
+    client.setQueryData<Session>(keys.session, { authenticated: false, method: current?.method });
   }), [client]);
 
   if (session.isPending) {
@@ -58,10 +69,12 @@ function SessionGate() {
   if (!session.data?.authenticated) {
     return (
       <Login
-        sessionEnded={ended}
+        method={session.data?.method}
+        ended={session.data?.reason === "access_revoked" ? "revoked" : ended}
         unreachable={session.isError ? session.error : null}
+        onRetry={() => void session.refetch()}
         onSignedIn={(data) => {
-          setEnded(false);
+          setEnded(null);
           client.setQueryData<Session>(keys.session, data);
         }}
       />

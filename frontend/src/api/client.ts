@@ -35,10 +35,10 @@ export class ApiError extends Error {
   }
 }
 
-const sessionEndedListeners = new Set<() => void>();
+const sessionEndedListeners = new Set<(error: ApiError) => void>();
 
-/** Runs when any request finds the session gone, so the app can ask for the key again. */
-export function onSessionEnded(listener: () => void): () => void {
+/** Runs when any request finds the session gone, so the app can ask the person to sign in again. */
+export function onSessionEnded(listener: (error: ApiError) => void): () => void {
   sessionEndedListeners.add(listener);
   return () => sessionEndedListeners.delete(listener);
 }
@@ -67,14 +67,17 @@ export async function request<T>(path: string, { method = "GET", body, signal }:
   if (!response.ok) {
     const message = typeof data.message === "string" ? data.message : `The request failed with status ${response.status}.`;
     const code = typeof data.error === "string" ? data.error : "http_error";
-    if (response.status === 401 && path !== "/api/login") sessionEndedListeners.forEach((listener) => listener());
-    throw new ApiError(message, response.status, code, typeof data.field === "string" ? data.field : undefined);
+    const error = new ApiError(message, response.status, code, typeof data.field === "string" ? data.field : undefined);
+    if (response.status === 401 && path !== "/api/login") sessionEndedListeners.forEach((listener) => listener(error));
+    throw error;
   }
   return data as T;
 }
 
 export interface CandidateQuery {
   alertId: string | null;
+  /** All listings of one Discord server, when no alert is selected. */
+  guildId: string | null;
   search: string;
   source: Source | "";
   verdict: Verdict | "";
@@ -92,6 +95,7 @@ export const api = {
   candidates(query: CandidateQuery, cursor: string | null, limit: number, signal?: AbortSignal) {
     const params = new URLSearchParams({ limit: String(limit), latest: query.latest ? "1" : "0" });
     if (query.alertId) params.set("alert_id", query.alertId);
+    else if (query.guildId) params.set("guild_id", query.guildId);
     if (query.search) params.set("search", query.search);
     if (query.source) params.set("source", query.source);
     if (query.verdict) params.set("verdict", query.verdict);
