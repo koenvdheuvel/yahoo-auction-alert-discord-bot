@@ -1,8 +1,16 @@
 # Dashboard
 
-The dashboard is the bot's operator UI for labeling the listings each search finds
-and testing rules against saved marketplace facts. Open http://127.0.0.1:9101
-while the bot is running. The listener is separate from Prometheus on port 9100.
+The dashboard is the bot's web app. Server managers use it for what the slash
+commands and reactions do: add and remove searches, look at each channel's
+posts, hide listings, clean up channels and see how the searches are doing. It
+is also where they label the listings each search finds and test rules against
+saved marketplace facts. Everyone in one of the bot's servers can use it to
+manage their own 🔔 notifications. Open http://127.0.0.1:9101 while the bot is
+running. The listener is separate from Prometheus on port 9100.
+
+The page is called after the bot, with "Dashboard": "PosterFinder Dashboard",
+or just "Dashboard" while the bot's name is not known. `APP_NAME` and
+`app_title()` in `dashboard.py` are the one place that name is made.
 
 ## Sign in and run
 
@@ -191,13 +199,132 @@ reaching the application uses HTTPS.
 
 Sign-in logs `dashboard_login_succeeded` and `dashboard_login_denied` with the
 method, the reason and the Discord user ID when it is known.
-`dashboard_access_revoked` names the servers someone lost, and
-`dashboard_access_check_failed` says Discord did not answer a check. Labels,
-publishing, restoring, history imports and queued post removals log
-`review_labels_changed`, `review_rules_published`, `review_rules_restored`,
-`review_history_imported` and `review_post_removal_queued` with `actor_id`, the
-Discord user ID, and `sign_in` (`discord` or `access_key`). Codes, tokens, the PKCE verifier and the
+`dashboard_access_revoked` names the servers someone left,
+`dashboard_access_changed` the servers where someone became a manager or a
+member, and `dashboard_access_check_failed` says Discord did not answer a check.
+
+Every change logs `actor_id`, the Discord user ID, and `sign_in` (`discord` or
+`access_key`). Labels, publishing, restoring and history imports log
+`review_labels_changed`, `review_rules_published`, `review_rules_restored` and
+`review_history_imported`. Changes that a slash command or reaction can also
+make log the same event as the command, with `via` set to `dashboard`:
+`alert_registered`, `alert_unregistered`, `filter_deleted`, `item_blacklisted`
+(hiding), `cleanup_completed`, `cleanup_reactions_completed`,
+`notification_subscribed` and `notification_unsubscribed`. Showing a listing
+again logs `item_unhidden`, and queued post removals log `post_removal_queued`
+with `reason` `rules` or `cleanup`. Codes, tokens, the PKCE verifier and the
 client secret are never logged.
+
+## Servers and channels
+
+The dashboard looks like Discord. The server list is on the far left, the
+picked server's channels next to it, and the page on the right. On a phone, the
+menu button opens both lists. The round button at the top of the server list is
+Home: your 🔔 notifications, or every server's searches with the access key.
+Settings, under your name at the bottom, has the appearance: light, dark or the
+same as the system, in Discord's own colours.
+
+The channel list starts with three pages of the whole server: **Status**,
+**Searches** (every search, as `/allalerts` lists them) and **All listings**.
+Below them are the server's channels in Discord's order: channels without a
+category first, then each category by its position, and inside each one the
+text and announcement channels before the voice channels. A channel's searches
+are listed under it, and so are its threads that have searches or hidden
+listings. The badge counts the channel's searches. A warning sign marks a
+channel where the bot lacks a permission it needs to post; it is red when the
+channel has searches that cannot post. **Unknown channels** at the bottom are
+channels with searches or hidden listings that are not in the server's list:
+*deleted* when Discord says the channel no longer exists, *unknown* when the
+bot may not see it or Discord did not answer.
+
+In a server where you are only a member, the channel list has just your
+notifications there.
+
+### Where the channel list comes from
+
+Inside the bot, channels, threads, roles and the bot's own roles come from the
+gateway cache, which Discord keeps current. The standalone `dashboard.py` asks
+Discord's REST API with `BOT_TOKEN` instead, and keeps each server's answer for
+60 seconds. The bot does the same for a server that is not in its cache yet:
+right after connecting, Discord sends each server's channels a few seconds
+after the bot is ready. A channel only counts as deleted when Discord answers
+that it does not exist; one that is missing from the cache is looked up first.
+Without a bot token, the dashboard knows channels only by their ID and cannot
+change anything in them.
+
+The bot needs these permissions to post a search's listings: View Channel, Send
+Messages (Send Messages in Threads in a thread), Embed Links, Add Reactions and
+Read Message History. Discord wants Read Message History before it lets the bot
+add the 🗑️ and 🔔 reactions. With Manage Messages too, the bot removes recent
+posts 100 at a time instead of one by one. The dashboard works these out the way
+Discord does: the bot's roles, then the channel's overwrites for @everyone, for
+its roles together and for the bot itself. Administrator allows everything, and
+without View Channel nothing else counts. A thread uses its parent channel's
+overwrites; a locked thread takes no posts, and the bot must be added to a
+private thread. The same code works out whether you have Manage Channels in a
+channel, and whether you can view a channel for your notifications.
+
+### Searches
+
+**Add search**, on the Searches page or in a channel's Searches tab, does what
+`/register` does. The query takes 1 to 100 characters and the spaces at its ends
+are dropped, with the same check as the slash command. The channel must be a
+text channel, an announcement channel or a thread where the bot can post, and
+you need Manage Channels in it. The dashboard looks the channel up with Discord
+and takes its server from Discord's answer, never from the browser.
+
+**Unregister** does what `/unregister` does, after saying what happens: the bot
+stops checking the search, its posts stay in Discord (the channel's Cleanup tab
+removes them), posts not sent yet are cancelled, its rule versions and saved
+listings are kept without the search, and its Discord filters are deleted.
+Hidden listings and 🔔 follows do not change. A search whose channel Discord
+says is deleted can be unregistered too.
+
+### A channel's pages
+
+- **Searches** lists the channel's searches, as `/alerts` does.
+- **Posts** lists the bot's live posts, newest first. **Follow** does what 🔔
+  does: you get a DM when the listing changes. The count next to 🔔 says how many
+  people follow it; who they are is never shown. **Hide** does what 🗑️ does: the
+  listing is not posted in the channel again, and its posts there are removed,
+  also when someone follows it. Followers keep getting their DMs.
+- **Hidden** lists the listings hidden in the channel. **Show again** removes the
+  hide. The listing is not posted again right away; its next change is.
+- **Cleanup** has two parts. **Remove posts** removes the channel's tracked posts
+  of the last 7, 30 or 90 days, or all of them, for one search or every search,
+  through the same queue as removing the posts that rules filter: newest first,
+  up to 100 per request when they are under 14 days old. Posts that someone
+  follows with 🔔 are kept, and nothing is hidden. **Scan recent messages** does
+  what `/cleanup` and `/reacttocleanup` do with the channel's latest 1,000
+  messages: delete up to 100 of the bot's posts, or add 🗑️ to the tracked ones.
+  It reaches posts the bot does not track, such as posts from before the
+  database was converted. It needs the bot running and connected, and it runs in
+  the background while the page shows how far it got.
+
+A channel that Discord says is deleted has only the Searches and Hidden tabs, to
+unregister its searches and clear its hidden listings.
+
+### Your notifications
+
+Home lists the listings you follow with 🔔, from every server of the bot you
+are in. Each one says where it was posted, but only for channels you can view
+now; one that is only in channels you cannot view, or in servers you left, is
+listed without its title, price and photo. **Following** stops the DMs for any
+of them. Nobody else's follows are listed. With the access key there is no
+Discord user, so there are no notifications.
+
+### Status
+
+The Status page shows, for the server, whether the bot is ready and connected,
+when the last round of checks ended and the next one starts, and the last
+round without errors for each marketplace. For each search it shows the last
+check for each marketplace: whether it worked, timed out or failed and with
+which kind of error, its listings, and its posts and DMs waiting to be sent or
+failed. The checks are kept in memory, so after a restart a search shows "not
+checked since the bot started" until its next check. The standalone
+`dashboard.py` does not run the checks, so it shows only the counts from the
+database. The server list puts a red dot on a server where a search failed its
+last check or a post or DM could not be sent.
 
 ## Rules for wrong products, accessories and bundles
 
@@ -225,13 +352,19 @@ the group and term at fault, such as "Group 2, Term 3: Invalid regular
 expression", and publishing waits until it is fixed. **Edit as JSON** copies a
 draft between searches.
 
-Existing Discord filters remain visible. Their original case-sensitive text
-and raw regex behavior is preserved. **Include existing filters** controls
-whether they apply alongside the profile. A legacy blacklist remains a veto,
-and enabled legacy whitelist terms still combine with OR. Disabled migrated
-filters remain disabled. Changing those filters in Discord affects future
-checks and replay using the current legacy filters; their historical state is
-not reconstructed by replay.
+Existing Discord filters, made with `/filters add`, are listed at the end of the
+Rules tab with their value, whether they block or allow, text or regex, whether
+they are enabled, and how often they matched, as `/filters get` shows them. The
+delete button does what `/filters delete` does. New filters are made as rule
+groups instead; the dashboard does not add Discord filters. Their original
+case-sensitive text and raw regex behavior is preserved. **Include existing
+filters** controls whether they apply alongside the profile. A legacy blacklist
+remains a veto, and enabled legacy whitelist terms still combine with OR.
+Filters converted from the old database lost whether they were text or a regex,
+so they stay disabled; to keep one, add its term to a group and delete the old
+filter. Changing those filters in Discord affects future checks and replay
+using the current legacy filters; their historical state is not reconstructed
+by replay.
 
 ## Normalization
 
@@ -459,10 +592,35 @@ number. Errors are JSON with `error` and `message`; ruleset errors add `field`,
 such as `groups.1.terms.2`.
 
 `GET /api/session` says whether the browser is signed in and which sign-in this
-dashboard uses (`method` is `discord` or `access_key`). With Discord it also
-returns the `user` and the `guilds` (servers) the person manages. With Discord
-sign-in, `guild_id` on `/api/candidates` limits All listings to one of those
-servers, and `/api/alerts` totals list each server under `guilds`. A request
+dashboard uses (`method` is `discord` or `access_key`), with the page's `title`
+and the `bot`. With Discord it also returns the `user` and the `guilds`
+(servers) the person is in, each with its `level`: `manager` or `member`. With
+Discord sign-in, `guild_id` on `/api/candidates` limits All listings to one of
+the servers they manage, and `/api/alerts` totals list each server under
+`guilds`.
+
+The management routes:
+
+| Route | What it does |
+|---|---|
+| `GET /api/guilds` | The server list, with counts and problems for the servers you manage |
+| `GET /api/guilds/{id}/channels` | The channel list in Discord's order, with each channel's searches, hidden listings and the bot's permissions |
+| `GET /api/guilds/{id}/status` | The bot's state and each search's last checks and waiting posts |
+| `POST /api/alerts` | `/register`: `channel_id` and `search_query` |
+| `GET` and `DELETE /api/alerts/{id}` | A search with what unregistering touches; `/unregister` |
+| `DELETE /api/alerts/{id}/legacy-filters/{filter}` | `/filters delete` |
+| `GET /api/channels/{id}/posts` | The bot's live posts, 50 a page; `before` is the last `message_id` of the page before |
+| `GET /api/channels/{id}/hidden`, `PUT` and `DELETE .../hidden/{item}` | Hidden listings; hide, as 🗑️; show again |
+| `POST .../posts/removal-preview`, `POST` and `GET .../posts/removal` | The channel's cleanup: which posts, queue them, progress |
+| `POST` and `GET /api/channels/{id}/history-scan` | `/cleanup` (`delete_bot_posts`, with `count`) or `/reacttocleanup` (`add_reactions`) |
+| `GET /api/me/notifications`, `PUT` and `DELETE .../{item}` | Your own follows; follow, as 🔔; stop |
+
+Every route only reaches the servers you manage, except your own notifications.
+A search, channel or server elsewhere answers exactly like one that does not
+exist. A change answers 403 without Manage Channels in the channel, 409 when it
+cannot be done there (such as a deleted channel, or a history scan without the
+bot), and 503 `discord_unavailable` when Discord did not answer the channel
+lookup. A request
 gets 401 `access_revoked` when the latest check found that the person lost
 every server, and 503 `access_unknown` while Discord does not answer a check.
 With Discord sign-in, `POST /api/login` does not exist; a script needs the
@@ -513,10 +671,15 @@ python -m devtools.dashboard_harness --database dashboard-scratch.db --recheck 2
 Open http://127.0.0.1:9101. The fake Discord runs at http://localhost:9199,
 which the browser treats as another site, like discord.com. Its sign-in page
 offers five people: alice manages the first server, erin manages every server,
-bob is a member without Manage Channels, carol is in no server, and dave owns
-the last server. http://localhost:9199/fake removes members, changes roles and
+bob is a member without Manage Channels (so he sees only his notifications),
+carol is in no server, and dave owns the last server.
+http://localhost:9199/fake removes members, changes roles, deletes channels and
 can make Discord stop answering. `--recheck` shortens the 5 minutes between
-access checks. The servers come from the alerts in the database; to try the
-server picker, give some alerts in the copy another `guild_id`. The tests use
-the same fake (`devtools/fake_discord.py`), so nothing in them reaches Discord.
+access checks. The servers come from the alerts in the database, plus one more
+without searches. Each gets channels like a small server: a welcome channel,
+the searches' channels under a category with two threads (one archived), and a
+category with a channel only managers can view, one where managers may not
+change things, one where the bot cannot add reactions, an announcement channel
+and a voice channel. The tests use the same fake (`devtools/fake_discord.py`),
+so nothing in them reaches Discord.
 

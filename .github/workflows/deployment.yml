@@ -1,7 +1,7 @@
 name: Docker Build and Deploy
 
 # master  -> :latest  -> compose service yahoo_auction_alert     (production bot)
-# develop -> :develop -> compose service yahoo_auction_alert_dev (dev bot + the dashboard at yahoo.internal.waxdt.com)
+# develop -> :develop -> compose service yahoo_auction_alert_dev (dev bot; its dashboard is at yahoo-dev.waxdt.com and yahoo.internal.waxdt.com)
 on:
   push:
     branches: [master, develop]

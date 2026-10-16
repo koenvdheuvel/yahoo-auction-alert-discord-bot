@@ -112,4 +112,4 @@ groups:
           severity: info
         annotations:
           summary: 'Auction bot has migrated filters awaiting matcher selection on {{ $labels.instance }}'
-          description: 'List the filters in their Discord channel, select the intended text or regex matcher and recreate them. The old schema did not preserve that selection.'
+          description: 'The old schema did not save whether these filters were text or a regex. Open the search in the dashboard: the Rules tab lists its Discord filters. Add the term to a rule group, then delete the old filter there or with /filters delete.'

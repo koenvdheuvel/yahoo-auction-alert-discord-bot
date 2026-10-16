@@ -30,10 +30,12 @@ Price decreases greater than ¥500, buyout changes greater than ¥500 in either 
 
 ## Dashboard and title normalization
 
-The operator UI opens at **http://127.0.0.1:9101** when the bot starts. With
+The dashboard opens at **http://127.0.0.1:9101** when the bot starts. With
 Discord sign-in set up (`DASHBOARD_PUBLIC_URL` and `DASHBOARD_DISCORD_CLIENT_SECRET`),
-anyone with Manage Channels in one of the bot's servers signs in with Discord
-and sees only those servers. Without it, sign in with the key in
+anyone in one of the bot's servers signs in with Discord. People with Manage
+Channels in a server manage it there; everyone else manages only their own 🔔
+notifications. Behind a reverse proxy, list it in `DASHBOARD_TRUSTED_PROXIES`.
+Without Discord sign-in, sign in with the key in
 `alerts.db.dashboard-token` next to your configured database, or set
 `DASHBOARD_TOKEN` in `.env`. The generated file is private and excluded from Git
 and container builds. `DASHBOARD_ENABLED=false` disables the listener. The container
@@ -44,7 +46,13 @@ newer:
 cd frontend && npm ci && npm run build
 ```
 
-The dashboard shows what each search found as a photo grid or as rows, with the
+The dashboard looks like Discord: a server list, each server's channels in
+Discord's order with their searches under them, and pages for what the slash
+commands and reactions do. Managers add and remove searches, see a channel's
+posts, hide listings as 🗑️ does, clean up channels, and see each search's last
+checks and waiting posts. Everyone sees and stops their own 🔔 follows.
+
+It also shows what each search found as a photo grid or as rows, with the
 bot's decision and its reasons. You label wrong products, accessories and
 bundles from the keyboard, one listing or a selection at a time, edit grouped
 rules, and compare drafts against saved history before publishing. Each required group

@@ -181,6 +181,6 @@ python manage.py --database alerts.db outbox-retry --id 42
 
 The retry operation resets the attempt count and retains an acknowledged `message_id`. That prevents re-posting when only reactions failed; a process crash between Discord accepting a message and saving its acknowledgment can still produce a duplicate on retry. Metrics measure that pipeline but do not remove this external-system crash window.
 
-For legacy filter alerts, use the channel's filter commands to list migrated rows, recreate them with the intended `text` or `regex` matcher and remove disabled rows. The old database never saved the selected matcher, so migration cannot infer it safely.
+For legacy filter alerts, open the search in the dashboard: the Rules tab lists its Discord filters, including the disabled ones. Add each term you want to keep to a rule group, then delete the old filter there or with `/filters delete`. The old database never saved whether a filter was text or a regex, so migration cannot infer it safely.
 
 Tune concurrency after watching request/check latency, provider error rates, SQLite queue latency, event loop lag and outbox age together. Increasing ingestion parallelism can increase provider throttling and enqueue deliveries faster than Discord can accept them. Separate workers make that bottleneck visible and allow later changes to delivery concurrency without changing marketplace adapters.

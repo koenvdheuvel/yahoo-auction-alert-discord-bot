@@ -41,8 +41,12 @@ flowchart LR
 | `repositories.py` | Async persistence API over a single database thread; no Peewee objects escape to callers |
 | `review_repository.py` | Candidate snapshots, feedback, immutable rule versions, atomic activation and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
-| `dashboard.py` | Authenticated same-origin operator API that also serves the built UI; separate listener from monitoring |
-| `dashboard_auth.py` | Discord sign-in: the OAuth2 code grant for `identify`, and the bot's own check of a person's servers and Manage Channels permission |
+| `dashboard.py` | The dashboard's web server: sign-in, sessions, the rules and listings API, and the built UI; separate listener from monitoring |
+| `dashboard_auth.py` | Discord sign-in: the OAuth2 code grant for `identify`, and the bot's own check of a person's servers and whether they manage each one |
+| `dashboard_manage.py` | The dashboard's server management routes: searches, a channel's posts and hidden listings, cleanup, your notifications and status |
+| `dashboard_limits.py` | Who a request comes from behind trusted proxies, and the bounded counting of failed sign-ins |
+| `discord_directory.py` | Channels, threads and the bot's permissions per channel, from the gateway cache or REST, in Discord's sidebar order |
+| `channel_maintenance.py` | The history scans that `/cleanup`, `/reacttocleanup` and the dashboard share |
 | `devtools/` | A fake Discord for tests and a harness for trying Discord sign-in in a browser; never used by the bot |
 | `frontend/` | The dashboard's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
 | `delivery.py` | Formats embeds and sends durable channel/DM jobs with independent retries |
