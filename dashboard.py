@@ -191,6 +191,9 @@ class Session:
 SESSION = web.RequestKey("session", Session)
 # Who the request comes from, as failed sign-ins are counted: an IPv4 address or an IPv6 /64.
 VISITOR = web.RequestKey("visitor", str)
+# The routes for someone who manages no server: their session, the server list and their own
+# notifications. Every other route answers them like a missing object.
+MEMBER_ROUTES = frozenset({"session", "logout", "guilds", "notifications", "unsubscribe"})
 
 
 class AccessRevoked(Exception):
@@ -449,6 +452,9 @@ class DashboardServer:
                         raise web.HTTPForbidden(reason="Changes must come from a dashboard page at this address")
                     if request.path not in {"/api/session", "/api/login"}:
                         request[SESSION] = await self.require_session(request)
+                        if (request[SESSION].managed == frozenset()
+                                and request.match_info.route.name not in MEMBER_ROUTES):
+                            raise ReviewNotFound("Not found")
                 response = await handler(request)
             except ValueError as error:
                 # ReviewValidation and RulesetError are ValueErrors; a ruleset error names its field.

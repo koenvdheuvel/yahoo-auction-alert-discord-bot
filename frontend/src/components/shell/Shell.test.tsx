@@ -27,7 +27,6 @@ function show(path: string) {
   window.history.replaceState(null, "", path);
   const answers: Record<string, unknown> = {
     "/api/guilds": { guilds: GUILDS },
-    "/api/alerts": { alerts: [], totals: { archived_count: 0, unassigned_count: 0, guilds: {} } },
     "/api/me/notifications": { items: [ITEM, { item_id: "6", redacted: true }] },
   };
   const fetch = vi.fn((path: string) => Promise.resolve(path in answers ? Response.json(answers[path])
@@ -60,7 +59,10 @@ describe("Shell for someone who is only a member", () => {
     expect(screen.getAllByRole("button", { name: "Following" })).toHaveLength(2);
     // The channel is not a link: members do not get channel pages.
     expect(screen.queryByRole("button", { name: "#posters" })).not.toBeInTheDocument();
-    expect(fetch.mock.calls.map(([path]) => path)).not.toContainEqual(expect.stringContaining("/channels"));
+    // Nor for the searches: the server refuses every manager route to someone who manages no server.
+    const paths = fetch.mock.calls.map(([path]) => path);
+    expect(paths).not.toContainEqual(expect.stringContaining("/channels"));
+    expect(paths).not.toContain("/api/alerts");
   });
 
   it("shows only their notifications in a server where they are a member", async () => {

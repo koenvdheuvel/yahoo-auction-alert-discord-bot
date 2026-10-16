@@ -46,7 +46,9 @@ export function Shell() {
   const [place, navigate] = usePlace();
   const session = useSession().data;
   const guilds = useGuilds();
-  const alerts = useAlerts();
+  // Someone who is only a member everywhere manages no searches; the server refuses them those routes.
+  const memberOnly = Boolean(session?.guilds?.length) && session!.guilds!.every((guild) => guild.level === "member");
+  const alerts = useAlerts(!memberOnly);
   const rules = useRules(place.alertId);
   const draft = useDraft(place.alertId, rules.data);
   const [navOpen, setNavOpen] = useState(false);

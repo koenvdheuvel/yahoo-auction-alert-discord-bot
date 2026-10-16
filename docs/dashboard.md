@@ -38,7 +38,10 @@ do is decided per server:
 - **Member:** everyone else in the server, and a member in timeout even when
   their roles would make them a manager. You see and remove only your own 🔔
   notifications there. Every other page and API route about the server answers
-  exactly like a server that does not exist.
+  exactly like a server that does not exist. Someone who manages no server at
+  all gets 404 from every route except their session, the server list and their
+  own notifications, so they cannot use the rule checker or the replay worker
+  either.
 
 A search or channel in a server you are not in answers like one that does not
 exist too. Someone who is only a member somewhere starts on their notifications.

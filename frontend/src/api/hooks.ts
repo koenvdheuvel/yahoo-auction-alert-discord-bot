@@ -178,8 +178,9 @@ export function useSession() {
   });
 }
 
-export function useAlerts() {
-  return useQuery({ queryKey: keys.alerts, queryFn: ({ signal }) => api.alerts(signal), staleTime: 30_000 });
+/** The searches of the servers you manage. Off for someone who manages none: the server answers them 404. */
+export function useAlerts(enabled = true) {
+  return useQuery({ queryKey: keys.alerts, queryFn: ({ signal }) => api.alerts(signal), staleTime: 30_000, enabled });
 }
 
 export function useRules(alertId: string | null) {

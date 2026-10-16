@@ -800,23 +800,23 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
 
         get, post, put, delete = self.client.get, self.client.post, self.client.put, self.client.delete
         h = self.headers
-        # Lists have nothing of the server in them.
-        self.assertEqual((await allowed("alerts", await get("/api/alerts")))["alerts"], [])
-        self.assertEqual((await allowed("candidates", await get("/api/candidates")))["items"], [])
-        await refused("candidates", await get("/api/candidates", params={"alert_id": a}))
-        self.assertEqual((await allowed("feedback_bulk", await post("/api/candidates/feedback", json={
-            "ids": [mine], "label": "bundle"}, headers=h)))["missing"], [mine])
-        self.assertEqual((await allowed("history_import", await post("/api/history/import", json={}, headers=h)))["imported"], 0)
-        await allowed("rules_validate", await post("/api/rules/validate", json={"ruleset": default_ruleset()}, headers=h))
         servers = (await allowed("guilds", await get("/api/guilds")))["guilds"]
         self.assertEqual(servers, [{"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None, "level": "member"},
                                    {"id": str(GUILD_B), "name": "Record shop", "icon_url": None, "level": "member"}])
+        # Someone who manages no server gets nothing else, not even an empty list or the rule checker.
+        await refused("alerts", await get("/api/alerts"))
+        await refused("candidates", await get("/api/candidates"))
+        await refused("candidates", await get("/api/candidates", params={"alert_id": a}))
+        await refused("feedback_bulk", await post("/api/candidates/feedback", json={"ids": [mine], "label": "bundle"},
+                                                  headers=h))
+        await refused("history_import", await post("/api/history/import", json={}, headers=h))
+        await refused("rules_validate", await post("/api/rules/validate", json={"ruleset": default_ruleset()}, headers=h))
         # Every route about the server's searches, channels and listings refuses.
         await refused("rules", await get(f"/api/alerts/{a}/rules"))
-        await refused("feedback", await post(f"/api/candidates/{mine}/feedback", json={"label": "bundle"}, headers=h),
-                      {"error": "not_found", "message": "Candidate no longer exists"})
-        await refused("preview", await post("/api/preview", json={"ruleset": default_ruleset(), "title": "x",
-                                                                   "alert_id": a}, headers=h))
+        await refused("feedback", await post(f"/api/candidates/{mine}/feedback", json={"label": "bundle"}, headers=h))
+        for body in ({"ruleset": default_ruleset(), "title": "x", "alert_id": a},
+                     {"ruleset": default_ruleset(), "title": "x"}):
+            await refused("preview", await post("/api/preview", json=body, headers=h))
         await refused("replay", await post("/api/replay", json={"alert_id": a, "ruleset": default_ruleset()}, headers=h))
         await refused("publish", await post(f"/api/alerts/{a}/publish", json={
             "ruleset": default_ruleset(), "expected_version_id": version_a["id"]}, headers=h))
@@ -831,6 +831,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         await refused("guild_status", await get(f"/api/guilds/{GUILD_A}/status"), missing_server)
         await refused("alert_register", await post("/api/alerts", json={"channel_id": "31", "search_query": "x"},
                                                    headers=h), missing_channel)
+        self.assertEqual(missing_alert, {"error": "not_found", "message": "Not found"})
         await refused("alert", await get(f"/api/alerts/{a}"))
         await refused("alert_unregister", await delete(f"/api/alerts/{a}", headers=h))
         await refused("legacy_filter_delete", await delete(f"/api/alerts/{a}/legacy-filters/{filter_a}", headers=h))
@@ -847,8 +848,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
                 ("history_scan_status", await get("/api/channels/31/history-scan"))):
             await refused(name, response, missing_channel)
         # Following a listing from the dashboard needs the server's listings, which members do not see.
-        await refused("subscribe", await put(f"/api/me/notifications/{item}", headers=h),
-                      {"error": "not_found", "message": "Listing not found"})
+        await refused("subscribe", await put(f"/api/me/notifications/{item}", headers=h))
         # Nothing changed in the server.
         self.assertEqual([alert["search_query"] for alert in await self.repository.list_alerts(channel_id=31)],
                          ["BABYMETAL poster"])
