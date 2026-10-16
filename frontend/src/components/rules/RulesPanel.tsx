@@ -23,7 +23,7 @@ import { useDebounced } from "../../lib/hooks";
 import { LIMITS, cannotAddTerm, fieldLocation, groupsFromSearch, newGroup } from "../../lib/ruleset";
 import type { Draft } from "../../lib/useDraft";
 import { usePostRemoval } from "../../lib/usePostRemoval";
-import type { StoredReplay } from "../Workspace";
+import type { StoredReplay } from "../views/SearchView";
 import { ConfirmDialog, EmptyState, LoadError } from "../common/Feedback";
 import { useNotify } from "../common/notify";
 import { PostRemovalPreview } from "../removal/PostRemovalPreview";
@@ -37,12 +37,14 @@ interface Props {
   alert: AlertSummary | null;
   rules: UseQueryResult<RulesResponse>;
   draft: Draft;
+  /** Whether you may change the search, which deleting its Discord filters needs. */
+  canChange?: boolean;
   replay: StoredReplay | null;
   onTestTitle: () => void;
   onReplay: () => void;
 }
 
-export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay }: Props) {
+export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay, canChange = false }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
   const [confirming, setConfirming] = useState(false);
@@ -192,6 +194,7 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay 
         <Box component="aside" aria-label="Settings for all groups" sx={{ bgcolor: "background.paper", border: 1, borderColor: "divider",
           borderRadius: 1, p: 2 }}>
           <RuleSettings ruleset={ruleset} onChange={update} filters={alert ? rules.data?.legacy_filters ?? [] : null}
+            alertId={alert?.id ?? null} canChange={canChange}
             priceError={invalid && fault.section === "price" ? invalid.message : null} />
         </Box>
       </Box>

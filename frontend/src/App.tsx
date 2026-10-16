@@ -9,7 +9,7 @@ import { ApiError, onSessionEnded } from "./api/client";
 import { draftOwner, keys, refreshAccess, useSession } from "./api/hooks";
 import type { Session } from "./api/types";
 import { Login, type SessionEnd } from "./components/Login";
-import { Workspace } from "./components/Workspace";
+import { Shell } from "./components/shell/Shell";
 import { NoticeProvider } from "./components/common/Notices";
 import { claimDrafts } from "./lib/drafts";
 import { theme } from "./theme";
@@ -49,13 +49,14 @@ function SessionGate() {
     const current = client.getQueryData<Session>(keys.session);
     if (current?.authenticated === false) return;
     setEnded(error.code === "access_revoked" ? "revoked" : "ended");
-    client.setQueryData<Session>(keys.session, { authenticated: false, method: current?.method });
+    client.setQueryData<Session>(keys.session, { authenticated: false, method: current?.method, title: current?.title,
+      bot: current?.bot, bot_running: current?.bot_running });
   }), [client]);
 
   if (session.isPending) {
     return (
       <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-        <CircularProgress aria-label="Opening the dashboard" />
+        <CircularProgress aria-label={`Opening ${document.title}`} />
       </Box>
     );
   }
@@ -63,6 +64,8 @@ function SessionGate() {
     return (
       <Login
         method={session.data?.method}
+        title={session.data?.title}
+        bot={session.data?.bot}
         ended={session.data?.reason === "access_revoked" ? "revoked" : ended}
         unreachable={session.isError ? session.error : null}
         onRetry={() => void session.refetch()}
@@ -74,5 +77,5 @@ function SessionGate() {
       />
     );
   }
-  return <Workspace />;
+  return <Shell />;
 }

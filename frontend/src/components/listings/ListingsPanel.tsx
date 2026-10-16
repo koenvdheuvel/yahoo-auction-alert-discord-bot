@@ -16,7 +16,7 @@ import { listingTitle } from "../../lib/listing";
 import { LABEL_ORDER, LABELS } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { TitleSeed } from "../TitleTestDialog";
-import type { ListingFilters } from "../Workspace";
+import type { ListingFilters } from "../views/SearchView";
 import { EmptyState, LoadError } from "../common/Feedback";
 import { useNotify } from "../common/notify";
 import { BulkBar } from "./BulkBar";

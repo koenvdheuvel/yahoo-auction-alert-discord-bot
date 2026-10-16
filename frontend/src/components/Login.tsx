@@ -2,6 +2,7 @@ import LoginIcon from "@mui/icons-material/Login";
 import Visibility from "@mui/icons-material/Visibility";
 import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import Alert from "@mui/material/Alert";
+import Avatar from "@mui/material/Avatar";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
@@ -13,7 +14,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useState, type SubmitEvent } from "react";
 
 import { api } from "../api/client";
-import type { Session, SignInMethod } from "../api/types";
+import type { BotUser, Session, SignInMethod } from "../api/types";
 import { errorMessage } from "../lib/errors";
 import { ACCESS_REVOKED, clearSignInReason, discordSignInHref, readSignInReason, signInNotice } from "../lib/signin";
 import { LogoMark } from "./common/Logo";
@@ -23,6 +24,9 @@ export type SessionEnd = "ended" | "revoked";
 
 interface Props {
   method: SignInMethod | undefined;
+  /** The dashboard's name and the bot, from the session answer; unknown when the server cannot be reached. */
+  title?: string;
+  bot?: BotUser | null;
   ended: SessionEnd | null;
   unreachable: Error | null;
   onRetry: () => void;
@@ -31,16 +35,20 @@ interface Props {
 
 const ENDED = "Your session ended. Sign in again; your unpublished drafts are still here.";
 
-export function Login({ method, ended, unreachable, onRetry, onSignedIn }: Props) {
+export function Login({ method, title = "Dashboard", bot = null, ended, unreachable, onRetry, onSignedIn }: Props) {
   return (
-    <Box component="main" sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 3 }}>
-      <Box sx={{ width: "100%", maxWidth: 420 }}>
-        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 4 }}>
-          <LogoMark size={36} />
-          <Typography variant="h1" component="h1">Dashboard</Typography>
+    <Box component="main" sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 3, bgcolor: "surface.rail" }}>
+      <Box sx={{ width: "100%", maxWidth: 440, bgcolor: "background.default", borderRadius: 2, p: { xs: 3, sm: 4 },
+        boxShadow: "0 8px 24px rgba(0,0,0,0.24)" }}>
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 3 }}>
+          <Avatar src={bot?.avatar_url} alt="" sx={{ width: 48, height: 48, bgcolor: "primary.main" }}>
+            {bot ? bot.name.slice(0, 1) : <LogoMark size={28} />}
+          </Avatar>
+          <Typography variant="h1" component="h1">{title}</Typography>
         </Stack>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-          Label what your searches find, and tune the rules that decide what gets posted to Discord.
+          Manage the bot's searches, channels and notifications, and tune the rules that decide what gets posted to
+          Discord.
         </Typography>
         {method === "discord" ? (
           <DiscordSignIn ended={ended} />
@@ -72,8 +80,9 @@ function DiscordSignIn({ ended }: { ended: SessionEnd | null }) {
       </Button>
       {!notice && (
         <Typography variant="body2" color="text.secondary">
-          You need the Manage Channels permission in a server this bot is in. The dashboard only asks Discord who you
-          are; the bot checks your servers itself.
+          Anyone in a server this bot is in can sign in to manage their own 🔔 notifications. With Manage Channels in a
+          server you manage its searches too. The dashboard only asks Discord who you are; the bot checks your servers
+          itself.
         </Typography>
       )}
     </Stack>

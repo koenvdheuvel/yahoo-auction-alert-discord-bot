@@ -10,7 +10,6 @@ export const SIGN_IN_ERRORS: Record<string, SignInNotice> = {
   cancelled: { severity: "info", message: "You cancelled on Discord, so you are not signed in." },
   state: { severity: "warning", message: "This sign-in expired, or it was started in another browser or tab. Start again from this page." },
   not_member: { severity: "error", message: "Your Discord account is not in any server this bot is in. Ask a server admin to invite you, or sign in with another account." },
-  missing_permission: { severity: "error", message: "You need the Manage Channels permission in a server this bot is in. Ask a server admin for it, then sign in again." },
   discord_unavailable: { severity: "error", message: "The dashboard couldn't reach Discord to check your access. Try again in a minute." },
   discord_error: { severity: "error", message: "Discord didn't accept the sign-in. Try again." },
   rate_limited: { severity: "error", message: "Too many sign-in attempts. Try again in a minute." },
@@ -19,7 +18,7 @@ export const SIGN_IN_ERRORS: Record<string, SignInNotice> = {
 
 export const ACCESS_REVOKED: SignInNotice = {
   severity: "warning",
-  message: "You no longer have Manage Channels in a server this bot is in, so you were signed out.",
+  message: "You are no longer in a server this bot is in, so you were signed out.",
 };
 
 export function signInNotice(reason: string): SignInNotice {

@@ -25,22 +25,29 @@ interface Props {
   /** The Discord server the totals cover, when the person picked one. */
   guildName: string | null;
   draft: Draft;
+  /** Buttons for the search, such as Unregister. */
+  actions?: ReactNode;
 }
 
-export function AlertHeader({ alert, totals, guildName, draft }: Props) {
+export function AlertHeader({ alert, totals, guildName, draft, actions }: Props) {
   return (
     <Box component="header" sx={{ px: { xs: 2, md: 3 }, pt: 3, pb: 2 }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ justifyContent: "space-between", alignItems: { sm: "flex-start" } }}>
-        <Typography variant="h1" sx={{ overflowWrap: "anywhere" }}>{alert ? alert.search_query : "All listings"}</Typography>
+        <Typography variant="h1" component="h2" sx={{ overflowWrap: "anywhere" }}>
+          {alert ? alert.search_query : "All listings"}
+        </Typography>
         {alert && draft.ready && (
-          <Box sx={{ textAlign: { sm: "right" }, flex: "none" }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {draft.published ? `Published rules: version ${draft.published.version}` : "No published rules yet"}
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              {draft.edited ? "Your draft has unpublished changes" : draft.published
-                ? `Since ${formatDateTime(draft.published.created_at)}` : "Only the Discord filters apply"}
-            </Typography>
+          <Box sx={{ textAlign: { sm: "right" }, flex: "none", display: "flex", gap: 2, alignItems: "flex-start" }}>
+            <Box>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {draft.published ? `Published rules: version ${draft.published.version}` : "No published rules yet"}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {draft.edited ? "Your draft has unpublished changes" : draft.published
+                  ? `Since ${formatDateTime(draft.published.created_at)}` : "Only the Discord filters apply"}
+              </Typography>
+            </Box>
+            {actions}
           </Box>
         )}
       </Stack>

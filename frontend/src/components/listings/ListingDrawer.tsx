@@ -14,6 +14,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { KeyboardEvent, ReactNode } from "react";
 
+import { useSession } from "../../api/hooks";
 import type { Candidate, Label } from "../../api/types";
 import { formatDateTime, formatPrice, safeUrl } from "../../lib/format";
 import { isTyping } from "../../lib/hooks";
@@ -21,6 +22,7 @@ import { listingTitle } from "../../lib/listing";
 import { LABEL_ORDER, LABELS, sourceName } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import { ReasonList, VerdictText } from "../common/Decision";
+import { FollowButton } from "../common/FollowButton";
 import { ListingImage } from "../common/ListingImage";
 import { LabelMark } from "../common/Marks";
 import { LabelButtons } from "./LabelButtons";
@@ -69,6 +71,8 @@ export function ListingDrawer(props: Props) {
 
   const url = candidate ? safeUrl(candidate.payload.url) : null;
   const title = candidate ? listingTitle(candidate) : "";
+  // 🔔 follows a stored listing; listings the bot filtered were never stored.
+  const notifications = useSession().data?.features?.notifications ?? false;
   return (
     <Drawer anchor="right" open={candidate !== null} onClose={onClose} sx={{ zIndex: (theme) => theme.zIndex.modal }}
       slotProps={{ paper: { sx: { width: { xs: "100%", sm: 460 } }, onKeyDown, "aria-label": "Listing details" } }}>
@@ -136,6 +140,9 @@ export function ListingDrawer(props: Props) {
               <Button variant="outlined" color="inherit" startIcon={<ScienceOutlined />} onClick={() => onTestTitle(candidate)}>
                 Test with the draft
               </Button>
+              {notifications && candidate.item_id && (
+                <FollowButton itemId={candidate.item_id} following={candidate.subscribed ?? false} />
+              )}
             </Stack>
           </Box>
         </Box>

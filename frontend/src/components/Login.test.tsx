@@ -34,7 +34,6 @@ describe("Login with Discord", () => {
     ["cancelled", "You cancelled on Discord"],
     ["state", "This sign-in expired"],
     ["not_member", "not in any server this bot is in"],
-    ["missing_permission", "You need the Manage Channels permission"],
     ["discord_unavailable", "couldn't reach Discord"],
     ["rate_limited", "Too many sign-in attempts"],
     ["cookie", "didn't keep the dashboard's sign-in cookie"],
@@ -50,7 +49,13 @@ describe("Login with Discord", () => {
 
   it("says when access was lost on Discord", () => {
     show({ ended: "revoked" });
-    expect(screen.getByRole("alert")).toHaveTextContent("You no longer have Manage Channels");
+    expect(screen.getByRole("alert")).toHaveTextContent("You are no longer in a server this bot is in");
+  });
+
+  it("shows the bot's name and avatar", () => {
+    show({ title: "PosterFinder Dashboard", bot: { id: "9", name: "PosterFinder", avatar_url: "https://cdn.example/bot.png" } });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("PosterFinder Dashboard");
+    expect(document.querySelector('img[src="https://cdn.example/bot.png"]')).not.toBeNull();
   });
 
   it("says when the session ran out", () => {

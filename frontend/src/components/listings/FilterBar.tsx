@@ -18,7 +18,7 @@ import type { Facets, LabelFilter, Source, Verdict } from "../../api/types";
 import { formatCount } from "../../lib/format";
 import { LABEL_ORDER, LABELS, SOURCES, VERDICTS } from "../../lib/vocabulary";
 import { figures } from "../../theme";
-import type { ListingFilters } from "../Workspace";
+import type { ListingFilters } from "../views/SearchView";
 
 export type View = "grid" | "list";
 

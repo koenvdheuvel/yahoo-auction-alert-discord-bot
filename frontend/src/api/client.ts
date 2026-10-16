@@ -1,6 +1,18 @@
 import type {
+  AlertDetail,
+  AlertSummary,
   AlertsResponse,
   Candidate,
+  ChannelList,
+  ChannelPosts,
+  CleanupPreview,
+  GuildStatus,
+  GuildSummary,
+  HiddenListings,
+  HiddenSubscription,
+  HistoryScan,
+  ScanAction,
+  Subscription,
   CandidatePage,
   Decision,
   ImportResult,
@@ -44,7 +56,7 @@ export function onSessionEnded(listener: (error: ApiError) => void): () => void 
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   signal?: AbortSignal;
 }
@@ -140,4 +152,56 @@ export const api = {
     }),
   removalStatus: (alertId: string, signal?: AbortSignal) =>
     request<RemovalStatus>(`/api/alerts/${encodeURIComponent(alertId)}/posts/removal`, { signal }),
+
+  guilds: (signal?: AbortSignal) => request<{ guilds: GuildSummary[] }>("/api/guilds", { signal }),
+  channels: (guildId: string, signal?: AbortSignal) =>
+    request<ChannelList>(`/api/guilds/${encodeURIComponent(guildId)}/channels`, { signal }),
+  status: (guildId: string, signal?: AbortSignal) =>
+    request<GuildStatus>(`/api/guilds/${encodeURIComponent(guildId)}/status`, { signal }),
+  /** /register in a channel. The server works out the channel's server with Discord. */
+  register: (channelId: string, searchQuery: string) =>
+    request<AlertSummary>("/api/alerts", { method: "POST", body: { channel_id: channelId, search_query: searchQuery } }),
+  alert: (alertId: string, signal?: AbortSignal) =>
+    request<AlertDetail>(`/api/alerts/${encodeURIComponent(alertId)}`, { signal }),
+  unregister: (alertId: string) =>
+    request<{ unregistered: boolean }>(`/api/alerts/${encodeURIComponent(alertId)}`, { method: "DELETE", body: {} }),
+  deleteLegacyFilter: (alertId: string, filterId: number) =>
+    request<{ deleted: boolean }>(`/api/alerts/${encodeURIComponent(alertId)}/legacy-filters/${filterId}`,
+      { method: "DELETE", body: {} }),
+  posts: (channelId: string, alertId: string | null, before: string | null, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    if (alertId) params.set("alert_id", alertId);
+    if (before) params.set("before", before);
+    const query = params.toString();
+    return request<ChannelPosts>(`/api/channels/${encodeURIComponent(channelId)}/posts${query ? `?${query}` : ""}`, { signal });
+  },
+  hidden: (channelId: string, signal?: AbortSignal) =>
+    request<HiddenListings>(`/api/channels/${encodeURIComponent(channelId)}/hidden`, { signal }),
+  hide: (channelId: string, itemId: string) =>
+    request<{ hidden: boolean; posts_queued: number; bot_running: boolean }>(
+      `/api/channels/${encodeURIComponent(channelId)}/hidden/${encodeURIComponent(itemId)}`, { method: "PUT", body: {} }),
+  unhide: (channelId: string, itemId: string) =>
+    request<{ hidden: boolean }>(`/api/channels/${encodeURIComponent(channelId)}/hidden/${encodeURIComponent(itemId)}`,
+      { method: "DELETE", body: {} }),
+  cleanupPreview: (channelId: string, days: RemovalDays, alertId: string | null, signal?: AbortSignal) =>
+    request<CleanupPreview>(`/api/channels/${encodeURIComponent(channelId)}/posts/removal-preview`, {
+      method: "POST", body: alertId ? { days, alert_id: alertId } : { days }, signal }),
+  cleanup: (channelId: string, messageIds: string[]) =>
+    request<RemovalResult>(`/api/channels/${encodeURIComponent(channelId)}/posts/removal`, {
+      method: "POST", body: { message_ids: messageIds } }),
+  cleanupStatus: (channelId: string, signal?: AbortSignal) =>
+    request<RemovalStatus>(`/api/channels/${encodeURIComponent(channelId)}/posts/removal`, { signal }),
+  startScan: (channelId: string, action: ScanAction, count?: number) =>
+    request<{ scan: HistoryScan }>(`/api/channels/${encodeURIComponent(channelId)}/history-scan`, {
+      method: "POST", body: count === undefined ? { action } : { action, count } }),
+  scanStatus: (channelId: string, signal?: AbortSignal) =>
+    request<{ scan: HistoryScan | null; available: boolean }>(
+      `/api/channels/${encodeURIComponent(channelId)}/history-scan`, { signal }),
+  notifications: (signal?: AbortSignal) =>
+    request<{ items: (Subscription | HiddenSubscription)[] }>("/api/me/notifications", { signal }),
+  subscribe: (itemId: string) =>
+    request<{ subscribed: boolean; created: boolean }>(`/api/me/notifications/${encodeURIComponent(itemId)}`,
+      { method: "PUT", body: {} }),
+  unsubscribe: (itemId: string) =>
+    request<{ subscribed: boolean }>(`/api/me/notifications/${encodeURIComponent(itemId)}`, { method: "DELETE", body: {} }),
 };
