@@ -24,7 +24,7 @@ import { FilterBar, ViewOptions, type View } from "./FilterBar";
 import { ListingDrawer } from "./ListingDrawer";
 import { ListingFrame } from "./ListingFrame";
 
-const VIEW_KEY = "filter-lab:view";
+const VIEW_KEY = "dashboard:view";
 // Frames of at least 196px; a phone still gets two columns (the gap is 12px).
 const GRID_COLUMNS = "repeat(auto-fill, minmax(min(196px, calc(50% - 6px)), 1fr))";
 

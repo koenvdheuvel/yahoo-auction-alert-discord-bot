@@ -4,8 +4,8 @@ import type { Ruleset } from "../api/types";
 
 // Drafts survive reloads and expired sessions. Signing out removes them, and so does someone
 // else signing in on this browser. The access key is never stored in the browser.
-const PREFIX = "filter-lab:draft:";
-const OWNER = "filter-lab:draft-owner";
+const PREFIX = "dashboard:draft:";
+const OWNER = "dashboard:draft-owner";
 const listeners = new Set<() => void>();
 
 export interface StoredDraft {
