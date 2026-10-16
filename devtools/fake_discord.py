@@ -361,9 +361,19 @@ button.cancel{{background:#4e5058}}</style></head>
                f'height="16" rx="8" fill="#fff"/></svg>')
         return web.Response(text=svg, content_type="image/svg+xml")
 
-    # A page for changing members and roles while someone is signed in, to try revocation.
+    # A page for changing members, roles and channels while someone is signed in, to try revocation.
 
     async def control_page(self, request):
+        channels = []
+        for guild in self.guilds.values():
+            for channel_id, payload in guild.channels.items():
+                if payload["type"] == CHANNEL_TYPES["category"]:
+                    continue
+                channels.append(
+                    f"<tr><td>{html.escape(guild.name)}</td><td>{html.escape(payload['name'])}</td><td>{channel_id}</td>"
+                    f'<td><form method="post"><input type="hidden" name="guild" value="{guild.id}">'
+                    f'<input type="hidden" name="channel" value="{channel_id}">'
+                    '<button name="action" value="delete_channel">Delete channel</button></form></td></tr>')
         rows = []
         for guild in self.guilds.values():
             for user_id, user in self.users.items():
@@ -380,6 +390,8 @@ button.cancel{{background:#4e5058}}</style></head>
 </head><body><h1>Fake Discord control</h1><p>Discord is {"down" if self.down else "up"}.</p>
 <form method="post"><button name="action" value="toggle_down">Toggle Discord down</button></form>
 <table border="1" cellpadding="6"><tr><th>Server</th><th>User</th><th>Now</th><th>Change</th></tr>{"".join(rows)}
+</table><h2>Channels</h2>
+<table border="1" cellpadding="6"><tr><th>Server</th><th>Channel</th><th>ID</th><th>Change</th></tr>{"".join(channels)}
 </table></body></html>"""
         return web.Response(text=page, content_type="text/html")
 
@@ -387,6 +399,8 @@ button.cancel{{background:#4e5058}}</style></head>
         form = dict(await request.post())
         if form["action"] == "toggle_down":
             self.down = not self.down
+        elif form["action"] == "delete_channel":
+            self.guilds[int(form["guild"])].channels.pop(int(form["channel"]), None)
         else:
             guild, user_id = self.guilds[int(form["guild"])], int(form["user"])
             if form["action"] == "remove":
