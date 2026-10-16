@@ -494,10 +494,15 @@ class Management:
                 except DiscordUnavailable:
                     lookup = Lookup()
                 member = (session.members or {}).get(lookup.guild.id) if lookup.guild else None
+                # A private thread also needs the person to be in it, which the bot cannot check
+                # without asking Discord; only Manage Threads, which sees every thread, counts.
+                needed = hikari.Permissions.VIEW_CHANNEL | (
+                    hikari.Permissions.MANAGE_THREADS if lookup.channel and lookup.channel.kind == "private_thread"
+                    else hikari.Permissions.NONE)
                 visible = (lookup.channel is not None and member is not None
                            and (guilds is None or lookup.guild.id in guilds)
-                           and bool(member_permissions(lookup.guild, lookup.channel, user_id, member.role_ids,
-                                                       member.timed_out) & hikari.Permissions.VIEW_CHANNEL))
+                           and member_permissions(lookup.guild, lookup.channel, user_id, member.role_ids,
+                                                  member.timed_out) & needed == needed)
                 seen[channel_id] = lookup if visible else None
             return seen[channel_id]
 

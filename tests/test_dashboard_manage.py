@@ -433,6 +433,20 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
         candidate = (await (await self.client.get("/api/candidates")).json())["items"][0]
         self.assertFalse(candidate["subscribed"])
 
+    async def test_a_private_thread_counts_as_seen_only_with_manage_threads(self):
+        self.fake.add_channel(GUILD_A, 48, "secret-deals", "private_thread", parent_id=POSTERS)
+        item = await self.item("in-a-private-thread")
+        await self.post(item, 48, None, 80)
+        await self.repository.subscribe(item, ALICE)
+        self.sign_in(ALICE)
+        items = (await (await self.client.get("/api/me/notifications")).json())["items"]
+        self.assertEqual(items, [{"item_id": str(item), "redacted": True}])
+        # With Manage Threads she sees every thread, private ones included.
+        self.fake.guilds[GUILD_A].roles[MANAGER] |= PERMISSIONS["manage_threads"]
+        self.dashboard.directory = ChannelDirectory(self.rest)
+        items = (await (await self.client.get("/api/me/notifications")).json())["items"]
+        self.assertEqual([post["channel_name"] for post in items[0]["posts"]], ["secret-deals"])
+
     async def test_status_shows_each_searchs_checks_and_waiting_posts(self):
         item = await self.item("waiting")
         await self.repository._call("test_job", lambda: DeliveryJob.create(
