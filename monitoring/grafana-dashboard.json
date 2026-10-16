@@ -936,7 +936,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "time() - auction_bot_source_last_success_timestamp_seconds{job=\"auction-bot\", instance=~\"$instance\"}",
+          "expr": "time() - (auction_bot_source_last_success_timestamp_seconds{job=\"auction-bot\", instance=~\"$instance\"} > 0)",
           "legendFormat": "{{instance}} {{source}}",
           "refId": "A"
         }
@@ -1132,7 +1132,7 @@
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "sum by (instance, search_query, source, outcome) (increase(auction_bot_alert_checks_total{job=\"auction-bot\", instance=~\"$instance\"}[$__range]) * on (job, instance, alert_id) group_left(search_query) auction_bot_alert_info{job=\"auction-bot\", instance=~\"$instance\"})",
+          "expr": "(sum by (instance, search_query, source, outcome) (increase(auction_bot_alert_checks_total{job=\"auction-bot\", instance=~\"$instance\"}[$__range]) * on (job, instance, alert_id) group_left(search_query) auction_bot_alert_info{job=\"auction-bot\", instance=~\"$instance\"})) > 0",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -1982,7 +1982,7 @@
             "uid": "${loki}"
           },
           "refId": "A",
-          "expr": "{container=~\"$container\"} | json | level=~\"WARNING|ERROR|CRITICAL\""
+          "expr": "{container=~\"$container\"} != \"running on optimization level\" | json | level=~\"WARNING|ERROR|CRITICAL\""
         }
       ],
       "options": {
