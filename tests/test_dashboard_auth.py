@@ -16,6 +16,7 @@ import pytest
 
 from commands.base import ADMIN_PERMISSION
 from config import Settings
+from dashboard_limits import parse_proxies
 from devtools.fake_discord import BOT_ID, PERMISSIONS, FakeDiscord
 from filtering import default_ruleset
 from models import Item, Message, configure_database, create_tables, database
@@ -320,11 +321,93 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         for value in [SECRET, *self.fake.issued, query["state"][0], handshake.value, session.value]:
             self.assertNotIn(value, output)
 
+    def trust_the_test_client(self):
+        """The test client stands in for a reverse proxy on this computer."""
+        self.dashboard.settings = replace(self.dashboard.settings, dashboard_trusted_proxies=parse_proxies("127.0.0.1"))
+
     async def test_the_session_survives_behind_a_tls_proxy_with_secure_cookies(self):
         self.dashboard.public_url = self.public.replace("http:", "https:")
+        self.trust_the_test_client()
         response = await self.client.get("/auth/discord", headers={"X-Forwarded-Proto": "https"},
                                          allow_redirects=False)
         self.assertTrue(response.cookies["dashboard_login"]["secure"])
+
+    async def test_x_forwarded_proto_from_a_peer_that_is_not_a_trusted_proxy_is_ignored(self):
+        self.dashboard.public_url = self.public.replace("http:", "https:")
+        response = await self.client.get("/auth/discord", headers={"X-Forwarded-Proto": "https"},
+                                         allow_redirects=False)
+        # Still plain http: the clear error for a proxy that does not say https, and no cookie.
+        self.assertEqual(response.status, 500)
+        self.assertNotIn("dashboard_login", response.cookies)
+
+    async def cancel_as(self, visitor):
+        """One sign-in that Discord sends back cancelled, from a visitor behind the trusted proxy."""
+        headers = {"X-Forwarded-For": visitor}
+        start = await self.client.get("/auth/discord", headers=headers, allow_redirects=False)
+        if start.status != 302:
+            # Refused before it reached Discord.
+            return start
+        url = urlsplit(self.fake.cancel(start.headers["Location"]))
+        return await self.client.get(f"{url.path}?{url.query}", headers=headers, allow_redirects=False)
+
+    async def test_one_visitor_is_locked_out_while_another_still_signs_in(self):
+        self.trust_the_test_client()
+        for _ in range(10):
+            self.denied(await self.cancel_as("203.0.113.5"), "cancelled")
+        self.denied(await self.client.get("/auth/discord", headers={"X-Forwarded-For": "203.0.113.5"},
+                                          allow_redirects=False), "rate_limited")
+        # Someone else behind the same proxy is not affected.
+        other = {"X-Forwarded-For": "198.51.100.7"}
+        start = await self.client.get("/auth/discord", headers=other, allow_redirects=False)
+        url = urlsplit(self.fake.approve(start.headers["Location"], ALICE))
+        response = await self.client.get(f"{url.path}?{url.query}", headers=other, allow_redirects=False)
+        self.assertEqual(response.status, 200)
+        self.assertIn("dashboard_session", response.cookies)
+        # Cancels never count for everyone together.
+        self.assertEqual(len(self.dashboard.discord_failures), 0)
+
+    async def test_a_forged_forwarded_for_from_an_untrusted_peer_is_ignored(self):
+        # No trusted proxies: the header is the visitor's own words, so every attempt is the same visitor.
+        for index in range(10):
+            self.denied(await self.cancel_as(f"203.0.113.{index}"), "cancelled")
+        self.denied(await self.client.get("/auth/discord", headers={"X-Forwarded-For": "198.51.100.200"},
+                                          allow_redirects=False), "rate_limited")
+
+    async def test_failures_that_cost_discord_calls_stop_everyone_for_a_minute(self):
+        from dashboard_limits import DISCORD_FAILURES_PER_MINUTE, FailureLimiter
+
+        self.assertEqual(DISCORD_FAILURES_PER_MINUTE, 60)
+        self.trust_the_test_client()
+        self.dashboard.discord_failures = FailureLimiter(3, max_keys=1)
+
+        async def callback_as(visitor, code=None):
+            headers = {"X-Forwarded-For": visitor}
+            start = await self.client.get("/auth/discord", headers=headers, allow_redirects=False)
+            if start.status != 302 or not start.headers["Location"].startswith(self.fake.base_url):
+                return start
+            url = urlsplit(self.fake.approve(start.headers["Location"], ALICE))
+            query = parse_qs(url.query)
+            if code is not None:
+                query["code"] = [code]
+            return await self.client.get(url.path, params={key: values[0] for key, values in query.items()},
+                                         headers=headers, allow_redirects=False)
+        # Codes Discord refuses, from three different visitors.
+        for index in range(3):
+            self.denied(await callback_as(f"203.0.113.{index}", code="refused-by-discord"), "discord_error")
+        exchanges = self.fake.calls.count(("POST", "/api/v10/oauth2/token"))
+        # A fourth visitor with a good code is told to wait, and Discord is not asked.
+        self.denied(await callback_as("198.51.100.1"), "rate_limited")
+        self.assertEqual(self.fake.calls.count(("POST", "/api/v10/oauth2/token")), exchanges)
+
+    async def test_ipv6_visitors_count_per_64(self):
+        self.trust_the_test_client()
+        for index in range(10):
+            self.denied(await self.cancel_as(f"2001:db8:1:2::{index + 1:x}"), "cancelled")
+        self.denied(await self.client.get("/auth/discord", headers={"X-Forwarded-For": "2001:db8:1:2:ffff::1"},
+                                          allow_redirects=False), "rate_limited")
+        start = await self.client.get("/auth/discord", headers={"X-Forwarded-For": "2001:db8:1:3::1"},
+                                      allow_redirects=False)
+        self.assertTrue(start.headers["Location"].startswith(self.fake.base_url))
 
     async def test_a_proxy_that_hides_https_gets_a_clear_error_instead_of_a_redirect_loop(self):
         self.dashboard.public_url = self.public.replace("http:", "https:")

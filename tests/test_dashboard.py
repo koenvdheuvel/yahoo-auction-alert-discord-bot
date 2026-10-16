@@ -19,6 +19,7 @@ from observability import Metrics
 from providers import YahooAuctionsAdapter
 from repositories import Repository
 from dashboard import NONCE_PLACEHOLDER, DashboardServer, dashboard_key
+from dashboard_limits import parse_proxies
 from storechecker import Ingestion
 
 
@@ -147,6 +148,11 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_login_behind_tls_terminating_proxy(self):
         https_origin = self.origin.replace("http:", "https:")
+        # From a peer that is not a trusted proxy the header is ignored, so the https page does not match.
+        response = await self.client.post("/api/login", json={"token": TOKEN},
+                                          headers={"Origin": https_origin, "X-Forwarded-Proto": "https"})
+        self.assertEqual(response.status, 403)
+        self.dashboard.settings = replace(self.dashboard.settings, dashboard_trusted_proxies=parse_proxies("127.0.0.1"))
         response = await self.client.post("/api/login", json={"token": TOKEN},
                                           headers={"Origin": https_origin, "X-Forwarded-Proto": "https"})
         self.assertEqual(response.status, 200)
@@ -265,6 +271,18 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         response = await self.post("/api/login", {"token": TOKEN})
         self.assertEqual(response.status, 429)
         self.assertEqual((await self.repository.list_candidates())["total"], 0)
+
+    async def test_wrong_keys_lock_out_only_the_visitor_who_sent_them(self):
+        self.dashboard.settings = replace(self.dashboard.settings, dashboard_trusted_proxies=parse_proxies("127.0.0.1"))
+        guesser, owner = {"X-Forwarded-For": "203.0.113.9"}, {"X-Forwarded-For": "198.51.100.4"}
+        for _ in range(10):
+            response = await self.client.post("/api/login", json={"token": "wrong-but-long-enough"},
+                                              headers={**self.headers, **guesser})
+            self.assertEqual(response.status, 401)
+        response = await self.client.post("/api/login", json={"token": TOKEN}, headers={**self.headers, **guesser})
+        self.assertEqual(response.status, 429)
+        response = await self.client.post("/api/login", json={"token": TOKEN}, headers={**self.headers, **owner})
+        self.assertEqual(response.status, 200)
 
     async def test_concurrent_bad_logins_share_the_same_bounded_attempt_window(self):
         original_body = self.dashboard.body

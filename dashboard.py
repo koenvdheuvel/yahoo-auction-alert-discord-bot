@@ -3,7 +3,6 @@ import argparse
 import asyncio
 import base64
 import binascii
-from collections import deque
 from dataclasses import dataclass, replace
 from functools import partial
 import hashlib
@@ -23,6 +22,8 @@ from aiohttp import web
 
 from dashboard_auth import (CALLBACK_PATH, LOGIN_PATH, DiscordGuilds, DiscordOAuth, DiscordRefused,
                             DiscordUnavailable)
+from dashboard_limits import (DISCORD_FAILURES_PER_MINUTE, VISITOR_FAILURES_PER_MINUTE, FailureLimiter,
+                              client_address, forwarded_proto, visitor_key)
 from dashboard_manage import Management
 from discord_directory import ChannelDirectory
 from review_repository import ReviewConflict, ReviewNotFound, ReviewValidation
@@ -49,8 +50,6 @@ ACCESS_SECONDS = 300
 ACCESS_RETRY_SECONDS = 30
 # A session ended by a check is remembered this long, so a reload can still say why.
 REVOKED_SECONDS = 600
-# Failed sign-ins allowed per minute, for the access key and Discord together.
-LOGIN_FAILURES_PER_MINUTE = 10
 # Where sign-in may return to: the UI's page with its search and tab, nothing else.
 NEXT_PAGE = re.compile(r"/(\?[A-Za-z0-9=&_-]{1,200})?")
 SOURCES = {"yahooauction", "mercari", "surugaya"}
@@ -180,6 +179,8 @@ class Session:
 
 # The request's session, set by the guard on every /api/ route that needs one.
 SESSION = web.RequestKey("session", Session)
+# Who the request comes from, as failed sign-ins are counted: an IPv4 address or an IPv6 /64.
+VISITOR = web.RequestKey("visitor", str)
 
 
 class AccessRevoked(Exception):
@@ -227,7 +228,11 @@ class DashboardServer:
         self.login_seconds = LOGIN_SECONDS
         # Cookies of sessions a check ended, to the time they are forgotten.
         self.revoked = {}
-        self.login_failures = deque()
+        # Failed sign-ins per visitor, for the access key and Discord alike. A visitor past the
+        # limit is refused for the rest of the minute; everyone else can still sign in.
+        self.login_failures = FailureLimiter(VISITOR_FAILURES_PER_MINUTE)
+        # Failed sign-ins that cost Discord API calls, from everyone together.
+        self.discord_failures = FailureLimiter(DISCORD_FAILURES_PER_MINUTE, max_keys=1)
         self.started = False
 
     @property
@@ -341,11 +346,16 @@ class DashboardServer:
             page = "/"
         return None, _next_page(page), self._sign("pkce", state)
 
-    def login_blocked(self):
-        now = time.monotonic()
-        while self.login_failures and self.login_failures[0] < now - 60:
-            self.login_failures.popleft()
-        return len(self.login_failures) >= LOGIN_FAILURES_PER_MINUTE
+    def login_blocked(self, request, discord=False):
+        """True when the visitor had too many failed sign-ins, or, for a step that calls Discord,
+        when sign-ins that cost Discord calls failed too often for everyone together."""
+        return self.login_failures.blocked(request[VISITOR]) or (discord and self.discord_failures.blocked("discord"))
+
+    def visitor(self, request):
+        """The request's visitor key, from the TCP peer or from what a trusted proxy says."""
+        address = client_address(request.remote, request.headers.getall("X-Forwarded-For", []),
+                                 self.settings.dashboard_trusted_proxies)
+        return visitor_key(address)
 
     def open_session(self, session):
         now = time.monotonic()
@@ -397,13 +407,15 @@ class DashboardServer:
         async def guard(request, handler):
             started = time.monotonic()
             try:
-                # Behind a TLS-terminating proxy (traefik) the browser's Origin is https while the
-                # proxied request is http; adopt the forwarded scheme so the same-origin check and
-                # the Secure cookie flag reflect what the browser sees. A cross-site page cannot set
-                # this header without a CORS preflight, which is never granted.
-                forwarded = request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower()
-                if forwarded in {"http", "https"} and forwarded != request.scheme:
+                # Behind a TLS-terminating proxy the browser's Origin is https while the proxied
+                # request is http; adopt the forwarded scheme so the same-origin check and the Secure
+                # cookie flag reflect what the browser sees. Only a trusted proxy may say so: anyone
+                # else could send the header too.
+                forwarded = forwarded_proto(request.remote, request.headers.get("X-Forwarded-Proto"),
+                                            self.settings.dashboard_trusted_proxies)
+                if forwarded is not None and forwarded != request.scheme:
                     request = request.clone(scheme=forwarded)
+                request[VISITOR] = self.visitor(request)
                 if request.path.startswith("/api/"):
                     if request.method not in {"GET", "HEAD", "OPTIONS"} and not self.same_origin(request):
                         raise web.HTTPForbidden(reason="Changes must come from a dashboard page at this address")
@@ -503,8 +515,13 @@ class DashboardServer:
             await self.close()
             raise
         self.started = True
+        self.log_started()
+
+    def log_started(self):
         logger.info("dashboard_started", extra={"fields": {
-            "host": self.settings.dashboard_host, "port": self.settings.dashboard_port, "sign_in": self.method}})
+            "host": self.settings.dashboard_host, "port": self.settings.dashboard_port, "sign_in": self.method,
+            # Only these may set X-Forwarded-For and X-Forwarded-Proto; empty means nobody.
+            "trusted_proxies": [str(network) for network in self.settings.dashboard_trusted_proxies]}})
 
     async def close(self):
         if self.runner is not None:
@@ -595,13 +612,13 @@ class DashboardServer:
         data = await self.body(request)
         # Check after reading the body so concurrent requests cannot all reserve
         # the same remaining attempt before yielding to the event loop.
-        if self.login_blocked():
+        if self.login_blocked(request):
             self.count("dashboard_logins", "access_key", "rate_limited")
             raise web.HTTPTooManyRequests(reason="Too many attempts. Try again in a minute.")
         supplied = data.get("token", "")
         if not isinstance(supplied, str) or len(supplied) > 512 or not secrets.compare_digest(
                 supplied.encode(), self.token.encode()):
-            self.login_failures.append(time.monotonic())
+            self.login_failures.record(request[VISITOR])
             self.count("dashboard_logins", "access_key", "wrong_key")
             logger.warning("dashboard_login_denied", extra={"fields": {"method": "access_key", "reason": "wrong_key"}})
             raise web.HTTPUnauthorized(reason="The access key is incorrect")
@@ -613,13 +630,18 @@ class DashboardServer:
         self.set_session_cookie(response, request, cookie)
         return response
 
-    def signin_failed(self, reason, *, user=None, detail=None, counted=True, used_login=False):
+    def signin_failed(self, request, reason, *, user=None, detail=None, counted=True, discord=False,
+                      used_login=False):
         """Send the browser back to the sign-in page, which explains the reason.
 
-        used_login: the request used up the sign-in attempt, so its login cookie goes too.
+        counted: the failure counts against the visitor. discord: it also cost Discord API calls,
+        so it counts for everyone together. used_login: the request used up the sign-in attempt,
+        so its login cookie goes too.
         """
         if counted:
-            self.login_failures.append(time.monotonic())
+            self.login_failures.record(request[VISITOR])
+        if discord:
+            self.discord_failures.record("discord")
         self.count("dashboard_logins", "discord", reason)
         # Refusals while blocked are not logged one by one; the metric still counts them.
         log = logger.debug if reason == "rate_limited" else logger.warning
@@ -643,12 +665,13 @@ class DashboardServer:
                     f"{self.public_url}. A reverse proxy that ends TLS must send X-Forwarded-Proto: https."))
             # The login cookie has to be set on the address Discord sends people back to.
             return _redirect(f"{self.public_url}{LOGIN_PATH}?{urlencode({'next': page})}")
-        if self.login_blocked():
-            return self.signin_failed("rate_limited", counted=False)
+        if self.login_blocked(request, discord=True):
+            return self.signin_failed(request, "rate_limited", counted=False)
         try:
             client_id = await self.guild_access.application_id()
         except DiscordUnavailable as error:
-            return self.signin_failed("discord_unavailable", detail=str(error)[:300], counted=False)
+            return self.signin_failed(request, "discord_unavailable", detail=str(error)[:300], counted=False,
+                                      discord=True)
         cookie, state, verifier = self.new_login(page)
         response = _redirect(self.oauth.authorize_url(client_id, state, verifier))
         # Lax, so the browser sends it when Discord sends the person back; Strict would not be sent.
@@ -657,35 +680,40 @@ class DashboardServer:
         return response
 
     async def discord_callback(self, request):
-        if self.login_blocked():
-            return self.signin_failed("rate_limited", counted=False)
+        if self.login_blocked(request):
+            return self.signin_failed(request, "rate_limited", counted=False)
         query = request.query
         problem, page, verifier = self.check_login(query.get("state", ""), request.cookies.get(LOGIN_COOKIE, ""))
         if problem is not None:
-            # Not counted for the rate limit: anyone can send a broken link, and counting those
-            # would let them block every sign-in. Nothing here reaches Discord.
-            return self.signin_failed("state", detail=problem, used_login=problem == "expired", counted=False)
+            # Not counted: anyone can send a broken link, and another site could send a visitor's
+            # browser to one to lock them out. Nothing here reaches Discord.
+            return self.signin_failed(request, "state", detail=problem, used_login=problem == "expired", counted=False)
         # From here the attempt is used up: the login cookie goes, so the same callback cannot run
-        # twice in this browser, and Discord accepts each code only once anyway.
-        failed = partial(self.signin_failed, used_login=True)
+        # twice in this browser, and Discord accepts each code only once anyway. A cancel counts
+        # against the visitor only; what Discord had to answer counts for everyone too.
+        failed = partial(self.signin_failed, request, used_login=True)
+        costly = partial(failed, discord=True)
         if "error" in query:
             error = query["error"] if query["error"].isidentifier() else "other"
             return failed("cancelled" if error == "access_denied" else "discord_error", detail=error[:64])
         code = query.get("code", "")
         if not 1 <= len(code) <= 512:
             return failed("discord_error", detail="no_code")
+        if self.discord_failures.blocked("discord"):
+            # Too many sign-ins failed at Discord this minute, from anyone: wait before asking it again.
+            return failed("rate_limited", counted=False)
         try:
             user = await self.oauth.identify(await self.guild_access.application_id(), code, verifier)
         except DiscordRefused as error:
-            return failed("discord_error", detail=str(error))
+            return costly("discord_error", detail=str(error))
         except DiscordUnavailable as error:
-            return failed("discord_unavailable", detail=str(error)[:300])
+            return costly("discord_unavailable", detail=str(error)[:300])
         try:
             access = await self.guild_access.check(int(user["id"]))
         except DiscordUnavailable as error:
-            return failed("discord_unavailable", user=user, detail=str(error)[:300])
+            return costly("discord_unavailable", user=user, detail=str(error)[:300])
         if not access.guilds:
-            return failed("missing_permission" if access.member_of else "not_member", user=user)
+            return costly("missing_permission" if access.member_of else "not_member", user=user)
         cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS, user=user, guilds=access.guilds,
                                            members=access.members, checked=time.monotonic()))
         self.count("dashboard_logins", "discord", "success")
@@ -702,7 +730,7 @@ class DashboardServer:
         """The first same-site request after sign-in. It proves the session cookie arrives."""
         session, _ = self.current_session(request)
         if session is None:
-            return self.signin_failed("cookie", counted=False)
+            return self.signin_failed(request, "cookie", counted=False)
         return _redirect(_next_page(request.query.get("next")), status=303)
 
     async def logout(self, request):
@@ -877,6 +905,7 @@ def main(argv=None):
     async def startup(_):
         nonlocal rest_app, rest
         await repository.start()
+        server.log_started()
         if settings.token:
             import hikari
 

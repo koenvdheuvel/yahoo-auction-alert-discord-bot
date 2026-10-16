@@ -69,7 +69,7 @@ UI. If a browser blocks the cookie, the sign-in page says so.
    open the bot's application. For the dev bot that is PosterFinderDev.
 2. Under **OAuth2**, **Redirects**, add the address the dashboard is opened at
    followed by `/auth/discord/callback`. For the dev instance that is
-   `https://yahoo.internal.waxdt.com/auth/discord/callback`. It must match
+   `https://yahoo-dev.waxdt.com/auth/discord/callback`. It must match
    exactly: https, no trailing slash.
 3. Under **OAuth2**, **Client Secret**, reset the secret if it is not shown and
    copy it. The client ID is the application ID; the dashboard reads it from
@@ -77,10 +77,13 @@ UI. If a browser blocks the cookie, the sign-in page says so.
 4. Set these in the bot's `.env`, then restart the bot:
 
    ```bash
-   DASHBOARD_PUBLIC_URL=https://yahoo.internal.waxdt.com
-   DASHBOARD_DISCORD_CLIENT_SECRET=the-client-secret
-   # Or keep the secret in a file instead:
-   # DASHBOARD_DISCORD_CLIENT_SECRET_FILE=/run/secrets/dashboard-client-secret
+   DASHBOARD_PUBLIC_URL=https://yahoo-dev.waxdt.com
+   # The secret in a file, which the dev box already has:
+   DASHBOARD_DISCORD_CLIENT_SECRET_FILE=/data/discord-client-secret
+   # Or the secret itself:
+   # DASHBOARD_DISCORD_CLIENT_SECRET=the-client-secret
+   # The reverse proxies in front of the dashboard (see below):
+   DASHBOARD_TRUSTED_PROXIES=172.18.0.0/16
    ```
 
    Remove `DASHBOARD_TOKEN` and `DASHBOARD_TOKEN_FILE`. An old
@@ -93,10 +96,11 @@ other way round, when the address has a path or uses plain http (only
 when the access-key settings are still set, or when `BOT_TOKEN` is missing.
 The secret is removed from log output if it ever appears there.
 
-Behind a reverse proxy, keep the browser's Host header and send
-`X-Forwarded-Proto: https`; traefik does both by default. Without that header
-the sign-in button answers with an error that names it, instead of sending the
-browser in circles. When someone opens
+Behind a reverse proxy, keep the browser's Host header, send
+`X-Forwarded-Proto: https`, and list the proxy in `DASHBOARD_TRUSTED_PROXIES`
+(see [Behind a reverse proxy or Cloudflare](#behind-a-reverse-proxy-or-cloudflare)).
+Without that header the sign-in button answers with an error that names it,
+instead of sending the browser in circles. When someone opens
 the dashboard at another address, such as an SSH tunnel, the sign-in button first
 moves them to `DASHBOARD_PUBLIC_URL`, because Discord only returns to that
 address.
@@ -143,11 +147,23 @@ says how to build it.
 
 Sessions use an HttpOnly, SameSite Strict cookie and expire after 12 hours; at
 most 128 are kept, and at most 5 per Discord user, so one person cannot push
-everyone else out. Mutations require same-origin JSON requests. Failed
-sign-ins are limited to 10 a minute: wrong access keys, and Discord sign-ins
-that Discord sent back and that then failed, such as a cancel or a missing
-permission. A broken or foreign sign-in link does not count, because anyone can
-send those and they would otherwise block sign-in for everyone. The
+everyone else out. Mutations require same-origin JSON requests.
+
+Failed sign-ins are counted per visitor: one IPv4 address, or one IPv6 /64
+(people usually get a whole /64). After 10 failures in a minute, that visitor's
+sign-ins are refused for the rest of the minute; everyone else can still sign
+in. Wrong access keys count, and so do Discord sign-ins that Discord sent back
+and that then failed, such as a cancel. A broken or foreign sign-in link does
+not count, because another site could send someone's browser to one to lock
+them out. On top of that, failures that cost Discord API calls (a code Discord
+did not accept, a membership check that found nothing, Discord not answering)
+are counted for everyone together: after 60 in a minute, new sign-ins wait for
+the rest of the minute before Discord is asked again. The bot shares its
+address with the production bot, and Discord blocks addresses that make many failing
+calls. Cancels and broken links never count for everyone. At most 4,096
+visitors are remembered; the one whose last failure is oldest goes first.
+
+The
 bot serves the UI's files itself; nothing loads from a CDN. The page's content
 security policy allows only those files, plus style tags that carry a new
 random value (a nonce) on every page view. Discord avatars and server icons
@@ -368,7 +384,8 @@ Existing delivery and reaction history retains its previous behavior.
 Configuration is listed in [.env.example](../.env.example): `DASHBOARD_ENABLED`,
 `DASHBOARD_HOST`, `DASHBOARD_PORT`, `DASHBOARD_PUBLIC_URL`, `DASHBOARD_DISCORD_CLIENT_SECRET`,
 `DASHBOARD_DISCORD_CLIENT_SECRET_FILE`, `DASHBOARD_TOKEN`, `DASHBOARD_TOKEN_FILE`,
-`DASHBOARD_REPLAY_LIMIT`, `HISTORY_RETENTION_DAYS` and `HISTORY_MAX_ROWS`.
+`DASHBOARD_TRUSTED_PROXIES`, `DASHBOARD_REPLAY_LIMIT`, `HISTORY_RETENTION_DAYS` and
+`HISTORY_MAX_ROWS`.
 
 These settings were called `REVIEW_*` before, for example `REVIEW_PORT`. The bot
 and `dashboard.py` refuse to start while an old name is set, even to an empty
@@ -380,9 +397,34 @@ the host's loopback interface. Without Discord sign-in and with
 `DATABASE_URL=/data/alerts.db`, the generated key is
 `data/alerts.db.dashboard-token` on the host's mounted data directory.
 
-Behind an HTTPS reverse proxy (for example traefik, which does this by default),
-the proxy must send `X-Forwarded-Proto: https`; the UI uses it for the same-origin
-check and to mark the session cookie Secure.
+### Behind a reverse proxy or Cloudflare
+
+Behind a proxy, every request reaches the dashboard from the proxy's address,
+and the browser's own address and scheme come in headers the proxy adds. A
+visitor can send those headers too, so the dashboard only believes them from
+the proxies listed in `DASHBOARD_TRUSTED_PROXIES`: comma-separated addresses or
+CIDR ranges, such as `172.18.0.0/16` for a Docker network. It is empty by
+default, which trusts nobody. Startup refuses an entry that is not an address or
+range, and logs the trusted ranges in `dashboard_started`.
+
+- **Who the visitor is.** From a trusted proxy, the visitor is the rightmost
+  `X-Forwarded-For` entry that is not itself a trusted proxy. Each proxy adds
+  the address it got the request from at the end, so entries further left could
+  have been written by the visitor. From anyone else, the visitor is the
+  connection's own address, whatever `X-Forwarded-For` says.
+- **Whether the browser used https.** `X-Forwarded-Proto` counts only from a
+  trusted proxy. The dashboard uses it for the same-origin check and to mark
+  cookies Secure.
+
+The dev instance has two routes in. The public one is Cloudflare, then nginx
+(`web-nginx-1`), then the container on port 9101. nginx sets `X-Real-IP`,
+replaces `X-Forwarded-For` with the visitor's address from `CF-Connecting-IP`,
+and sends `X-Forwarded-Proto: https` with the original Host. The internal
+host `yahoo.internal.waxdt.com` goes through traefik, which adds to
+`X-Forwarded-For`. Both proxies are on the same Docker network, so that network
+is the one value for `DASHBOARD_TRUSTED_PROXIES`. Cloudflare's own addresses do
+not go in it: nginx already replaced the header with the visitor Cloudflare
+reported.
 
 ## API notes
 

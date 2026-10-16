@@ -4,6 +4,8 @@ import os
 import stat
 from urllib.parse import urlsplit
 
+from dashboard_limits import parse_proxies
+
 
 def boolean(name, default=True):
     value = os.getenv(name, str(default)).strip().lower()
@@ -102,6 +104,8 @@ class Settings:
     dashboard_public_url: str = ""
     dashboard_discord_client_secret: str = field(default="", repr=False)
     dashboard_replay_limit: int = 500
+    # Reverse proxies (as ip_network objects) whose X-Forwarded-For and X-Forwarded-Proto count.
+    dashboard_trusted_proxies: tuple = ()
     history_retention_days: int = 90
     history_max_rows: int = 50000
 
@@ -164,6 +168,7 @@ class Settings:
             dashboard_token=dashboard_token, dashboard_token_file=dashboard_token_file,
             dashboard_public_url=address, dashboard_discord_client_secret=client_secret,
             dashboard_replay_limit=positive("DASHBOARD_REPLAY_LIMIT", 500, maximum=500),
+            dashboard_trusted_proxies=parse_proxies(os.getenv("DASHBOARD_TRUSTED_PROXIES", "")),
             history_retention_days=positive("HISTORY_RETENTION_DAYS", 90, maximum=3650),
             history_max_rows=positive("HISTORY_MAX_ROWS", 50000, maximum=1000000),
         )
