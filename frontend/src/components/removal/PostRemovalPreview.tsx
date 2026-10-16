@@ -48,6 +48,9 @@ function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval 
   const [showAll, setShowAll] = useState(false);
   const posts = data.posts.filter((post) => !removal.kept.has(post.reason));
   const shown = showAll ? posts : posts.slice(0, SAMPLE);
+  // Discord's bulk delete only takes posts under 14 days old; older ones cost a request each.
+  const twoWeeksBefore = removal.preview.dataUpdatedAt - 14 * 24 * 3600 * 1000;
+  const old = posts.filter((post) => Date.parse(post.posted_at) < twoWeeksBefore).length;
   const kept = [
     data.kept.subscribed > 0 && `${plural(data.kept.subscribed, "post has", "posts have")} 🔔 subscribers`,
     data.kept.incomplete > 0 && `${plural(data.kept.incomplete, "post has", "posts have")} incomplete listing facts`,
@@ -70,6 +73,11 @@ function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval 
             <Typography variant="caption" color="text.secondary" component="p" sx={figures}>
               {formatCount(data.removable_total)} posts match. One run removes the newest {formatCount(data.limit)}; run it
               again afterwards for the rest.
+            </Typography>
+          )}
+          {old > 0 && (
+            <Typography variant="caption" color="text.secondary" component="p" sx={figures}>
+              {plural(old, "post is", "posts are")} older than 14 days. Discord deletes those one at a time, which can take a while.
             </Typography>
           )}
           <FormGroup aria-label="Why the posts are filtered">
