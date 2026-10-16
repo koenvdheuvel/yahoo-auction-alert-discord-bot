@@ -3,6 +3,9 @@
 DiscordOAuth runs Discord's OAuth2 code grant with only the `identify` scope, so the dashboard learns
 who the person is and nothing else. DiscordGuilds then works out what they may open, using the
 bot's own token: the servers the bot is in, the person's roles there and what those roles allow.
+
+Anyone in one of the bot's servers may sign in. In each server they are a manager, with Manage
+Channels for the whole server, or a member, who only manages their own 🔔 notifications there.
 """
 import asyncio
 import base64
@@ -81,15 +84,25 @@ class Member:
     timed_out: bool = False
 
 
+# What a person may do in a server. A manager holds ADMIN_PERMISSION for the whole server and
+# manages it like the slash commands allow; a member only manages their own notifications there.
+MANAGER, MEMBER = "manager", "member"
+
+
 @dataclass(frozen=True)
 class Access:
     """What one check found."""
-    # Server ID to its name and icon, for every server where the person holds ADMIN_PERMISSION.
+    # Server ID to its name and icon, for every server of the bot the person is in.
     guilds: dict
-    # How many of the bot's servers the person is in, with or without the permission.
-    member_of: int
-    # Server ID to Member, for the servers in guilds. Changes to a channel check its overwrites with these.
+    # Server ID to MANAGER or MEMBER, for the servers in guilds.
+    levels: dict = field(default_factory=dict)
+    # Server ID to Member, for the servers in guilds. Channel checks use these with the overwrites.
     members: dict = field(default_factory=dict)
+
+    @property
+    def managed(self):
+        """The servers where the person is a manager."""
+        return frozenset(guild for guild, level in self.levels.items() if level == MANAGER)
 
 
 class DiscordGuilds:
@@ -132,9 +145,10 @@ class DiscordGuilds:
                 raise DiscordUnavailable(f"A server could not be checked: {describe(result)}") from result
             if isinstance(result, BaseException):
                 raise result
-        allowed = {int(guild.id): _guild_json(guild) for guild, (_, manage, _) in zip(guilds, results) if manage}
-        members = {int(guild.id): member for guild, (_, manage, member) in zip(guilds, results) if manage}
-        return Access(allowed, sum(found for found, _, _ in results), members)
+        found = [(guild, manage, member) for guild, (present, manage, member) in zip(guilds, results) if present]
+        return Access({int(guild.id): _guild_json(guild) for guild, _, _ in found},
+                      {int(guild.id): MANAGER if manage else MEMBER for guild, manage, _ in found},
+                      {int(guild.id): member for guild, _, member in found})
 
     async def _check_guild(self, guild_id, user_id, limit):
         """(is a member, holds ADMIN_PERMISSION, Member or None) for one server."""

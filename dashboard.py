@@ -20,7 +20,7 @@ from urllib.parse import urlencode, urlsplit
 
 from aiohttp import web
 
-from dashboard_auth import (CALLBACK_PATH, LOGIN_PATH, DiscordGuilds, DiscordOAuth, DiscordRefused,
+from dashboard_auth import (CALLBACK_PATH, LOGIN_PATH, MANAGER, DiscordGuilds, DiscordOAuth, DiscordRefused,
                             DiscordUnavailable)
 from dashboard_limits import (DISCORD_FAILURES_PER_MINUTE, VISITOR_FAILURES_PER_MINUTE, FailureLimiter,
                               client_address, forwarded_proto, visitor_key)
@@ -168,10 +168,20 @@ class Session:
     expires: float
     # The Discord user: id, name, username and avatar_url. None when signed in with the access key.
     user: dict | None = None
-    # Server ID to name and icon for the servers this person may see. None means every server.
+    # Server ID to name and icon for the bot's servers this person is in. None means every server
+    # (the access key).
     guilds: dict | None = None
+    # Server ID to MANAGER or MEMBER: managers manage the server, members only their own notifications.
+    levels: dict | None = None
     # Server ID to the person's roles there (dashboard_auth.Member), for checking a channel's overwrites.
     members: dict | None = None
+
+    @property
+    def managed(self):
+        """The servers this person manages, or None for every server (the access key)."""
+        if self.guilds is None:
+            return None
+        return frozenset(guild for guild in self.guilds if (self.levels or {}).get(guild) == MANAGER)
     checked: float = 0.0
     failed: float = float("-inf")
     check: asyncio.Task | None = None
@@ -291,7 +301,12 @@ class DashboardServer:
         finally:
             session.check = None
         lost = sorted(set(session.guilds) - set(access.guilds))
-        session.guilds, session.members, session.checked = access.guilds, access.members, time.monotonic()
+        # A check moves a server between manager and member in both directions.
+        before = session.managed
+        demoted = sorted(before - access.managed - set(lost))
+        promoted = sorted(access.managed - before)
+        session.guilds, session.levels, session.members = access.guilds, access.levels, access.members
+        session.checked = time.monotonic()
         if not access.guilds:
             self.sessions.pop(cookie, None)
             now = time.monotonic()
@@ -299,12 +314,16 @@ class DashboardServer:
             if len(self.revoked) >= MAX_SESSIONS:
                 del self.revoked[min(self.revoked, key=self.revoked.get)]
             self.revoked[cookie] = now + REVOKED_SECONDS
-        outcome = "revoked" if not access.guilds else "reduced" if lost else "kept"
+        outcome = "revoked" if not access.guilds else "reduced" if lost or demoted else "kept"
         self.count("dashboard_access_checks", outcome)
         if lost:
             logger.warning("dashboard_access_revoked", extra={"fields": {
                 "actor_id": user_id, "guild_ids": [str(guild) for guild in lost],
                 "remaining_guilds": len(access.guilds), "session_ended": not access.guilds}})
+        if demoted or promoted:
+            logger.warning("dashboard_access_changed", extra={"fields": {
+                "actor_id": user_id, "now_member": [str(guild) for guild in demoted],
+                "now_manager": [str(guild) for guild in promoted]}})
 
     def count(self, name, *labels):
         metric = getattr(self.metrics, name, None) if self.metrics is not None else None
@@ -378,7 +397,16 @@ class DashboardServer:
 
     @staticmethod
     def guilds(request):
-        """The server IDs this request may see, or None for every server (the access key)."""
+        """The servers this request may manage, or None for every server (the access key).
+
+        Every route that reads or changes a server's searches, channels or listings is limited to
+        these. In a server where the person is only a member, they answer like a missing object.
+        """
+        return request[SESSION].managed
+
+    @staticmethod
+    def member_guilds(request):
+        """Every server of the bot the person is in, or None for every server (the access key)."""
         session = request[SESSION]
         return None if session.guilds is None else frozenset(session.guilds)
 
@@ -437,7 +465,7 @@ class DashboardServer:
                                              headers={"Retry-After": "2"})
             except AccessRevoked:
                 response = web.json_response({"error": "access_revoked", "message": (
-                    "You no longer have Manage Channels in a server this bot is in, so you were signed out.")},
+                    "You are no longer in a server this bot is in, so you were signed out.")},
                     status=401)
             except AccessUnknown:
                 response = web.json_response({"error": "access_unknown", "message": (
@@ -600,7 +628,8 @@ class DashboardServer:
 
     async def session_json(self, session):
         guilds = None if session.guilds is None else sorted(
-            session.guilds.values(), key=lambda guild: (guild["name"].casefold(), guild["id"]))
+            ({**guild, "level": (session.levels or {}).get(int(guild["id"]))} for guild in session.guilds.values()),
+            key=lambda guild: (guild["name"].casefold(), guild["id"]))
         return {"authenticated": True, **await self.about(),
                 "expires_in": int(session.expires - time.monotonic()),
                 "replay_limit": self.settings.dashboard_replay_limit, "user": session.user, "guilds": guilds,
@@ -713,12 +742,13 @@ class DashboardServer:
         except DiscordUnavailable as error:
             return costly("discord_unavailable", user=user, detail=str(error)[:300])
         if not access.guilds:
-            return costly("missing_permission" if access.member_of else "not_member", user=user)
+            return costly("not_member", user=user)
         cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS, user=user, guilds=access.guilds,
-                                           members=access.members, checked=time.monotonic()))
+                                           levels=access.levels, members=access.members, checked=time.monotonic()))
         self.count("dashboard_logins", "discord", "success")
         logger.info("dashboard_login_succeeded", extra={"fields": {
-            "method": "discord", "actor_id": user["id"], "guild_ids": [str(guild) for guild in access.guilds]}})
+            "method": "discord", "actor_id": user["id"], "guild_ids": [str(guild) for guild in access.guilds],
+            "managed_guild_ids": [str(guild) for guild in sorted(access.managed)]}})
         target = html.escape(f"{FINISH_PATH}?{urlencode({'next': page})}", quote=True)
         title = html.escape(app_title(await self.bot_identity()))
         response = web.Response(text=HOP_PAGE.format(target=target, title=title), content_type="text/html")

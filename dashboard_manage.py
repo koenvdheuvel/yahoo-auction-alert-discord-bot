@@ -16,7 +16,7 @@ import hikari
 
 from channel_maintenance import MAX_DELETE_COUNT, Progress, add_cleanup_reactions, delete_recent_bot_posts
 from commands.base import HISTORY_SCAN_LIMIT, clean_search_query
-from dashboard_auth import DiscordUnavailable, can_manage
+from dashboard_auth import MANAGER, MEMBER, DiscordUnavailable, can_manage
 from discord_directory import Lookup, member_permissions, posting, sidebar
 from review_repository import POST_REMOVAL_LIMIT, ReviewNotFound, ReviewValidation, removal_days
 from review_service import identifier
@@ -157,18 +157,21 @@ class Management:
     # Servers.
 
     async def guilds(self, request):
-        """The servers for the server list, with how many searches each has and whether one has a problem."""
+        """The servers for the server list: for the ones you manage, how many searches each has and
+        whether one has a problem. Servers where you are only a member show their name and icon."""
         session = request[self.server.session_key]
+        managed = self.server.guilds(request)
         if session.guilds is not None:
-            servers = [dict(guild) for guild in session.guilds.values()]
+            servers = [{**guild, "level": session.levels.get(guild_id, MEMBER)} for guild_id, guild in session.guilds.items()]
         else:
             try:
                 servers = await self.directory.servers() if self.directory.available else []
             except DiscordUnavailable:
                 servers = []
-        summaries = await self.repository.guild_summaries(None if session.guilds is None else set(session.guilds))
+            servers = [{**server, "level": MANAGER} for server in servers]
+        summaries = await self.repository.guild_summaries(managed)
         known = {server["id"] for server in servers}
-        servers += [{"id": str(guild_id), "name": None, "icon_url": None}
+        servers += [{"id": str(guild_id), "name": None, "icon_url": None, "level": MANAGER}
                     for guild_id in summaries if str(guild_id) not in known]
         runtime = self.server.runtime
         failing = set()
@@ -176,6 +179,8 @@ class Management:
             failing = {alert_id for (alert_id, _), result in runtime.check_results.items()
                        if result["outcome"] != "success"}
         for server in servers:
+            if server["level"] != MANAGER:
+                continue
             summary = summaries.get(int(server["id"]), {"alert_ids": [], "failed_deliveries": 0})
             server["searches"] = len(summary["alert_ids"])
             server["failing_searches"] = len(failing & set(summary["alert_ids"]))
@@ -449,17 +454,42 @@ class Management:
     # Your own 🔔 notifications.
 
     async def notifications(self, request):
-        """The listings you get DMs for. Posts in servers you may not see are left out; the listing is not."""
+        """The listings you get DMs for, in any server of the bot you are in, as a manager or a member.
+
+        A listing shows where it was posted only in channels you can view now, with the channel's
+        overwrites counted. One that is only in channels you cannot view, or in servers you left,
+        is listed without its details, so it can still be removed.
+        """
         user_id = self.user_id(request)
-        guilds = self.server.guilds(request)
-        items = await self.repository.subscriptions(user_id)
-        for item in items:
-            item["posts"] = [post for post in item["posts"]
-                             if post["guild_id"] is not None and (guilds is None or int(post["guild_id"]) in guilds)]
-        names = await self.server.channel_names([post for item in items for post in item["posts"]])
-        for item in items:
-            for post in item["posts"]:
-                post["channel_name"] = names.get(post["channel_id"])
+        session = request[self.server.session_key]
+        guilds = self.server.member_guilds(request)
+        seen = {}
+
+        async def viewable(channel_id):
+            if channel_id not in seen:
+                try:
+                    lookup = await self.lookup(channel_id)
+                except DiscordUnavailable:
+                    lookup = Lookup()
+                member = (session.members or {}).get(lookup.guild.id) if lookup.guild else None
+                visible = (lookup.channel is not None and member is not None
+                           and (guilds is None or lookup.guild.id in guilds)
+                           and bool(member_permissions(lookup.guild, lookup.channel, user_id, member.role_ids,
+                                                       member.timed_out) & hikari.Permissions.VIEW_CHANNEL))
+                seen[channel_id] = lookup if visible else None
+            return seen[channel_id]
+
+        items = []
+        for item in await self.repository.subscriptions(user_id):
+            places = []
+            for place in item.pop("places"):
+                lookup = await viewable(int(place["channel_id"]))
+                if lookup is not None:
+                    places.append({**place, "guild_id": str(lookup.guild.id), "channel_name": lookup.channel.name})
+            if places:
+                items.append({**item, "posts": places})
+            else:
+                items.append({"item_id": item["item_id"], "redacted": True})
         return web.json_response({"items": items})
 
     async def subscribe(self, request):

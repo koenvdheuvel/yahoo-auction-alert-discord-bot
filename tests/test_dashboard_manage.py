@@ -141,12 +141,14 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
     def events(self, name):
         return [entry for entry in map(json.loads, self.logs) if entry["event"] == name]
 
-    def sign_in(self, user_id, members=None):
-        """A Discord session, as signing in makes it. members maps server to the person's roles there."""
+    def sign_in(self, user_id, members=None, levels=None):
+        """A Discord session, as signing in makes it. members maps server to the person's roles there,
+        and levels to "manager" or "member"; a manager everywhere unless levels says otherwise."""
         members = members or {GUILD_A: Member((MANAGER,))}
+        levels = {guild: "manager" for guild in members} | (levels or {})
         guilds = {guild: {"id": str(guild), "name": "server", "icon_url": None} for guild in members}
         user = {"id": str(user_id), "name": f"user {user_id}", "username": f"user{user_id}", "avatar_url": None}
-        cookie = self.dashboard.open_session(Session(time.monotonic() + 3600, user=user, guilds=guilds,
+        cookie = self.dashboard.open_session(Session(time.monotonic() + 3600, user=user, guilds=guilds, levels=levels,
                                                      members=members, checked=time.monotonic()))
         self.client.session.cookie_jar.update_cookies({COOKIE: cookie})
 
@@ -391,11 +393,12 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.subscribe(item, BOB)
         self.sign_in(ALICE)
         items = (await (await self.client.get("/api/me/notifications")).json())["items"]
-        self.assertEqual(sorted(row["external_id"] for row in items), ["both", "theirs"])
-        posts = {row["external_id"]: [(post["channel_id"], post["channel_name"]) for post in row["posts"]]
-                 for row in items}
-        # Alice still sees what she follows from the other server, but not where it was posted.
-        self.assertEqual(posts, {"both": [(str(POSTERS), "posters")], "theirs": []})
+        shown = {row["external_id"]: [(post["channel_id"], post["channel_name"]) for post in row["posts"]]
+                 for row in items if not row.get("redacted")}
+        # Only where Alice can look: the post in the other server is left out.
+        self.assertEqual(shown, {"both": [(str(POSTERS), "posters")]})
+        # What she follows only from a server she is not in is listed without its details.
+        self.assertIn({"item_id": str(theirs), "redacted": True}, items)
         self.assertNotIn(str(BOB), json.dumps(items))
         response = await self.call("PUT", f"/api/me/notifications/{mine}")
         self.assertEqual(await response.json(), {"subscribed": True, "created": True})
@@ -478,8 +481,8 @@ class WithoutDiscordTests(unittest.IsolatedAsyncioTestCase):
         session = await (await self.client.get("/api/session")).json()
         self.assertEqual(session["features"], {"notifications": False, "discord_data": False})
         guilds = (await (await self.client.get("/api/guilds")).json())["guilds"]
-        self.assertEqual(guilds, [{"id": str(GUILD_A), "name": None, "icon_url": None, "searches": 1,
-                                   "failing_searches": 0, "failed_deliveries": 0}])
+        self.assertEqual(guilds, [{"id": str(GUILD_A), "name": None, "icon_url": None, "level": "manager",
+                                   "searches": 1, "failing_searches": 0, "failed_deliveries": 0}])
         body = await (await self.client.get(f"/api/guilds/{GUILD_A}/channels")).json()
         self.assertEqual((body["source"], body["unknown"]),
                          ("none", [{"id": str(POSTERS), "deleted": False, "searches": 1, "hidden": 0}]))

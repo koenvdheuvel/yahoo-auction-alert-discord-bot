@@ -7,7 +7,7 @@ import json
 import logging
 import time
 
-from peewee import JOIN, chunked, fn
+from peewee import chunked, fn
 
 from domain import FilterRule, changes
 from models import (Alert, AlertItem, Blacklist, DeliveryJob, Filter, Item, Message,
@@ -516,26 +516,31 @@ class Repository(ReviewRepositoryMixin):
             DeliveryJob.payload == json.dumps(CLEANUP))))
 
     async def subscriptions(self, user_id):
-        """The listings one person gets 🔔 DMs for, with where each was posted. Nobody else's."""
+        """The listings one person gets 🔔 DMs for, with the channels each was posted or tracked in.
+
+        Nobody else's. The dashboard decides which of those channels the person may see.
+        """
         def select():
             items = list(Item.select(Item).join(Notification).where(Notification.user_id == user_id)
                          .order_by(Item.updated_at.desc(), Item.id.desc()).dicts())
-            ids = [row["id"] for row in items]
-            posts = {}
-            for batch in chunked(ids, 500):
-                query = (Message.select(Message.item, Message.channel_id, fn.MAX(Message.message_id), Alert.guild_id,
-                                        Alert.search_query)
-                         .join(Alert, JOIN.LEFT_OUTER).where(Message.item.in_(batch))
-                         .group_by(Message.item, Message.channel_id))
-                for item, channel, message, guild, query_text in query.tuples():
-                    posts.setdefault(item, []).append({"channel_id": str(channel), "message_id": str(message),
-                                                       "guild_id": str(guild) if guild else None,
-                                                       "search_query": query_text})
+            places = {}
+            for batch in chunked([row["id"] for row in items], 500):
+                posted = (Message.select(Message.item, Message.channel_id, fn.MAX(Message.message_id))
+                          .where(Message.item.in_(batch)).group_by(Message.item, Message.channel_id))
+                for item, channel, message in posted.tuples():
+                    places.setdefault(item, {})[channel] = {"channel_id": str(channel), "message_id": str(message),
+                                                            "search_query": None}
+                tracked = (AlertItem.select(AlertItem.item, Alert.channel_id, Alert.search_query).join(Alert)
+                           .where(AlertItem.item.in_(batch)))
+                for item, channel, query in tracked.tuples():
+                    place = places.setdefault(item, {}).setdefault(channel, {
+                        "channel_id": str(channel), "message_id": None, "search_query": None})
+                    place["search_query"] = place["search_query"] or query
             pending = dict(DeliveryJob.select(DeliveryJob.item, fn.COUNT(DeliveryJob.id)).where(
                 DeliveryJob.kind == "dm", DeliveryJob.destination_id == user_id,
                 DeliveryJob.status.in_(("pending", "failed"))).group_by(DeliveryJob.item).tuples())
-            return [{**_item_json(row), "posts": posts.get(row["id"], []), "waiting_dms": pending.get(row["id"], 0)}
-                    for row in items]
+            return [{**_item_json(row), "places": list(places.get(row["id"], {}).values()),
+                     "waiting_dms": pending.get(row["id"], 0)} for row in items]
         return await self._call("subscriptions", select)
 
     async def listing_items(self, listings, user_id=None):

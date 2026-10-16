@@ -118,7 +118,7 @@ class Metrics:
         for outcome in ("denied", "error"):
             self.command_errors.labels(outcome)
         for method, outcomes in (("access_key", ("success", "wrong_key", "rate_limited")),
-                                 ("discord", ("success", "cancelled", "state", "not_member", "missing_permission",
+                                 ("discord", ("success", "cancelled", "state", "not_member",
                                               "discord_error", "discord_unavailable", "rate_limited", "cookie"))):
             for outcome in outcomes:
                 self.dashboard_logins.labels(method, outcome)

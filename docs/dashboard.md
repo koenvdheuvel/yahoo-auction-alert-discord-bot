@@ -7,24 +7,37 @@ while the bot is running. The listener is separate from Prometheus on port 9100.
 ## Sign in and run
 
 The dashboard has two ways in. With Discord sign-in set up, people sign in with
-their Discord account and see only the servers they manage. Without it, one
-shared access key opens everything; that is meant for local and standalone use.
+their Discord account: they manage the servers where they have Manage Channels,
+and in the bot's other servers they manage only their own 🔔 notifications.
+Without it, one shared access key opens everything except notifications, which
+belong to a Discord user; that is meant for local and standalone use.
 
 ### Discord sign-in
 
 The sign-in page sends you to Discord, which asks you to share who you are
 (the `identify` scope) and nothing else. Back in the dashboard, the bot checks
 with its own token which of its servers you are in and what your roles there
-allow. You get in when you have the Manage Channels permission in at least one
-of them. That is the permission the bot's management commands need, such as
-`/register`. The server owner and members with Administrator have it too, and
-a member in timeout does not. The dashboard works out the permission for the
-whole server from your roles; channel overrides do not count.
+allow. Anyone who is in at least one of the bot's servers gets in. What you may
+do is decided per server:
 
-You then see only those servers: their searches, listings, labels, rules,
-replays, versions, history imports and post removals. A search in another server answers
-exactly like one that does not exist. If you manage more than one server, pick
-one in the side panel; All listings and its counts follow the picked server.
+- **Manager:** you have Manage Channels for the whole server, worked out from
+  your roles. That is the permission the bot's management commands need, such
+  as `/register`. The server owner and members with Administrator have it too.
+  You see the server's channel list, searches, posts, hidden listings, cleanup,
+  status, listings, labels, rules, replays, versions, history imports and post
+  removals. A change to a channel also needs Manage Channels in that channel,
+  counting its overwrites, as the slash commands check it.
+- **Member:** everyone else in the server, and a member in timeout even when
+  their roles would make them a manager. You see and remove only your own 🔔
+  notifications there. Every other page and API route about the server answers
+  exactly like a server that does not exist.
+
+A search or channel in a server you are not in answers like one that does not
+exist too. Someone who is only a member somewhere starts on their notifications.
+Your notifications show where each listing was posted only for channels you can
+view now, counting the channel's overwrites. A listing posted only in channels
+you cannot view, or in servers you left, is listed without its title, price or
+photo, so you can still stop following it.
 
 Discord's access token is used once, to read your ID, name and avatar, and is
 then revoked at Discord. The dashboard does not store it and does not use it to
@@ -35,15 +48,17 @@ PKCE. Discord's OAuth2 page does not describe PKCE, but Discord accepts it; the
 `state` check protects the sign-in either way.
 
 The bot checks your servers again after 5 minutes, on your next request. If
-you lost the permission in one server, that server disappears. If you lost it
-in all of them, you are signed out and the sign-in page says why. If Discord
+you gained or lost Manage Channels in a server, you become its manager or a
+member there (logged as `dashboard_access_changed`). If you left a server, it
+disappears. If you are in none of the bot's servers any more, you are signed
+out and the sign-in page says why. If Discord
 does not answer, the dashboard refuses requests with "can't reach Discord" and
 asks again after 30 seconds; it does not fall back on the earlier answer.
 
 Sign-in is refused, with a message on the sign-in page and a
 `dashboard_login_denied` log line with the reason, when you are in none of the
-bot's servers, lack Manage Channels in all of them, cancel on Discord, or the
-sign-in expired or was started in another browser. A sign-in attempt is valid
+bot's servers, cancel on Discord, or the sign-in expired or was started in
+another browser. A sign-in attempt is valid
 for 10 minutes, only in the browser that started it, and its cookie is removed
 when Discord sends the person back. The dashboard keeps nothing on the server for
 a sign-in in progress: the `state` carries when it started and a signature

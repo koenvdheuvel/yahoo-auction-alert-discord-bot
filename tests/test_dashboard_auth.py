@@ -93,6 +93,9 @@ def fake_discord():
     first.roles[MANAGER_A] = PERMISSIONS["manage_channels"]
     first.members.update({ALICE: [MANAGER_A], BOB: [], DAVE: [], ERIN: [MANAGER_A]})
     fake.add_channel(GUILD_A, 31, "posters")
+    # Only the manager role may view this one.
+    fake.add_channel(GUILD_A, 34, "staff", overwrites=[(GUILD_A, "role", 0, PERMISSIONS["view_channel"]),
+                                                      (MANAGER_A, "role", PERMISSIONS["view_channel"], 0)])
     second = fake.add_guild(GUILD_B, "Record shop", owner_id=ERIN)
     second.members.update({ERIN: [], BOB: []})
     fake.add_channel(GUILD_B, 32, "vinyl")
@@ -128,16 +131,16 @@ class DiscordGuildsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_checks_membership_and_permission_in_every_server_with_the_bot_token(self):
         access = DiscordGuilds(self.rest)
-        self.assertEqual((await access.check(ALICE)).guilds, {
-            GUILD_A: {"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None}})
-        erin = await access.check(ERIN)
-        self.assertEqual((set(erin.guilds), erin.member_of), ({GUILD_A, GUILD_B}, 2))
+        alice = await access.check(ALICE)
+        self.assertEqual(alice.guilds, {GUILD_A: {"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None}})
+        self.assertEqual(alice.levels, {GUILD_A: "manager"})
+        # Erin has the manager role in one server and owns the other.
+        self.assertEqual((await access.check(ERIN)).levels, {GUILD_A: "manager", GUILD_B: "manager"})
+        # Bob is in both servers without Manage Channels: a member, who may sign in for his notifications.
         bob = await access.check(BOB)
-        self.assertEqual((bob.guilds, bob.member_of), ({}, 2))
-        carol = await access.check(CAROL)
-        self.assertEqual((carol.guilds, carol.member_of), ({}, 0))
-        dave = await access.check(DAVE)
-        self.assertEqual(set(dave.guilds), {GUILD_A})
+        self.assertEqual((bob.levels, bob.managed), ({GUILD_A: "member", GUILD_B: "member"}, frozenset()))
+        self.assertEqual((await access.check(CAROL)).guilds, {})
+        self.assertEqual((await access.check(DAVE)).levels, {GUILD_A: "manager"})
         self.assertEqual(await access.application_id(), 900000000000000001)
 
     async def test_roles_and_owner_come_from_the_gateway_cache_when_it_has_them(self):
@@ -311,7 +314,8 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((body["authenticated"], body["method"]), (True, "discord"))
         self.assertEqual(body["user"], {"id": str(ALICE), "name": "Alice", "username": "alice",
                                         "avatar_url": self.fake.base_url + "/embed/avatars/0.png"})
-        self.assertEqual(body["guilds"], [{"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None}])
+        self.assertEqual(body["guilds"], [{"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None,
+                                           "level": "manager"}])
         self.assertEqual(self.logins("success"), 1)
         self.assertEqual(self.events("dashboard_login_succeeded")[0]["actor_id"], str(ALICE))
         # The access token was revoked at Discord after its one use.
@@ -432,18 +436,14 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         # Not in any server the bot is in.
         self.denied(await self.callback(self.fake.approve((await self.start()).headers["Location"], CAROL)),
                     "not_member")
-        # In servers, but without Manage Channels in any of them.
-        self.denied(await self.callback(self.fake.approve((await self.start()).headers["Location"], BOB)),
-                    "missing_permission")
         # Discord does not answer.
         location = (await self.start()).headers["Location"]
         self.fake.down = True
         self.denied(await self.callback(self.fake.approve(location, ALICE)), "discord_unavailable")
         self.fake.down = False
         self.assertEqual({entry["reason"]: entry["actor_id"] for entry in self.events("dashboard_login_denied")}, {
-            "cancelled": None, "not_member": str(CAROL), "missing_permission": str(BOB),
-            "discord_unavailable": None})
-        for reason in ("cancelled", "not_member", "missing_permission", "discord_unavailable"):
+            "cancelled": None, "not_member": str(CAROL), "discord_unavailable": None})
+        for reason in ("cancelled", "not_member", "discord_unavailable"):
             self.assertEqual(self.logins(reason), 1)
         self.assertEqual(self.dashboard.sessions, {})
 
@@ -561,23 +561,37 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await (await self.client.get("/api/session")).json(),
                          self.signed_out())
 
-    async def test_losing_the_role_in_one_server_removes_only_that_server(self):
+    async def test_each_check_moves_a_server_between_manager_and_member_both_ways(self):
         await self.sign_in(ERIN)
         alerts = await (await self.client.get("/api/alerts")).json()
         self.assertEqual({alert["id"] for alert in alerts["alerts"]}, {self.alert_a["id"], self.alert_b["id"]})
+        # Erin loses the manager role in one server: she stays signed in, as a member there.
         self.fake.guilds[GUILD_A].members[ERIN] = []
         self.expire_access_checks()
         alerts = await (await self.client.get("/api/alerts")).json()
         self.assertEqual([alert["id"] for alert in alerts["alerts"]], [self.alert_b["id"]])
         self.assertEqual((await self.client.get(f"/api/alerts/{self.alert_a['id']}/rules")).status, 404)
         session = await (await self.client.get("/api/session")).json()
-        self.assertEqual([guild["id"] for guild in session["guilds"]], [str(GUILD_B)])
+        self.assertEqual([(guild["id"], guild["level"]) for guild in session["guilds"]],
+                         [(str(GUILD_A), "member"), (str(GUILD_B), "manager")])
         self.assertEqual(self.metrics.registry.get_sample_value(
             "auction_bot_dashboard_access_checks_total", {"outcome": "reduced"}), 1)
+        self.assertEqual(self.events("dashboard_access_changed")[0]["now_member"], [str(GUILD_A)])
+        # She gets it back: the next check makes her a manager there again.
+        self.fake.guilds[GUILD_A].members[ERIN] = [MANAGER_A]
+        self.expire_access_checks()
+        alerts = await (await self.client.get("/api/alerts")).json()
+        self.assertEqual({alert["id"] for alert in alerts["alerts"]}, {self.alert_a["id"], self.alert_b["id"]})
+        self.assertEqual(self.events("dashboard_access_changed")[1]["now_manager"], [str(GUILD_A)])
+        # Leaving a server removes it.
+        self.fake.guilds[GUILD_A].members.pop(ERIN)
+        self.expire_access_checks()
+        session = await (await self.client.get("/api/session")).json()
+        self.assertEqual([guild["id"] for guild in session["guilds"]], [str(GUILD_B)])
 
     async def test_session_reports_revocation_when_it_is_the_request_that_finds_it(self):
         await self.sign_in(ALICE)
-        self.fake.guilds[GUILD_A].members[ALICE] = []
+        self.fake.guilds[GUILD_A].members.pop(ALICE)
         self.expire_access_checks()
         self.assertEqual(await (await self.client.get("/api/session")).json(),
                          self.signed_out(reason="access_revoked"))
@@ -740,6 +754,119 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
                     missing={"error": "not_found", "message": "Listing not found"})
         self.assertEqual(await self.repository.subscriptions(ALICE), [])
         self.assertEqual(len(await self.repository.subscriptions(BOB)), 2)
+
+        # Every data route of the API is covered here; a new route must be added to this test.
+        routes = {route.name for route in self.client.app.router.routes()
+                  if route.resource.canonical.startswith("/api/")} - {"session", "logout"}
+        self.assertEqual(routes, tested)
+
+    async def test_a_member_reaches_nothing_but_their_own_notifications(self):
+        from models import Blacklist, Notification
+
+        def listings():
+            ids = {}
+            for name, channel in (("open", 31), ("staff-only", 34), ("alices", 31)):
+                item = Item.create(item_id=name, checker="yahooauction", title=f"{name} title", price=1000)
+                Message.create(message_id=item.id * 1000, item=item, alert=int(self.alert_a["id"]), channel_id=channel)
+                ids[name] = item.id
+            Blacklist.create(item=ids["open"], channel_id=31)
+            for name in ("open", "staff-only"):
+                Notification.create(item=ids[name], user_id=BOB)
+            Notification.create(item=ids["alices"], user_id=ALICE)
+            return ids
+        items = await self.repository._call("test_listings", listings)
+        filter_a = await self.repository.add_filter(31, "BABYMETAL poster", "text", "blacklist", "sealed")
+        a = self.alert_a["id"]
+        mine = (await self.repository.list_candidates(alert_id=a))["items"][0]["id"]
+        version_a = await self.repository.publish_review_rules(a, default_ruleset(), None)
+        await self.sign_in(BOB)
+        session = await (await self.client.get("/api/session")).json()
+        self.assertEqual([(guild["id"], guild["level"]) for guild in session["guilds"]],
+                         [(str(GUILD_A), "member"), (str(GUILD_B), "member")])
+        missing_alert = await (await self.client.get("/api/alerts/999999/rules")).json()
+        missing_channel = await (await self.client.get("/api/channels/999999/hidden")).json()
+        missing_server = await (await self.client.get("/api/guilds/999999/status")).json()
+        tested = set()
+
+        async def refused(name, response, missing=missing_alert):
+            # Exactly what a missing object gets: a member's server looks like one that does not exist.
+            tested.add(name)
+            self.assertEqual((response.status, await response.json()), (404, missing), name)
+
+        async def allowed(name, response):
+            tested.add(name)
+            self.assertEqual(response.status, 200, name)
+            return await response.json()
+
+        get, post, put, delete = self.client.get, self.client.post, self.client.put, self.client.delete
+        h = self.headers
+        # Lists have nothing of the server in them.
+        self.assertEqual((await allowed("alerts", await get("/api/alerts")))["alerts"], [])
+        self.assertEqual((await allowed("candidates", await get("/api/candidates")))["items"], [])
+        await refused("candidates", await get("/api/candidates", params={"alert_id": a}))
+        self.assertEqual((await allowed("feedback_bulk", await post("/api/candidates/feedback", json={
+            "ids": [mine], "label": "bundle"}, headers=h)))["missing"], [mine])
+        self.assertEqual((await allowed("history_import", await post("/api/history/import", json={}, headers=h)))["imported"], 0)
+        await allowed("rules_validate", await post("/api/rules/validate", json={"ruleset": default_ruleset()}, headers=h))
+        servers = (await allowed("guilds", await get("/api/guilds")))["guilds"]
+        self.assertEqual(servers, [{"id": str(GUILD_A), "name": "Poster hunters", "icon_url": None, "level": "member"},
+                                   {"id": str(GUILD_B), "name": "Record shop", "icon_url": None, "level": "member"}])
+        # Every route about the server's searches, channels and listings refuses.
+        await refused("rules", await get(f"/api/alerts/{a}/rules"))
+        await refused("feedback", await post(f"/api/candidates/{mine}/feedback", json={"label": "bundle"}, headers=h),
+                      {"error": "not_found", "message": "Candidate no longer exists"})
+        await refused("preview", await post("/api/preview", json={"ruleset": default_ruleset(), "title": "x",
+                                                                   "alert_id": a}, headers=h))
+        await refused("replay", await post("/api/replay", json={"alert_id": a, "ruleset": default_ruleset()}, headers=h))
+        await refused("publish", await post(f"/api/alerts/{a}/publish", json={
+            "ruleset": default_ruleset(), "expected_version_id": version_a["id"]}, headers=h))
+        await refused("rollback", await post(f"/api/alerts/{a}/rollback", json={
+            "version_id": version_a["id"], "expected_version_id": version_a["id"]}, headers=h))
+        await refused("post_removal_preview", await post(f"/api/alerts/{a}/posts/removal-preview", json={"days": 30},
+                                                         headers=h))
+        await refused("post_removal", await post(f"/api/alerts/{a}/posts/removal", json={
+            "version_id": version_a["id"], "message_ids": ["1"]}, headers=h))
+        await refused("post_removal_status", await get(f"/api/alerts/{a}/posts/removal"))
+        await refused("guild_channels", await get(f"/api/guilds/{GUILD_A}/channels"), missing_server)
+        await refused("guild_status", await get(f"/api/guilds/{GUILD_A}/status"), missing_server)
+        await refused("alert_register", await post("/api/alerts", json={"channel_id": "31", "search_query": "x"},
+                                                   headers=h), missing_channel)
+        await refused("alert", await get(f"/api/alerts/{a}"))
+        await refused("alert_unregister", await delete(f"/api/alerts/{a}", headers=h))
+        await refused("legacy_filter_delete", await delete(f"/api/alerts/{a}/legacy-filters/{filter_a}", headers=h))
+        item = items["open"]
+        for name, response in (
+                ("channel_posts", await get("/api/channels/31/posts")),
+                ("hidden", await get("/api/channels/31/hidden")),
+                ("hide", await put(f"/api/channels/31/hidden/{item}", headers=h)),
+                ("unhide", await delete(f"/api/channels/31/hidden/{item}", headers=h)),
+                ("cleanup_preview", await post("/api/channels/31/posts/removal-preview", json={"days": None}, headers=h)),
+                ("cleanup", await post("/api/channels/31/posts/removal", json={"message_ids": ["1"]}, headers=h)),
+                ("cleanup_status", await get("/api/channels/31/posts/removal")),
+                ("history_scan", await post("/api/channels/31/history-scan", json={"action": "add_reactions"}, headers=h)),
+                ("history_scan_status", await get("/api/channels/31/history-scan"))):
+            await refused(name, response, missing_channel)
+        # Following a listing from the dashboard needs the server's listings, which members do not see.
+        await refused("subscribe", await put(f"/api/me/notifications/{item}", headers=h),
+                      {"error": "not_found", "message": "Listing not found"})
+        # Nothing changed in the server.
+        self.assertEqual([alert["search_query"] for alert in await self.repository.list_alerts(channel_id=31)],
+                         ["BABYMETAL poster"])
+        self.assertEqual((await self.repository.hidden_items(31))["total"], 1)
+
+        # Bob's own notifications: one in a channel he can view, one in a channel only managers can view.
+        notifications = (await allowed("notifications", await get("/api/me/notifications")))["items"]
+        self.assertEqual([(row["external_id"], [post["channel_name"] for post in row["posts"]])
+                          for row in notifications if not row.get("redacted")], [("open", ["posters"])])
+        self.assertIn({"item_id": str(items["staff-only"]), "redacted": True}, notifications)
+        self.assertNotIn("staff-only title", json.dumps(notifications))
+        self.assertNotIn(str(items["alices"]), {row["item_id"] for row in notifications})
+        # He can still stop one he cannot see, but not someone else's.
+        await allowed("unsubscribe", await delete(f"/api/me/notifications/{items['staff-only']}", headers=h))
+        response = await delete(f"/api/me/notifications/{items['alices']}", headers=h)
+        self.assertEqual(response.status, 404)
+        self.assertEqual(len(await self.repository.subscriptions(ALICE)), 1)
+        self.assertEqual(len(await self.repository.subscriptions(BOB)), 1)
 
         # Every data route of the API is covered here; a new route must be added to this test.
         routes = {route.name for route in self.client.app.router.routes()
