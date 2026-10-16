@@ -306,31 +306,53 @@ def _fold_repeated_snapshots():
     """Before v4 every poll archived another copy of each listing it saw.
 
     For each run of identical decisions on one listing, keep the last row and set its
-    `observed_at` to the run's first sighting. Labeled rows and imported history stay as
-    they are. Returns the number of removed rows.
+    `observed_at` to the run's first sighting. A label describes the listing, as in live
+    archiving: the newest label of a run moves to the kept row, and a run without labels
+    takes the label of the run before it. Imported history stays as it is. Returns the
+    number of removed rows and the number of kept rows whose label was set.
     """
-    labeled = {row[0] for row in database.execute_sql('SELECT "candidate_id" FROM "candidate_feedback"')}
+    labels = {row[0]: (row[1], row[2]) for row in database.execute_sql(
+        'SELECT "candidate_id", "label", "updated_at" FROM "candidate_feedback"')}
     rows = database.execute_sql(
         'SELECT "id", "alert_id", "source", "external_id", "decision", "observed_at" '
         "FROM \"candidate_observation\" WHERE \"origin\" = 'live' AND \"alert_id\" IS NOT NULL "
         "AND \"external_id\" != '' ORDER BY \"alert_id\", \"source\", \"external_id\", \"id\"").fetchall()
-    removed, first_seen, run = [], [], []
+    removed, first_seen, relabeled = [], [], []
 
-    def close(run):
+    def close(run, carried):
+        kept = run[-1][0]
+        # The most recently updated label in the run; the later row wins a tie.
+        own = max(((labels[row[0]], row[0]) for row in run if row[0] in labels), default=None,
+                  key=lambda item: (item[0][1], item[1]))
+        label = own[0] if own else carried
+        removed.extend(row[0] for row in run[:-1])
         if len(run) > 1:
-            removed.extend((row[0],) for row in run[:-1] if row[0] not in labeled)
-            first_seen.append((run[0][5], run[-1][0]))
+            first_seen.append((run[0][5], kept))
+        if label is not None and labels.get(kept) != label:
+            relabeled.append((kept, *label))
+        return label
 
+    listing, run, carried = None, [], None
     for row in rows:
-        if run and row[1:5] != run[-1][1:5]:
-            close(run)
+        if row[1:4] != listing:
+            if run:
+                close(run, carried)
+            listing, run, carried = row[1:4], [], None
+        elif row[4] != run[-1][4]:
+            carried = close(run, carried)
             run = []
         run.append(row)
-    close(run)
+    if run:
+        close(run, carried)
     connection = database.connection()
-    connection.executemany('DELETE FROM "candidate_observation" WHERE "id" = ?', removed)
+    connection.executemany('DELETE FROM "candidate_feedback" WHERE "candidate_id" = ?',
+                           [(identifier,) for identifier in removed if identifier in labels])
+    connection.executemany('DELETE FROM "candidate_observation" WHERE "id" = ?', [(identifier,) for identifier in removed])
     connection.executemany('UPDATE "candidate_observation" SET "observed_at" = ? WHERE "id" = ?', first_seen)
-    return len(removed)
+    connection.executemany('INSERT INTO "candidate_feedback" ("candidate_id", "label", "updated_at") VALUES (?, ?, ?) '
+                           'ON CONFLICT ("candidate_id") DO UPDATE SET "label" = excluded."label", '
+                           '"updated_at" = excluded."updated_at"', relabeled)
+    return len(removed), len(relabeled)
 
 
 def _upgrade(previous):
@@ -349,7 +371,8 @@ def _upgrade(previous):
             # Nothing queried (source, external_id). Repeat sightings are matched per alert now.
             database.execute_sql('DROP INDEX IF EXISTS "candidateobservation_source_external_id"')
             CandidateObservation._schema.create_indexes(safe=True)
-            details["repeated_snapshots_removed"] = _fold_repeated_snapshots()
+            removed, relabeled = _fold_repeated_snapshots()
+            details.update(repeated_snapshots_removed=removed, labels_moved_to_latest=relabeled)
         SchemaVersion.update(version=SCHEMA_VERSION).where(SchemaVersion.id == 1).execute()
         if database.execute_sql("PRAGMA foreign_key_check").fetchall():
             raise RuntimeError("Foreign key validation failed; migration rolled back")

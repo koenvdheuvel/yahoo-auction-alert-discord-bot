@@ -598,9 +598,11 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
                 "VALUES (?, ?, 123, 'poster', 'mercari', ?, 'title', 'title', '{}', ?, ?, 'listing', ?, 0, ?)",
                 (alert.id, alert.id, external_id, recorded, json.loads(recorded)["verdict"], origin,
                  str(datetime(2026, 10, 16, 7) + timedelta(minutes=minute))))
-        # Label the middle sighting of "y"; labels are never folded away.
-        database.execute_sql('INSERT INTO "candidate_feedback" ("candidate_id", "label", "updated_at") '
-                             "VALUES (7, 'relevant', '2026-10-16 08:00:00')")
+        # "x" has a label in each of its first two runs. "y" has two labels in one run; row 6
+        # was labeled last, so its label wins over the later sighting's.
+        database.execute_sql('INSERT INTO "candidate_feedback" ("candidate_id", "label", "updated_at") VALUES '
+                             "(1, 'wrong_product', '2026-10-16 07:10:00'), (3, 'accessory', '2026-10-16 08:10:00'), "
+                             "(6, 'unsure', '2026-10-16 09:00:00'), (7, 'relevant', '2026-10-16 08:00:00')")
         database.close()
         self.path.chmod(0o600)
 
@@ -612,23 +614,29 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
         return connection.execute('SELECT "id", "external_id", "verdict", "observed_at", "last_seen_at" '
                                   'FROM "candidate_observation" ORDER BY "id"').fetchall()
 
-    def test_upgrade_folds_repeated_sightings_keeps_labels_and_imports_and_is_backed_up(self):
-        create_tables()
+    def test_upgrade_folds_repeated_sightings_moves_labels_keeps_imports_and_is_backed_up(self):
+        with self.assertLogs("models", "WARNING") as logs:
+            create_tables()
         with sqlite3.connect(self.path) as connection:
             self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 4)
             self.assertEqual(self.table(connection), [
                 (2, "x", "accepted", "2026-10-16 07:00:00", "2026-10-16 07:30:00"),
                 (4, "x", "filtered", "2026-10-16 08:00:00", "2026-10-16 08:30:00"),
                 (5, "x", "accepted", "2026-10-16 09:00:00", "2026-10-16 09:00:00"),
-                (7, "y", "accepted", "2026-10-16 07:30:00", "2026-10-16 07:30:00"),
                 (8, "y", "accepted", "2026-10-16 07:00:00", "2026-10-16 08:00:00"),
                 (9, "z", "accepted", "2026-10-16 07:00:00", "2026-10-16 07:00:00"),
                 (10, "z", "accepted", "2026-10-16 07:30:00", "2026-10-16 07:30:00"),
                 (11, "", "filtered", "2026-10-16 07:00:00", "2026-10-16 07:00:00"),
                 (12, "", "filtered", "2026-10-16 07:30:00", "2026-10-16 07:30:00"),
             ])
-            self.assertEqual(connection.execute("SELECT candidate_id, label FROM candidate_feedback").fetchall(),
-                             [(7, "relevant")])
+            # Each kept row has its run's newest label; the last "x" run has none and inherits one.
+            self.assertEqual(connection.execute(
+                "SELECT candidate_id, label, updated_at FROM candidate_feedback ORDER BY candidate_id").fetchall(), [
+                (2, "wrong_product", "2026-10-16 07:10:00"),
+                (4, "accessory", "2026-10-16 08:10:00"),
+                (5, "accessory", "2026-10-16 08:10:00"),
+                (8, "unsure", "2026-10-16 09:00:00"),
+            ])
             column = next(row for row in connection.execute("PRAGMA table_info(candidate_observation)")
                           if row[1] == "last_seen_at")
             self.assertEqual(column[3], 1)
@@ -643,6 +651,10 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
         with sqlite3.connect(backups[0]) as connection:
             self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 3)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_observation").fetchone()[0], 12)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 4)
+        migrated = next(record for record in logs.records if record.getMessage() == "database_migrated")
+        self.assertEqual(migrated.fields["repeated_snapshots_removed"], 4)
+        self.assertEqual(migrated.fields["labels_moved_to_latest"], 4)
         create_tables()
         self.assertEqual(list(self.path.parent.glob("*.bak")), backups)
 
