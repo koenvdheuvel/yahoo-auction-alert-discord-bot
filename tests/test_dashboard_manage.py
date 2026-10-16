@@ -330,6 +330,19 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.repository.hidden_items(POSTERS))["total"], 0)
         self.assertEqual((await self.call("DELETE", f"/api/channels/{POSTERS}/hidden/{item}")).status, 404)
 
+    async def test_hiding_takes_over_a_cleanup_that_was_already_waiting(self):
+        item = await self.item("queued-then-hidden")
+        await self.post(item, POSTERS, self.alert_a["id"], 40)
+        self.sign_in(ALICE)
+        response = await self.call("POST", f"/api/channels/{POSTERS}/posts/removal", message_ids=["40"])
+        self.assertEqual((await response.json())["queued"], 1)
+        # Someone follows the listing after the cleanup was queued; the cleanup alone would keep the post.
+        await self.repository.subscribe(item, BOB)
+        await self.call("PUT", f"/api/channels/{POSTERS}/hidden/{item}")
+        job = (await self.repository.due_deliveries())[0]
+        self.assertEqual((job["message_id"], json.loads(job["payload"])), (40, {"reason": "hidden"}))
+        self.assertIsNotNone(await self.repository.begin_delivery(job["id"]))
+
     async def test_cleanup_queues_the_channels_posts_and_keeps_followed_ones(self):
         now = datetime.now(timezone.utc)
         followed, recent, older, ancient = [await self.item(name) for name in ("followed", "recent", "older", "ancient")]

@@ -277,11 +277,16 @@ class Repository(ReviewRepositoryMixin):
     async def hide_item(self, item_id, channel_id):
         """Hide a listing in a channel, as the 🗑️ reaction does, and queue the removal of its posts there.
 
-        Returns how many posts were queued for removal.
+        Returns how many posts were queued for removal. Posts already waiting in an earlier cleanup
+        are marked hidden too, so a 🔔 follow made since then does not keep them.
         """
         def hide():
             with database.atomic("IMMEDIATE"):
                 self._blacklist(item_id, channel_id)
+                posts = live_posts(channel_id).select(Message.message_id).where(Message.item == item_id)
+                DeliveryJob.update(payload=json.dumps(HIDDEN)).where(
+                    DeliveryJob.kind == "delete", DeliveryJob.status == "pending",
+                    DeliveryJob.destination_id == channel_id, DeliveryJob.message_id.in_(posts)).execute()
                 rows = list(live_posts(channel_id).select(Message.message_id, Message.item)
                             .where(Message.item == item_id, Message.message_id.not_in(queued_removals())).tuples())
                 return queue_removals(channel_id, rows, HIDDEN)
