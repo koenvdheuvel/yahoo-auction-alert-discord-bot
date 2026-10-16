@@ -24,6 +24,16 @@ export const keys = {
   removalStatus: (alertId: string) => ["removal-status", alertId] as const,
 };
 
+/**
+ * Something answered 404. It may be in a server the person just lost on Discord, so the session
+ * and the searches are asked for again, which drops that server from the page.
+ */
+export function refreshAccess(client: QueryClient, error: unknown) {
+  if (!(error instanceof ApiError) || error.status !== 404) return;
+  void client.invalidateQueries({ queryKey: keys.session });
+  void client.invalidateQueries({ queryKey: keys.alerts });
+}
+
 /** The search's posts that `ruleset`, or the published rules when it is undefined, filter. */
 export function useRemovalPreview(alertId: string | null, days: RemovalDays, ruleset: Ruleset | undefined, enabled: boolean) {
   const rules = ruleset ? JSON.stringify(canonical(ruleset)) : "published";
@@ -43,7 +53,8 @@ export function useRemovalStatus(alertId: string | null) {
     queryKey: keys.removalStatus(alertId ?? "none"),
     queryFn: ({ signal }) => api.removalStatus(alertId!, signal),
     enabled: alertId !== null,
-    refetchInterval: (query) => (query.state.data?.run?.pending ? 5000 : false),
+    // Stops after an error such as a 404 for a server the person lost; the last good answer is not polled on.
+    refetchInterval: (query) => (query.state.status !== "error" && query.state.data?.run?.pending ? 5000 : false),
   });
 }
 

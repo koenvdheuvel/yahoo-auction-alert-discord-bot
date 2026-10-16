@@ -3,8 +3,8 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { CandidateQuery } from "./client";
-import { keys, LABEL_BATCH, useLabelMutation } from "./hooks";
+import { ApiError, type CandidateQuery } from "./client";
+import { keys, LABEL_BATCH, refreshAccess, useLabelMutation } from "./hooks";
 import type { Candidate, CandidatePage } from "./types";
 
 const query: CandidateQuery = { alertId: "1", guildId: null, search: "", source: "", verdict: "", feedback: "", latest: true };
@@ -65,3 +65,17 @@ describe("useLabelMutation", () => {
     expect(loaded(client).items.map((item) => item.feedback)).toEqual([null, null]);
   });
 });
+
+describe("refreshAccess", () => {
+  it("asks for the session and the searches again after a 404, and only then", () => {
+    const client = new QueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    refreshAccess(client, new ApiError("Alert no longer exists", 404, "not_found"));
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([keys.session, keys.alerts]);
+    invalidate.mockClear();
+    refreshAccess(client, new ApiError("Busy", 429, "busy"));
+    refreshAccess(client, new Error("network"));
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+});
+

@@ -15,7 +15,7 @@ import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/reac
 import { useState } from "react";
 
 import { ApiError, api } from "../../api/client";
-import { keys, useValidation } from "../../api/hooks";
+import { keys, refreshAccess, useValidation } from "../../api/hooks";
 import type { AlertSummary, Policy, RemovalResult, RuleGroup, RulesResponse, Ruleset } from "../../api/types";
 import { errorMessage } from "../../lib/errors";
 import { formatRelative, plural } from "../../lib/format";
@@ -85,6 +85,8 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay 
       draft.discard();
       closePublish();
       if (removalError) {
+        // The removal's error is caught above, so the global 404 handling does not see it.
+        refreshAccess(client, removalError);
         notify(`Published version ${version.version}, but its posts were not queued for removal: ${errorMessage(removalError)} `
           + "You can remove them from Versions.", "warning");
       } else if (removed) {
