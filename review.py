@@ -146,7 +146,7 @@ class ReviewServer:
                     request = request.clone(scheme=forwarded)
                 if request.path.startswith("/api/"):
                     if request.method not in {"GET", "HEAD", "OPTIONS"} and not self.same_origin(request):
-                        raise web.HTTPForbidden(reason="Open Filter Lab in the same browser tab to make changes")
+                        raise web.HTTPForbidden(reason="Changes must come from a Filter Lab page at this address")
                     if request.path not in {"/api/session", "/api/login"} and not self.authenticated(request):
                         raise web.HTTPUnauthorized(reason="Sign in with your access key")
                 response = await handler(request)
