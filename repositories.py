@@ -4,14 +4,18 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import timedelta
 import json
+import logging
 import time
 
-from peewee import fn
+from peewee import chunked, fn
 
 from domain import FilterRule, changes
 from models import (Alert, AlertItem, Blacklist, DeliveryJob, Filter, Item, Message,
                     Notification, database, utcnow)
 from review_repository import ReviewRepositoryMixin
+
+
+logger = logging.getLogger(__name__)
 
 
 class Repository(ReviewRepositoryMixin):
@@ -74,12 +78,29 @@ class Repository(ReviewRepositoryMixin):
         return await self._call("register_alert", create)
 
     async def reconcile_guilds(self, channel_to_guild):
+        """Set the server of alerts that have none, from a channel ID to server ID mapping.
+
+        Alerts that already have a server keep it. Returns how many alerts got one.
+        """
+        by_guild = {}
+        for channel_id, guild_id in channel_to_guild.items():
+            by_guild.setdefault(int(guild_id), []).append(int(channel_id))
+
         def update():
+            updated = 0
             with database.atomic():
-                for channel_id, guild_id in channel_to_guild.items():
-                    Alert.update(guild_id=guild_id).where(
-                        Alert.channel_id == channel_id, Alert.guild_id.is_null()).execute()
-        await self._call("reconcile_guilds", update)
+                for guild_id, channel_ids in by_guild.items():
+                    for batch in chunked(channel_ids, 500):
+                        updated += Alert.update(guild_id=guild_id).where(
+                            Alert.channel_id.in_(batch), Alert.guild_id.is_null()).execute()
+            return updated
+        if not by_guild:
+            return 0
+        updated = await self._call("reconcile_guilds", update)
+        if updated:
+            logger.info("alert_guilds_reconciled", extra={"fields": {
+                "guild_ids": sorted(by_guild), "alerts": updated}})
+        return updated
 
     async def unregister_alert(self, channel_id, search_query):
         def delete():

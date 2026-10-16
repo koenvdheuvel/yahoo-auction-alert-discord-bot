@@ -116,14 +116,26 @@ def create_application(settings=None):
         runtime.set_expected_shards(bot.shards.keys())
         try:
             await client.start()
-            channel_guilds = {int(channel_id): int(channel.guild_id)
-                             for channel_id, channel in bot.cache.get_guild_channels_view().items()}
-            await repository.reconcile_guilds(channel_guilds)
             await runtime.start()
         except asyncio.CancelledError:
             raise
         except Exception:
             await startup_failed()
+
+    # Alerts saved before servers were recorded get their server from its channels. Discord
+    # sends a server's channels after the bot connects (StartedEvent comes before them), and
+    # again when the bot joins a server.
+    @bot.listen(hikari.GuildAvailableEvent)
+    @bot.listen(hikari.GuildJoinEvent)
+    async def on_guild_available(event):
+        channels = {int(channel_id): int(event.guild_id)
+                    for channel_id in (*event.channels.keys(), *event.threads.keys())}
+        try:
+            await repository.reconcile_guilds(channels)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("guild_reconcile_failed", extra={"fields": {"guild_id": int(event.guild_id)}})
 
     @bot.listen(hikari.StoppingEvent)
     async def on_stopping(event):

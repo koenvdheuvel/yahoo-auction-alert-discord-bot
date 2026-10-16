@@ -270,6 +270,16 @@ class RepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((statuses[dm["id"]], statuses[channel["id"]]), ("cancelled", "failed"))
         self.assertIsNone(await self.repository.begin_delivery(dm["id"]))
 
+    async def test_reconcile_sets_missing_servers_only(self):
+        await self.repository.register_alert(2222, "figure", guild_id=7)
+        await self.repository.register_alert(3333, "figure")
+        updated = await self.repository.reconcile_guilds({1111: 5, 2222: 5, 4444: 5})
+        servers = {row["channel_id"]: row["guild_id"] for row in await self.repository.list_alerts()}
+        self.assertEqual(updated, 1)
+        # An alert that already has a server keeps it; channels not in the mapping stay unknown.
+        self.assertEqual(servers, {1111: 5, 2222: 7, 3333: None})
+        self.assertEqual(await self.repository.reconcile_guilds({}), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

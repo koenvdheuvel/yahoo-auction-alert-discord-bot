@@ -158,7 +158,8 @@ def test_factory_gateway_events_open_resources_before_starting_workers(tmp_path,
             bot.services.repository.reconcile_guilds = reconcile
             await listener(hikari.StartedEvent, "on_started")(None)
             synced.assert_awaited_once()
-            reconcile.assert_awaited_once_with({})
+            # Channels arrive after StartedEvent, so servers are filled in per server instead.
+            reconcile.assert_not_awaited()
             assert set(bot.services.runtime.tasks) == {"poller", "delivery", "event_loop", "database_stats"}
             await listener(hikari.StoppingEvent, "on_stopping")(None)
             assert stopped_before_runtime == [True]
@@ -169,6 +170,38 @@ def test_factory_gateway_events_open_resources_before_starting_workers(tmp_path,
             await bot.services.runtime.close()
 
     bot = None
+    asyncio.run(scenario())
+
+
+def test_server_channels_and_threads_fill_in_missing_alert_servers(tmp_path, monkeypatch, caplog):
+    import hikari
+    import main
+    import observability
+
+    monkeypatch.setattr(observability, "configure_logging", lambda *args, **kwargs: None)
+
+    async def scenario():
+        bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False,
+                                               review_enabled=False))
+        try:
+            listeners = [callback for event_type in (hikari.GuildAvailableEvent, hikari.GuildJoinEvent)
+                         for callback in bot.get_listeners(event_type) if callback.__name__ == "on_guild_available"]
+            assert len(listeners) == 2
+            reconcile = AsyncMock(return_value=1)
+            bot.services.repository.reconcile_guilds = reconcile
+            event = SimpleNamespace(guild_id=hikari.Snowflake(5), channels={hikari.Snowflake(11): None},
+                                    threads={hikari.Snowflake(12): None})
+            await listeners[0](event)
+            reconcile.assert_awaited_once_with({11: 5, 12: 5})
+            # A failure is logged and does not reach the gateway's event loop.
+            reconcile.side_effect = RuntimeError("Repository is closed")
+            await listeners[1](event)
+            assert "guild_reconcile_failed" in caplog.text
+        finally:
+            await bot.services.commands.stop()
+            await bot.services.runtime.close()
+
     asyncio.run(scenario())
 
 
