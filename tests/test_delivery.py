@@ -8,9 +8,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import hikari
+
 from config import Settings
 from delivery import DeliveryWorker
 from domain import Listing
+from filtering import default_ruleset
 from models import DeliveryJob, Item, Message, configure_database, create_tables, database, utcnow
 from observability import Metrics
 from repositories import Repository
@@ -148,6 +151,75 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         await self.worker.deliver(candidate)
         self.assertEqual((await self.rows(DeliveryJob))[0]["status"], "sent")
         self.assertEqual(self.rest.create_message.await_count, 1)
+
+    async def post(self, *external_ids):
+        """Post one listing per ID; the fake Discord numbers the messages from 50001."""
+        for external_id in external_ids:
+            await self.repository.observe(self.alert, replace(self.listing, id=external_id))
+        for job in await self.repository.due_deliveries():
+            await self.worker.deliver(job)
+
+    async def queue_removals(self, *message_ids):
+        version = await self.repository.publish_review_rules(self.alert["id"], default_ruleset(), None)
+        return await self.repository.queue_post_removals(self.alert["id"], int(version["id"]), list(message_ids))
+
+    async def removals(self):
+        return {row["message_id"]: row["status"] for row in await self.rows(DeliveryJob) if row["kind"] == "delete"}
+
+    async def test_post_removal_waits_for_alerts_then_deletes_the_post(self):
+        await self.post("first")
+        self.rest.delete_message = AsyncMock()
+        self.assertEqual(await self.queue_removals(50001), 1)
+        await self.repository.observe(self.alert, replace(self.listing, id="second"))
+        waiting = await self.repository.due_deliveries()
+        self.assertEqual([job["kind"] for job in waiting], ["channel"])
+        # The outbox gauges, and the backlog alerts on them, only count posts and DMs.
+        self.assertEqual((await self.repository.stats())["pending"], 1)
+        await self.worker.deliver(waiting[0])
+        removal = (await self.repository.due_deliveries())[0]
+        self.assertEqual((removal["kind"], removal["message_id"]), ("delete", 50001))
+        await self.worker.deliver(removal)
+        self.rest.delete_message.assert_awaited_once_with(1111, 50001)
+        self.assertIsNone(await self.repository.lookup_message(1111, 50001))
+        self.assertIsNotNone(await self.repository.lookup_message(1111, 50002))
+        self.assertEqual(await self.removals(), {50001: "sent"})
+        self.assertEqual(self.metrics.registry.get_sample_value(
+            "auction_bot_delivery_attempts_total", {"kind": "delete", "outcome": "sent"}), 1)
+
+    async def test_post_removal_counts_a_missing_post_as_removed_and_stops_on_forbidden(self):
+        await self.post("first", "second")
+        self.assertEqual(await self.queue_removals(50001, 50002), 2)
+
+        async def delete(channel_id, message_id):
+            if message_id == 50001:
+                raise hikari.NotFoundError("https://discord.test", {}, "", message="Unknown Message", code=10008)
+            raise hikari.ForbiddenError("https://discord.test", {}, "", message="Missing permissions", code=50013)
+
+        self.rest.delete_message = AsyncMock(side_effect=delete)
+        for job in await self.repository.due_deliveries():
+            await self.worker.deliver(job)
+        self.assertEqual(await self.removals(), {50001: "sent", 50002: "failed"})
+        self.assertIsNone(await self.repository.lookup_message(1111, 50001))
+        self.assertIsNotNone(await self.repository.lookup_message(1111, 50002))
+        self.assertEqual((await self.repository.stats())["failed"], 0)
+        run = (await self.repository.post_removal_status(self.alert["id"]))["run"]
+        self.assertEqual((run["total"], run["removed"], run["failed"], run["pending"]), (2, 1, 1, 0))
+
+    async def test_post_removal_skips_posts_that_went_or_got_a_subscriber(self):
+        await self.post("first", "second")
+        self.assertEqual(await self.queue_removals(50001, 50002), 2)
+        await self.repository.mark_message_deleted(1111, 50001)
+        await self.repository.subscribe((await self.repository.lookup_message(1111, 50002))["item_id"], 77)
+        self.rest.delete_message = AsyncMock()
+        for job in await self.repository.due_deliveries():
+            await self.worker.deliver(job)
+        self.rest.delete_message.assert_not_awaited()
+        self.assertEqual(await self.removals(), {50001: "cancelled", 50002: "cancelled"})
+
+    async def test_post_removals_come_a_few_at_a_time(self):
+        await self.post(*(f"listing-{index}" for index in range(7)))
+        self.assertEqual(await self.queue_removals(*range(50001, 50008)), 7)
+        self.assertEqual(len(await self.repository.due_deliveries()), 5)
 
 
 if __name__ == "__main__":

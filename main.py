@@ -84,7 +84,7 @@ def create_application(settings=None):
                 names[channel_id] = channel.name
         return names
 
-    review = ReviewServer(settings, repository, metrics, channel_names=channel_names)
+    review = ReviewServer(settings, repository, metrics, channel_names=channel_names, bot_running=True)
     runtime = Runtime(bot, settings, repository, http, ingestion, delivery, providers, metrics,
                       review_server=review)
     bot.services = ApplicationServices(repository, runtime, metrics, client)

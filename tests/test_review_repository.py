@@ -1,6 +1,6 @@
 """Real SQLite history isolation, immutable version CAS and safe migrations."""
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -9,8 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from filtering import default_ruleset
 from models import (ActiveReviewRules, Alert, AlertItem, CandidateFeedback,
-                    CandidateObservation, DeliveryJob, Filter, Item, Message, REVIEW_TABLES,
+                    CandidateObservation, DeliveryJob, Filter, Item, Message, Notification, REVIEW_TABLES,
                     ReviewRuleVersion, SCHEMA_VERSION, SchemaVersion, TABLES,
                     configure_database, create_tables, database, utcnow)
 from observability import Metrics
@@ -28,6 +29,11 @@ def facts(external_id="item", title="BＡＢＹＭＥＴＡＬ ベビーメタ�
     return {"id": external_id, "source": source, "title": title, "stock": 1,
             "price": 2500, "buyout_price": 0, "image_url": "https://example.com/image",
             "url": "https://example.com/item", "end_time": None}
+
+
+def snowflake(moment, sequence=0):
+    """A Discord message ID created at `moment`."""
+    return ((int(moment.timestamp() * 1000) - 1420070400000) << 22) + sequence
 
 
 def decision(verdict="filtered", **fields):
@@ -345,6 +351,73 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((result["imported"], result["skipped"]), (0, 2))
         latest = await self.repository.list_candidates(self.alert["id"], latest=True)
         self.assertEqual([(row["origin"], row["verdict"]) for row in latest["items"]], [("live", "accepted")])
+
+    async def add_posts(self, *posts):
+        """Create listings with a Discord post each: (message ID, external ID, alert ID, options)."""
+        def create():
+            items = {}
+            for message_id, external_id, alert_id, options in posts:
+                items[external_id] = Item.create(item_id=external_id, checker="mercari",
+                                                 title=f"BABYMETAL {external_id}", price=3000)
+                Message.create(message_id=message_id, item=items[external_id], alert=alert_id,
+                               channel_id=options.get("channel", self.channel), deleted=options.get("deleted", False))
+                if options.get("subscribed"):
+                    Notification.create(item=items[external_id], user_id=77)
+            return {name: item.id for name, item in items.items()}
+        return await self.repository._call("test_add_posts", create)
+
+    async def test_removable_posts_are_the_search_live_posts_by_discord_age(self):
+        await self.repository.register_alert(self.channel, "BABYMETAL shirt", self.guild)
+        other = next(alert for alert in await self.repository.list_alerts() if alert["search_query"] == "BABYMETAL shirt")
+        now = datetime.now(timezone.utc)
+        recent, older, old, gone, others, elsewhere, orphan = (
+            snowflake(now - timedelta(days=days), index) for index, days in enumerate((1, 3, 60, 2, 2, 2, 2)))
+        items = await self.add_posts(
+            (recent, "recent", self.alert["id"], {"subscribed": True}), (older, "older", self.alert["id"], {}),
+            (old, "old", self.alert["id"], {}), (gone, "gone", self.alert["id"], {"deleted": True}),
+            (others, "others", other["id"], {}), (elsewhere, "elsewhere", self.alert["id"], {"channel": 999}),
+            (orphan, "orphan", None, {}))
+        await self.repository._call("test_queue", lambda: DeliveryJob.create(
+            item=items["older"], alert=self.alert["id"], kind="delete", destination_id=self.channel,
+            message_id=older, payload="{}"))
+        month = await self.repository.removable_posts(self.alert["id"], 30)
+        self.assertEqual([post["message_id"] for post in month["posts"]], [recent, older])
+        self.assertEqual(month["total"], 2)
+        self.assertEqual([(post["subscribed"], post["queued"]) for post in month["posts"]], [(True, False), (False, True)])
+        self.assertEqual(month["posts"][0]["listing"]["title"], "BABYMETAL recent")
+        # Ages come from the message ID, not from when the row was saved.
+        posted = datetime.fromisoformat(month["posts"][0]["posted_at"].replace("Z", "+00:00"))
+        self.assertLess(abs(posted - (now - timedelta(days=1))), timedelta(seconds=1))
+        everything = await self.repository.removable_posts(self.alert["id"])
+        self.assertEqual([post["message_id"] for post in everything["posts"]], [recent, older, old])
+        self.assertIsNone(everything["active_version"])
+        with self.assertRaises(ReviewValidation):
+            await self.repository.removable_posts(self.alert["id"], 14)
+
+    async def test_queue_post_removals_needs_the_published_version_and_cancels_queued_posts(self):
+        now = datetime.now(timezone.utc)
+        live, subscribed, gone = (snowflake(now - timedelta(hours=hours)) for hours in (1, 2, 3))
+        items = await self.add_posts((live, "live", self.alert["id"], {}),
+                                     (subscribed, "subscribed", self.alert["id"], {"subscribed": True}),
+                                     (gone, "gone", self.alert["id"], {"deleted": True}))
+        # An update post of the live listing that has not gone out yet.
+        await self.repository._call("test_queue", lambda: DeliveryJob.create(
+            item=items["live"], alert=self.alert["id"], kind="channel", destination_id=self.channel, payload="{}"))
+        self.assertEqual(await self.repository.post_removal_status(self.alert["id"]), {"run": None})
+        with self.assertRaises(ReviewConflict):
+            await self.repository.queue_post_removals(self.alert["id"], 1, [live])
+        version = int((await self.repository.publish_review_rules(self.alert["id"], default_ruleset(), None))["id"])
+        with self.assertRaises(ReviewConflict):
+            await self.repository.queue_post_removals(self.alert["id"], version + 1, [live])
+        self.assertEqual(await self.repository.queue_post_removals(self.alert["id"], version, [live, subscribed, gone]), 1)
+        self.assertEqual(await self.repository.queue_post_removals(self.alert["id"], version, [live]), 0)
+        jobs = await self.rows(DeliveryJob)
+        removal = next(job for job in jobs if job["kind"] == "delete")
+        self.assertEqual((removal["message_id"], removal["destination_id"], removal["status"]), (live, self.channel, "pending"))
+        self.assertEqual(json.loads(removal["payload"]), {"version_id": str(version)})
+        self.assertEqual(next(job for job in jobs if job["kind"] == "channel")["status"], "cancelled")
+        run = (await self.repository.post_removal_status(self.alert["id"]))["run"]
+        self.assertEqual((run["total"], run["pending"], run["removed"], run["failed"]), (1, 1, 0, 0))
 
     async def test_bounded_json_and_title_metadata_are_explicit(self):
         huge_title = facts(title="x" * 140000)

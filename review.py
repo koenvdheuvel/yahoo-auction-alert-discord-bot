@@ -100,10 +100,12 @@ def _label(data):
 
 
 class ReviewServer:
-    def __init__(self, settings, repository, metrics=None, *, channel_names=None, assets=ASSETS):
-        """channel_names maps a set of channel IDs to display names; the bot passes its cache."""
+    def __init__(self, settings, repository, metrics=None, *, channel_names=None, bot_running=False, assets=ASSETS):
+        """channel_names maps a set of channel IDs to display names; the bot passes its cache.
+        bot_running says whether this process delivers to Discord, which is what removes queued posts."""
         self.settings, self.repository, self.metrics = settings, repository, metrics
         self.channel_names = channel_names
+        self.bot_running = bot_running
         self.assets = Path(assets)
         self.service = ReviewService(repository, settings.review_replay_limit)
         self.runner = None
@@ -201,6 +203,9 @@ class ReviewServer:
             web.post("/api/replay", self.replay, name="replay"),
             web.post("/api/alerts/{id}/publish", self.publish, name="publish"),
             web.post("/api/alerts/{id}/rollback", self.rollback, name="rollback"),
+            web.post("/api/alerts/{id}/posts/removal-preview", self.post_removal_preview, name="post_removal_preview"),
+            web.get("/api/alerts/{id}/posts/removal", self.post_removal_status, name="post_removal_status"),
+            web.post("/api/alerts/{id}/posts/removal", self.post_removal, name="post_removal"),
             web.post("/api/history/import", self.import_history, name="history_import"),
         ])
         return app
@@ -362,6 +367,18 @@ class ReviewServer:
     async def import_history(self, request):
         await self.body(request)
         return web.json_response(await self.repository.bootstrap_history())
+
+    async def post_removal_preview(self, request):
+        result = await self.service.post_removal_preview(request.match_info["id"], await self.body(request))
+        return web.json_response({**result, "bot_running": self.bot_running})
+
+    async def post_removal(self, request):
+        result = await self.service.remove_posts(request.match_info["id"], await self.body(request))
+        return web.json_response({**result, "bot_running": self.bot_running})
+
+    async def post_removal_status(self, request):
+        result = await self.repository.post_removal_status(identifier(request.match_info["id"], "alert_id"))
+        return web.json_response({**result, "bot_running": self.bot_running})
 
 
 def main(argv=None):

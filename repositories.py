@@ -240,10 +240,15 @@ class Repository(ReviewRepositoryMixin):
                 return bool(count)
         return await self._call("unsubscribe", delete)
 
-    async def due_deliveries(self, limit=50):
-        return await self._call("due_deliveries", lambda: list(DeliveryJob.select().where(
-            DeliveryJob.status == "pending", DeliveryJob.next_attempt_at <= utcnow())
-            .order_by(DeliveryJob.created_at, DeliveryJob.id).limit(limit).dicts()))
+    async def due_deliveries(self, limit=50, removal_limit=5):
+        """Posts and DMs first. Post removals from Filter Lab come a few at a time when nothing
+        else waits, so a long cleanup never holds up an alert."""
+        def select():
+            due = DeliveryJob.select().where(DeliveryJob.status == "pending", DeliveryJob.next_attempt_at <= utcnow())
+            ordered = (DeliveryJob.created_at, DeliveryJob.id)
+            jobs = list(due.where(DeliveryJob.kind != "delete").order_by(*ordered).limit(limit).dicts())
+            return jobs or list(due.where(DeliveryJob.kind == "delete").order_by(*ordered).limit(removal_limit).dicts())
+        return await self._call("due_deliveries", select)
 
     async def begin_delivery(self, job_id):
         def begin():
@@ -252,10 +257,15 @@ class Repository(ReviewRepositoryMixin):
                                               DeliveryJob.next_attempt_at <= utcnow())
                 if job is None:
                     return None
-                allowed = (not Blacklist.select().where(Blacklist.item == job.item_id,
-                           Blacklist.channel_id == job.destination_id).exists()) if job.kind == "channel" else (
-                           Notification.select().where(Notification.item == job.item_id,
-                           Notification.user_id == job.destination_id).exists())
+                if job.kind == "delete":
+                    # Skip posts that are already gone, and keep posts someone subscribed to meanwhile.
+                    allowed = (Message.select().where(Message.message_id == job.message_id, ~Message.deleted).exists()
+                               and not Notification.select().where(Notification.item == job.item_id).exists())
+                else:
+                    allowed = (not Blacklist.select().where(Blacklist.item == job.item_id,
+                               Blacklist.channel_id == job.destination_id).exists()) if job.kind == "channel" else (
+                               Notification.select().where(Notification.item == job.item_id,
+                               Notification.user_id == job.destination_id).exists())
                 if not allowed:
                     job.status = "cancelled"
                     job.save(only=[DeliveryJob.status])
@@ -275,6 +285,15 @@ class Repository(ReviewRepositoryMixin):
                                    channel_id=job.destination_id).on_conflict_ignore().execute()
         await self._call("acknowledge_delivery", acknowledge)
 
+    async def complete_removal(self, job_id, channel_id, message_id):
+        def complete():
+            with database.atomic():
+                Message.update(deleted=True).where(Message.channel_id == channel_id,
+                                                   Message.message_id == message_id).execute()
+                DeliveryJob.update(status="sent", completed_at=utcnow(), last_error=None).where(
+                    DeliveryJob.id == job_id, DeliveryJob.status == "pending").execute()
+        await self._call("complete_removal", complete)
+
     async def complete_delivery(self, job_id):
         await self._call("complete_delivery", lambda: DeliveryJob.update(status="sent", completed_at=utcnow(), last_error=None)
                         .where(DeliveryJob.id == job_id, DeliveryJob.status == "pending").execute())
@@ -287,7 +306,10 @@ class Repository(ReviewRepositoryMixin):
 
     async def stats(self):
         def select():
-            pending = DeliveryJob.select().where(DeliveryJob.status == "pending")
+            # Post removals are left out: a long cleanup is expected to take a while, and the
+            # backlog alerts are about posts and DMs that are late. Filter Lab shows its progress.
+            jobs = DeliveryJob.select().where(DeliveryJob.kind != "delete")
+            pending = jobs.where(DeliveryJob.status == "pending")
             oldest = pending.select(fn.MIN(DeliveryJob.created_at)).scalar()
             # MIN bypasses DateTimeField conversion on some Peewee versions.
             if oldest and isinstance(oldest, str):
@@ -295,7 +317,7 @@ class Repository(ReviewRepositoryMixin):
                 oldest = datetime.fromisoformat(oldest)
             alert_metadata = list(Alert.select(Alert.id, Alert.channel_id, Alert.search_query).dicts())
             return {"alerts": len(alert_metadata), "alert_metadata": alert_metadata, "pending": pending.count(),
-                    "failed": DeliveryJob.select().where(DeliveryJob.status == "failed").count(),
+                    "failed": jobs.where(DeliveryJob.status == "failed").count(),
                     "oldest_pending_age": max(0, (utcnow() - oldest).total_seconds()) if oldest else 0,
                     "disabled_legacy_filters": Filter.select().where(~Filter.enabled).count()}
         return await self._call("stats", select)

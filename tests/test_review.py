@@ -1,6 +1,7 @@
 """Real review HTTP flows, live ingestion and replay isolation on temporary SQLite."""
 from dataclasses import replace
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import tempfile
@@ -25,6 +26,11 @@ TOKEN = "filter-lab-test-access-key-123456789"
 INDEX = (f'<!doctype html><html><head><meta property="csp-nonce" nonce="{NONCE_PLACEHOLDER}">'
          '<title>Filter Lab</title><script type="module" crossorigin src="/assets/index-abc123.js"></script>'
          '</head><body><div id="root"></div></body></html>')
+
+
+def snowflake(moment):
+    """A Discord message ID created at `moment`."""
+    return (int(moment.timestamp() * 1000) - 1420070400000) << 22
 
 
 def product_rules():
@@ -402,3 +408,62 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         path = Path(self.path + ".review-token")
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertGreaterEqual(len(first), 32)
+
+    async def posted(self):
+        """A check without rules posts every seeded listing; each post is recorded as sent, an hour apart."""
+        await self.seed()
+        now = datetime.now(timezone.utc)
+        for index, job in enumerate(await self.repository.due_deliveries()):
+            await self.repository.acknowledge_delivery(job["id"], snowflake(now - timedelta(hours=index + 1)))
+            await self.repository.complete_delivery(job["id"])
+        return await self.repository.removable_posts(self.alert["id"])
+
+    async def test_post_removal_preview_lists_the_posts_the_rules_filter_and_why(self):
+        await self.login()
+        posts = await self.posted()
+        version = await self.repository.publish_review_rules(self.alert["id"], product_rules(), None)
+        bundle = next(post for post in posts["posts"] if "まとめ売り" in post["listing"]["title"])
+        message = await self.repository.lookup_message(self.alert["channel_id"], bundle["message_id"])
+        await self.repository.subscribe(message["item_id"], 77)
+        path = f"/api/alerts/{self.alert['id']}/posts/removal-preview"
+        response = await self.post(path, {"days": 30})
+        self.assertEqual(response.status, 200)
+        preview = await response.json()
+        self.assertEqual((preview["posts_in_range"], preview["checked"], preview["partial"]), (4, 4, False))
+        self.assertEqual(preview["removable_total"], 2)
+        self.assertEqual(preview["kept"], {"allowed": 1, "review": 0, "subscribed": 1, "incomplete": 0,
+                                           "unchecked": 0, "queued": 0})
+        self.assertEqual({entry["key"]: entry["count"] for entry in preview["reasons"]},
+                         {"excluded_group_match:exclude": 1, "required_group_missing:subject": 1})
+        self.assertEqual({post["title"] for post in preview["posts"]},
+                         {"BABYMETAL ポスター フレームのみ", "Other band poster"})
+        # Discord IDs do not fit in a JavaScript number, so they travel as text.
+        self.assertTrue(all(isinstance(post["message_id"], str) for post in preview["posts"]))
+        self.assertEqual((preview["active_version_id"], preview["guild_id"]), (version["id"], "9007199254740995"))
+        self.assertFalse(preview["bot_running"])
+        response = await self.post(path, {"days": None, "ruleset": default_ruleset()})
+        self.assertEqual((await response.json())["removable_total"], 0)
+        response = await self.post(path, {"days": 14})
+        self.assertEqual((response.status, (await response.json())["error"]), (400, "invalid_request"))
+
+    async def test_post_removal_queues_checked_posts_and_reports_progress(self):
+        await self.login()
+        posts = await self.posted()
+        version = await self.repository.publish_review_rules(self.alert["id"], product_rules(), None)
+        path = f"/api/alerts/{self.alert['id']}/posts/removal"
+        ids = [str(post["message_id"]) for post in posts["posts"]]
+        # One of the four is allowed by the rules, so it is checked again and skipped.
+        response = await self.post(path, {"version_id": version["id"], "message_ids": ids})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.json(), {"queued": 3, "skipped": 1, "bot_running": False})
+        status = await (await self.client.get(path)).json()
+        self.assertEqual((status["run"]["total"], status["run"]["pending"], status["run"]["removed"]), (3, 3, 0))
+        self.assertEqual({job["kind"] for job in await self.repository.due_deliveries()}, {"delete"})
+        for body in ({"version_id": version["id"], "message_ids": []},
+                     {"version_id": version["id"], "message_ids": ids * 300},
+                     {"version_id": version["id"], "message_ids": ["not-a-number"]}):
+            self.assertEqual((await self.post(path, body)).status, 400)
+        # Rules published after the preview: the posts have to be checked again.
+        await self.repository.publish_review_rules(self.alert["id"], default_ruleset(), version["id"])
+        response = await self.post(path, {"version_id": version["id"], "message_ids": ids})
+        self.assertEqual((response.status, (await response.json())["error"]), (409, "version_conflict"))

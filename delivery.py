@@ -46,6 +46,9 @@ class DeliveryWorker:
         started = time.monotonic()
         outcome = "sent"
         try:
+            if job["kind"] == "delete":
+                await self.remove(job)
+                return
             embed = create_embed(json.loads(job["payload"]))
             destination = job["destination_id"]
             if job["kind"] == "dm":
@@ -86,6 +89,15 @@ class DeliveryWorker:
             self.metrics.deliveries.labels(kind=job["kind"], outcome=outcome).inc()
             self.metrics.delivery_duration.labels(kind=job["kind"]).observe(time.monotonic() - started)
             log_context.reset(token)
+
+    async def remove(self, job):
+        """Delete a post that Filter Lab queued because the published rules filter its listing."""
+        try:
+            await self.bot.rest.delete_message(job["destination_id"], job["message_id"])
+        except hikari.NotFoundError:
+            pass  # Already deleted, by hand or with the 🗑️ reaction.
+        await self.repository.complete_removal(job["id"], job["destination_id"], job["message_id"])
+        logger.info("post_removed", extra={"fields": {"message_id": job["message_id"]}})
 
     async def run(self):
         while True:

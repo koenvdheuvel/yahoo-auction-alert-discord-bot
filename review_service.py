@@ -1,16 +1,23 @@
 """Filter previews and historical replay without live observation side effects."""
 import asyncio
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import time
 
 from domain import FilterRule
 from filtering import CompiledRuleset, Decision, default_ruleset, validate_ruleset
-from review_repository import JUDGED_LABELS, ReviewValidation
+from review_repository import (JUDGED_LABELS, POST_REMOVAL_DAYS, POST_REMOVAL_LIMIT, ReviewConflict,
+                               ReviewValidation)
 
 
 # Labeled listings outside the recent sample that replay still checks.
 REPLAY_LABELED_LIMIT = 1000
 REPLAY_BUDGET_SECONDS = 10
+# The reasons that make a listing filtered. A post to remove is shown with the first one.
+BLOCKING_REASONS = frozenset({"source_excluded", "price_below_minimum", "price_above_maximum",
+                              "excluded_group_match", "required_group_missing",
+                              "legacy_blacklist_match", "legacy_whitelist_missing"})
+SOURCES = frozenset({"yahooauction", "mercari", "surugaya"})
 
 
 class ReviewBusy(Exception):
@@ -31,6 +38,23 @@ def identifier(value, name="id", optional=False):
 def _enabled_rules(filters):
     """Discord filters that take part in evaluation, as the live checker loads them."""
     return [FilterRule(row["id"], row["method"], row["policy"], row["value"]) for row in filters if row["enabled"]]
+
+
+def _removal_days(value):
+    if value is None or (isinstance(value, int) and not isinstance(value, bool) and value in POST_REMOVAL_DAYS):
+        return value
+    raise ReviewValidation("Choose posts from the last 7, 30 or 90 days, or all posts")
+
+
+def _reason_key(reason):
+    return f'{reason["code"]}:{reason.get("group_id") or reason["message"]}'
+
+
+def _removable_json(post, reason):
+    listing = post["listing"]
+    return {"message_id": str(post["message_id"]), "posted_at": post["posted_at"], "title": listing["title"],
+            "source": listing["source"], "external_id": listing["id"], "price": listing["price"],
+            "image_url": listing["image_url"], "url": listing["url"], "reason": _reason_key(reason)}
 
 
 def _replay_candidate(row):
@@ -180,3 +204,80 @@ class ReviewService:
         expected = identifier(data["expected_version_id"], "expected_version_id", optional=True)
         return await self.repository.activate_review_version(
             identifier(alert_id), identifier(data.get("version_id"), "version_id"), expected)
+
+    @staticmethod
+    def _sort_posts(posts, ruleset, legacy):
+        """The posts whose listing these rules filter, and counts of the posts that stay.
+
+        A post stays when its listing facts are incomplete, when a rule could not finish in
+        time, when someone subscribed to it with 🔔, or when it is already queued for removal.
+        """
+        policy = CompiledRuleset(ruleset, legacy_rules=legacy)
+        removable, kept = [], Counter()
+        checked, deadline = 0, time.monotonic() + REPLAY_BUDGET_SECONDS
+        for post in posts:
+            if time.monotonic() >= deadline:
+                break
+            checked += 1
+            listing = post["listing"]
+            if post["queued"]:
+                kept["queued"] += 1
+                continue
+            if listing["source"] not in SOURCES or not str(listing["title"] or "").strip():
+                kept["incomplete"] += 1
+                continue
+            decision = policy.evaluate(listing)
+            if decision.verdict != "filtered":
+                kept["allowed" if decision.verdict == "accepted" else "review"] += 1
+            elif any(reason["code"] in {"filter_timeout", "evaluation_budget"} for reason in decision.reasons):
+                kept["unchecked"] += 1
+            elif post["subscribed"]:
+                kept["subscribed"] += 1
+            else:
+                reason = next((reason for reason in decision.reasons if reason["code"] in BLOCKING_REASONS),
+                              decision.reasons[0])
+                removable.append((post, reason))
+        return {"removable": removable, "kept": kept, "checked": checked}
+
+    async def post_removal_preview(self, alert_id, data):
+        """Which of the search's posts the given rules, or else the published ones, filter. Nothing changes."""
+        alert_id = identifier(alert_id, "alert_id")
+        days = _removal_days(data.get("days", 30))
+        posts = await self.repository.removable_posts(alert_id, days)
+        active = posts["active_version"]
+        draft = data.get("ruleset")
+        ruleset = validate_ruleset(draft if draft is not None else active["ruleset"] if active else default_ruleset())
+        legacy = _enabled_rules(await self.repository.review_filters(alert_id))
+        result = await self._evaluate(self._sort_posts, posts["posts"], ruleset, legacy)
+        run = result["removable"][:POST_REMOVAL_LIMIT]
+        reasons = {}
+        for _, reason in run:
+            entry = reasons.setdefault(_reason_key(reason), {"key": _reason_key(reason), "message": reason["message"], "count": 0})
+            entry["count"] += 1
+        kept = result["kept"]
+        return {"days": days, "posts_in_range": posts["total"], "checked": result["checked"],
+                "partial": result["checked"] < posts["total"],
+                "removable_total": len(result["removable"]), "limit": POST_REMOVAL_LIMIT,
+                "posts": [_removable_json(post, reason) for post, reason in run],
+                "reasons": sorted(reasons.values(), key=lambda entry: (-entry["count"], entry["message"])),
+                "kept": {name: kept[name] for name in ("allowed", "review", "subscribed", "incomplete", "unchecked", "queued")},
+                "channel_id": posts["channel_id"], "guild_id": posts["guild_id"],
+                "active_version_id": active["id"] if active else None}
+
+    async def remove_posts(self, alert_id, data):
+        """Queue the removal of chosen posts. Each is checked against the published rules again first."""
+        alert_id = identifier(alert_id, "alert_id")
+        version_id = identifier(data.get("version_id"), "version_id")
+        values = data.get("message_ids")
+        if not isinstance(values, list) or not 1 <= len(values) <= POST_REMOVAL_LIMIT:
+            raise ReviewValidation(f"Choose between 1 and {POST_REMOVAL_LIMIT} posts")
+        message_ids = sorted({identifier(value, "message_id") for value in values})
+        posts = await self.repository.removable_posts(alert_id, message_ids=message_ids, limit=POST_REMOVAL_LIMIT)
+        active = posts["active_version"]
+        if active is None or active["id"] != str(version_id):
+            raise ReviewConflict("The published rules changed. Check the posts again.")
+        legacy = _enabled_rules(await self.repository.review_filters(alert_id))
+        result = await self._evaluate(self._sort_posts, posts["posts"], active["ruleset"], legacy)
+        queued = await self.repository.queue_post_removals(
+            alert_id, version_id, [post["message_id"] for post, _ in result["removable"]])
+        return {"queued": queued, "skipped": len(message_ids) - queued}
