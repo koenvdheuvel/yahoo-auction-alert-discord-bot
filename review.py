@@ -2,7 +2,9 @@
 import argparse
 import asyncio
 from collections import deque
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from functools import partial
+import html
 import json
 import logging
 import os
@@ -11,10 +13,12 @@ import re
 import secrets
 import stat
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from aiohttp import web
 
+from review_auth import (CALLBACK_PATH, LOGIN_PATH, DiscordGuilds, DiscordOAuth, DiscordRefused,
+                         DiscordUnavailable)
 from review_repository import ReviewConflict, ReviewNotFound, ReviewValidation
 from review_service import ReviewBusy, ReviewService, identifier
 
@@ -24,6 +28,20 @@ logger = logging.getLogger(__name__)
 ASSETS = Path(__file__).resolve().parent / "frontend" / "dist"
 COOKIE = "filter_lab_session"
 SESSION_SECONDS = 12 * 3600
+MAX_SESSIONS = 128
+# Discord sign-in. This cookie ties Discord's answer to the browser that started the sign-in.
+LOGIN_COOKIE = "filter_lab_login"
+LOGIN_SECONDS = 600
+MAX_PENDING_LOGINS = 256
+FINISH_PATH = LOGIN_PATH + "/finish"
+# How long one check of a person's Discord servers counts for. After Discord fails to answer,
+# requests are refused for this long before Discord is asked again.
+ACCESS_SECONDS = 300
+ACCESS_RETRY_SECONDS = 30
+# Failed sign-ins allowed per minute, for the access key and Discord together.
+LOGIN_FAILURES_PER_MINUTE = 10
+# Where sign-in may return to: the UI's page with its search and tab, nothing else.
+NEXT_PAGE = re.compile(r"/(\?[A-Za-z0-9=&_-]{1,200})?")
 SOURCES = {"yahooauction", "mercari", "surugaya"}
 FEEDBACK = {"relevant", "wrong_product", "accessory", "bundle", "unsure"}
 # Vite writes this placeholder into index.html (html.cspNonce); each page view gets a new value.
@@ -33,6 +51,14 @@ ASSET_TYPES = {".js": "text/javascript", ".css": "text/css", ".woff2": "font/wof
                ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
 ERROR_CODES = {401: "unauthorized", 403: "forbidden", 404: "not_found", 405: "method_not_allowed",
                413: "payload_too_large", 415: "unsupported_media_type", 429: "rate_limited"}
+# Discord sends the browser back from discord.com, another site, so the browser leaves out the
+# SameSite=Strict session cookie on that request and on redirects that follow it. This page
+# moves on from Filter Lab itself, which makes the next request same-site, so the cookie is sent.
+HOP_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Signing in to Filter Lab</title>
+<meta http-equiv="refresh" content="0; url={target}"></head>
+<body><p>Signing in to Filter Lab. <a href="{target}">Continue</a></p></body></html>
+"""
 
 
 def content_security_policy(nonce=None):
@@ -99,29 +125,175 @@ def _label(data):
     return label
 
 
+def _next_page(value):
+    return value if isinstance(value, str) and NEXT_PAGE.fullmatch(value) else "/"
+
+
+def _redirect(location, status=302):
+    return web.Response(status=status, headers={"Location": location})
+
+
+@dataclass(eq=False)
+class Session:
+    expires: float
+    # The Discord user: id, name, username and avatar_url. None when signed in with the access key.
+    user: dict | None = None
+    # Server ID to name and icon for the servers this person may see. None means every server.
+    guilds: dict | None = None
+    checked: float = 0.0
+    failed: float = float("-inf")
+    check: asyncio.Task | None = None
+
+
+@dataclass(frozen=True)
+class PendingLogin:
+    binding: str
+    verifier: str
+    next: str
+    expires: float
+
+
+# The request's session, set by the guard on every /api/ route that needs one.
+SESSION = web.RequestKey("session", Session)
+
+
+class AccessRevoked(Exception):
+    """The person no longer manages any of the bot's servers, so their session has ended."""
+
+
+class AccessUnknown(Exception):
+    """Discord did not answer, so the person's access cannot be confirmed."""
+
+
 class ReviewServer:
-    def __init__(self, settings, repository, metrics=None, *, channel_names=None, bot_running=False, assets=ASSETS):
+    def __init__(self, settings, repository, metrics=None, *, channel_names=None, bot_running=False, assets=ASSETS,
+                 guild_access=None, oauth=None, access_seconds=ACCESS_SECONDS):
         """channel_names maps a set of channel IDs to display names; the bot passes its cache.
-        bot_running says whether this process delivers to Discord, which is what removes queued posts."""
+        bot_running says whether this process delivers to Discord, which is what removes queued posts.
+
+        With Discord sign-in, guild_access checks people's servers with the bot's token and
+        oauth runs the sign-in. Tests and the fake Discord harness pass their own oauth.
+        """
         self.settings, self.repository, self.metrics = settings, repository, metrics
         self.channel_names = channel_names
         self.bot_running = bot_running
         self.assets = Path(assets)
         self.service = ReviewService(repository, settings.review_replay_limit)
+        self.discord = settings.discord_sign_in
+        if self.discord and guild_access is None:
+            raise ValueError("Discord sign-in needs the bot's Discord client to check server access")
+        self.public_url = settings.review_public_url
+        self.guild_access = guild_access
+        self.oauth = oauth or (DiscordOAuth.from_settings(settings) if self.discord else None)
+        self.access_seconds = access_seconds
         self.runner = None
         self.site = None
         self.token = None
         self.sessions = {}
+        self.pending = {}
         self.login_failures = deque()
         self.started = False
 
-    def session_seconds(self, request):
-        """Seconds left in the request's session; 0 when it has none."""
-        cookie = request.cookies.get(COOKIE, "")
-        return max(0.0, self.sessions.get(cookie, 0) - time.monotonic()) if cookie else 0.0
+    @property
+    def method(self):
+        return "discord" if self.discord else "access_key"
 
-    def authenticated(self, request):
-        return self.session_seconds(request) > 0
+    def current_session(self, request):
+        """The request's session and its cookie, or (None, cookie) when it has none or it expired."""
+        cookie = request.cookies.get(COOKIE, "")
+        session = self.sessions.get(cookie) if cookie else None
+        if session is not None and session.expires <= time.monotonic():
+            session = None
+        return session, cookie
+
+    async def require_session(self, request):
+        session, cookie = self.current_session(request)
+        if session is None:
+            raise web.HTTPUnauthorized(reason="Sign in with Discord" if self.discord
+                                       else "Sign in with your access key")
+        if session.user is not None:
+            await self.confirm_access(cookie, session)
+        return session
+
+    async def confirm_access(self, cookie, session):
+        """Check the person's Discord servers again once the last check is too old.
+
+        Requests that arrive while a check runs wait for it instead of starting their own.
+        """
+        if time.monotonic() - session.checked >= self.access_seconds:
+            if session.check is None:
+                if time.monotonic() - session.failed < ACCESS_RETRY_SECONDS:
+                    raise AccessUnknown()
+                session.check = asyncio.create_task(self._recheck(cookie, session))
+                # Every waiter gets the error; this keeps asyncio quiet when all of them went away.
+                session.check.add_done_callback(lambda task: task.cancelled() or task.exception())
+            try:
+                await asyncio.shield(session.check)
+            except DiscordUnavailable:
+                raise AccessUnknown() from None
+        if not session.guilds:
+            raise AccessRevoked()
+
+    async def _recheck(self, cookie, session):
+        user_id = session.user["id"]
+        try:
+            access = await self.guild_access.check(int(user_id))
+        except Exception as error:
+            # Fail closed: until a check succeeds, the session gets nothing.
+            session.failed = time.monotonic()
+            self.count("review_access_checks", "error")
+            logger.warning("review_access_check_failed", extra={"fields": {
+                "actor_id": user_id, "error": str(error)[:300]}})
+            raise
+        finally:
+            session.check = None
+        lost = sorted(set(session.guilds) - set(access.guilds))
+        session.guilds, session.checked = access.guilds, time.monotonic()
+        if not access.guilds:
+            self.sessions.pop(cookie, None)
+        outcome = "revoked" if not access.guilds else "reduced" if lost else "kept"
+        self.count("review_access_checks", outcome)
+        if lost:
+            logger.warning("review_access_revoked", extra={"fields": {
+                "actor_id": user_id, "guild_ids": [str(guild) for guild in lost],
+                "remaining_guilds": len(access.guilds), "session_ended": not access.guilds}})
+
+    def count(self, name, *labels):
+        metric = getattr(self.metrics, name, None) if self.metrics is not None else None
+        if metric is not None:
+            metric.labels(*labels).inc()
+
+    def login_blocked(self):
+        now = time.monotonic()
+        while self.login_failures and self.login_failures[0] < now - 60:
+            self.login_failures.popleft()
+        return len(self.login_failures) >= LOGIN_FAILURES_PER_MINUTE
+
+    def open_session(self, session):
+        now = time.monotonic()
+        self.sessions = {key: value for key, value in self.sessions.items() if value.expires > now}
+        if len(self.sessions) >= MAX_SESSIONS:
+            del self.sessions[min(self.sessions, key=lambda key: self.sessions[key].expires)]
+        cookie = secrets.token_urlsafe(32)
+        self.sessions[cookie] = session
+        return cookie
+
+    @staticmethod
+    def set_session_cookie(response, request, cookie):
+        response.set_cookie(COOKIE, cookie, httponly=True, samesite="Strict", secure=request.secure,
+                            max_age=SESSION_SECONDS, path="/")
+
+    @staticmethod
+    def guilds(request):
+        """The server IDs this request may see, or None for every server (the access key)."""
+        session = request[SESSION]
+        return None if session.guilds is None else frozenset(session.guilds)
+
+    @staticmethod
+    def actor(request):
+        """Who made a change, for the logs. Changes made with the access key have no Discord user."""
+        user = request[SESSION].user
+        return {"actor_id": user["id"] if user else None, "sign_in": "discord" if user else "access_key"}
 
     @staticmethod
     def same_origin(request):
@@ -132,7 +304,10 @@ class ReviewServer:
                     and not parsed.path and not parsed.query and not parsed.fragment)
         return request.headers.get("Sec-Fetch-Site") in {"same-origin", "none"}
 
-    def application(self, token):
+    def application(self, token=None):
+        """The aiohttp application. token is the access key; Discord sign-in does not use one."""
+        if not self.discord and not token:
+            raise ValueError("Access-key sign-in needs the access key")
         self.token = token
 
         @web.middleware
@@ -149,8 +324,8 @@ class ReviewServer:
                 if request.path.startswith("/api/"):
                     if request.method not in {"GET", "HEAD", "OPTIONS"} and not self.same_origin(request):
                         raise web.HTTPForbidden(reason="Changes must come from a Filter Lab page at this address")
-                    if request.path not in {"/api/session", "/api/login"} and not self.authenticated(request):
-                        raise web.HTTPUnauthorized(reason="Sign in with your access key")
+                    if request.path not in {"/api/session", "/api/login"}:
+                        request[SESSION] = await self.require_session(request)
                 response = await handler(request)
             except ValueError as error:
                 # ReviewValidation and RulesetError are ValueErrors; a ruleset error names its field.
@@ -165,6 +340,14 @@ class ReviewServer:
             except ReviewBusy as error:
                 response = web.json_response({"error": "busy", "message": str(error)}, status=429,
                                              headers={"Retry-After": "2"})
+            except AccessRevoked:
+                response = web.json_response({"error": "access_revoked", "message": (
+                    "You no longer have Manage Channels in a server this bot is in, so you were signed out.")},
+                    status=401)
+            except AccessUnknown:
+                response = web.json_response({"error": "access_unknown", "message": (
+                    "Filter Lab can't reach Discord to confirm your access. Try again in a minute.")},
+                    status=503, headers={"Retry-After": str(ACCESS_RETRY_SECONDS)})
             except web.HTTPException as error:
                 response = web.json_response({"error": ERROR_CODES.get(error.status, "http_error"),
                                               "message": error.reason}, status=error.status)
@@ -191,7 +374,6 @@ class ReviewServer:
             web.get("/", self.index, name="index"),
             web.get("/assets/{filename}", self.asset, name="asset"),
             web.get("/api/session", self.session, name="session"),
-            web.post("/api/login", self.login, name="login"),
             web.delete("/api/session", self.logout, name="logout"),
             web.get("/api/alerts", self.alerts, name="alerts"),
             web.get("/api/alerts/{id}/rules", self.rules, name="rules"),
@@ -208,12 +390,21 @@ class ReviewServer:
             web.post("/api/alerts/{id}/posts/removal", self.post_removal, name="post_removal"),
             web.post("/api/history/import", self.import_history, name="history_import"),
         ])
+        if self.discord:
+            # Discord sign-in is then the only way in; the access-key route does not exist.
+            app.add_routes([
+                web.get(LOGIN_PATH, self.discord_start, name="discord_start"),
+                web.get(CALLBACK_PATH, self.discord_callback, name="discord_callback"),
+                web.get(FINISH_PATH, self.discord_finish, name="discord_finish"),
+            ])
+        else:
+            app.add_routes([web.post("/api/login", self.login, name="login")])
         return app
 
     async def start(self):
         if self.started or not self.settings.review_enabled:
             return
-        token = await asyncio.to_thread(review_key, self.settings)
+        token = None if self.discord else await asyncio.to_thread(review_key, self.settings)
         app = self.application(token)
         self.runner = web.AppRunner(app, access_log=None, shutdown_timeout=15)
         try:
@@ -225,14 +416,21 @@ class ReviewServer:
             raise
         self.started = True
         logger.info("review_started", extra={"fields": {
-            "host": self.settings.review_host, "port": self.settings.review_port}})
+            "host": self.settings.review_host, "port": self.settings.review_port, "sign_in": self.method}})
 
     async def close(self):
         if self.runner is not None:
             await self.runner.cleanup()
             self.runner = None
         await self.service.close()
+        if self.oauth is not None:
+            await self.oauth.close()
+        checks = [session.check for session in self.sessions.values() if session.check is not None]
+        for check in checks:
+            check.cancel()
+        await asyncio.gather(*checks, return_exceptions=True)
         self.sessions.clear()
+        self.pending.clear()
         self.started = False
 
     @staticmethod
@@ -268,46 +466,144 @@ class ReviewServer:
                                                "Cache-Control": "public, max-age=31536000, immutable"})
 
     async def session(self, request):
-        remaining = self.session_seconds(request)
-        if not remaining:
-            return web.json_response({"authenticated": False})
-        return web.json_response({"authenticated": True, "expires_in": int(remaining),
-                                  "replay_limit": self.settings.review_replay_limit})
+        session, cookie = self.current_session(request)
+        if session is not None and session.user is not None:
+            try:
+                await self.confirm_access(cookie, session)
+            except AccessRevoked:
+                return web.json_response({"authenticated": False, "method": self.method, "reason": "access_revoked"})
+        if session is None:
+            return web.json_response({"authenticated": False, "method": self.method})
+        guilds = None if session.guilds is None else sorted(
+            session.guilds.values(), key=lambda guild: (guild["name"].casefold(), guild["id"]))
+        return web.json_response({"authenticated": True, "method": self.method,
+                                  "expires_in": int(session.expires - time.monotonic()),
+                                  "replay_limit": self.settings.review_replay_limit,
+                                  "user": session.user, "guilds": guilds})
 
     async def login(self, request):
+        """Access-key sign-in, only when Discord sign-in is not set up."""
         data = await self.body(request)
         # Check after reading the body so concurrent requests cannot all reserve
         # the same remaining attempt before yielding to the event loop.
-        now = time.monotonic()
-        while self.login_failures and self.login_failures[0] < now - 60:
-            self.login_failures.popleft()
-        if len(self.login_failures) >= 10:
+        if self.login_blocked():
+            self.count("review_logins", "access_key", "rate_limited")
             raise web.HTTPTooManyRequests(reason="Too many attempts. Try again in a minute.")
         supplied = data.get("token", "")
         if not isinstance(supplied, str) or len(supplied) > 512 or not secrets.compare_digest(
                 supplied.encode(), self.token.encode()):
-            self.login_failures.append(now)
+            self.login_failures.append(time.monotonic())
+            self.count("review_logins", "access_key", "wrong_key")
+            logger.warning("review_login_denied", extra={"fields": {"method": "access_key", "reason": "wrong_key"}})
             raise web.HTTPUnauthorized(reason="The access key is incorrect")
-        self.sessions = {key: expiry for key, expiry in self.sessions.items() if expiry > now}
-        if len(self.sessions) >= 128:
-            oldest = min(self.sessions, key=self.sessions.get)
-            del self.sessions[oldest]
-        cookie = secrets.token_urlsafe(32)
-        self.sessions[cookie] = now + SESSION_SECONDS
-        response = web.json_response({"authenticated": True, "expires_in": SESSION_SECONDS,
-                                      "replay_limit": self.settings.review_replay_limit})
-        response.set_cookie(COOKIE, cookie, httponly=True, samesite="Strict", secure=request.secure,
-                            max_age=SESSION_SECONDS, path="/")
+        cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS))
+        self.count("review_logins", "access_key", "success")
+        logger.info("review_login_succeeded", extra={"fields": {"method": "access_key"}})
+        response = web.json_response({"authenticated": True, "method": self.method,
+                                      "expires_in": SESSION_SECONDS,
+                                      "replay_limit": self.settings.review_replay_limit,
+                                      "user": None, "guilds": None})
+        self.set_session_cookie(response, request, cookie)
         return response
 
+    def signin_failed(self, reason, *, user=None, detail=None, counted=True, used_login=False):
+        """Send the browser back to the sign-in page, which explains the reason.
+
+        used_login: the request used up a pending sign-in, so its login cookie goes too.
+        """
+        if counted:
+            self.login_failures.append(time.monotonic())
+        self.count("review_logins", "discord", reason)
+        logger.warning("review_login_denied", extra={"fields": {
+            "method": "discord", "reason": reason, "detail": detail, "actor_id": user["id"] if user else None}})
+        response = _redirect("/?" + urlencode({"signin": reason}), status=303)
+        if used_login:
+            response.del_cookie(LOGIN_COOKIE, path=LOGIN_PATH)
+        return response
+
+    async def discord_start(self, request):
+        page = _next_page(request.query.get("next"))
+        if f"{request.scheme}://{request.host}".lower() != self.public_url:
+            # The login cookie has to be set on the address Discord sends people back to.
+            return _redirect(f"{self.public_url}{LOGIN_PATH}?{urlencode({'next': page})}")
+        if self.login_blocked():
+            return self.signin_failed("rate_limited", counted=False)
+        try:
+            client_id = await self.guild_access.application_id()
+        except DiscordUnavailable as error:
+            return self.signin_failed("discord_unavailable", detail=str(error)[:300], counted=False)
+        now = time.monotonic()
+        self.pending = {state: login for state, login in self.pending.items() if login.expires > now}
+        if len(self.pending) >= MAX_PENDING_LOGINS:
+            del self.pending[min(self.pending, key=lambda state: self.pending[state].expires)]
+        state, binding, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(32), secrets.token_urlsafe(48)
+        self.pending[state] = PendingLogin(binding, verifier, page, now + LOGIN_SECONDS)
+        response = _redirect(self.oauth.authorize_url(client_id, state, verifier))
+        # Lax, so the browser sends it when Discord sends the person back; Strict would not be sent.
+        response.set_cookie(LOGIN_COOKIE, binding, httponly=True, samesite="Lax", secure=request.secure,
+                            max_age=LOGIN_SECONDS, path=LOGIN_PATH)
+        return response
+
+    async def discord_callback(self, request):
+        if self.login_blocked():
+            return self.signin_failed("rate_limited", counted=False)
+        query = request.query
+        # A state works once, whatever happens next.
+        login = self.pending.pop(query.get("state", ""), None)
+        if login is None:
+            return self.signin_failed("state", detail="unknown")
+        if login.expires <= time.monotonic():
+            return self.signin_failed("state", detail="expired", used_login=True)
+        if not secrets.compare_digest(request.cookies.get(LOGIN_COOKIE, "").encode(), login.binding.encode()):
+            return self.signin_failed("state", detail="other_browser")
+        failed = partial(self.signin_failed, used_login=True)
+        if "error" in query:
+            error = query["error"] if query["error"].isidentifier() else "other"
+            return failed("cancelled" if error == "access_denied" else "discord_error", detail=error[:64])
+        code = query.get("code", "")
+        if not 1 <= len(code) <= 512:
+            return failed("discord_error", detail="no_code")
+        try:
+            user = await self.oauth.identify(await self.guild_access.application_id(), code, login.verifier)
+        except DiscordRefused as error:
+            return failed("discord_error", detail=str(error))
+        except DiscordUnavailable as error:
+            return failed("discord_unavailable", detail=str(error)[:300])
+        try:
+            access = await self.guild_access.check(int(user["id"]))
+        except DiscordUnavailable as error:
+            return failed("discord_unavailable", user=user, detail=str(error)[:300])
+        if not access.guilds:
+            return failed("missing_permission" if access.member_of else "not_member", user=user)
+        cookie = self.open_session(Session(time.monotonic() + SESSION_SECONDS, user=user,
+                                           guilds=access.guilds, checked=time.monotonic()))
+        self.count("review_logins", "discord", "success")
+        logger.info("review_login_succeeded", extra={"fields": {
+            "method": "discord", "actor_id": user["id"], "guild_ids": [str(guild) for guild in access.guilds]}})
+        target = html.escape(f"{FINISH_PATH}?{urlencode({'next': login.next})}", quote=True)
+        response = web.Response(text=HOP_PAGE.format(target=target), content_type="text/html")
+        self.set_session_cookie(response, request, cookie)
+        response.del_cookie(LOGIN_COOKIE, path=LOGIN_PATH)
+        return response
+
+    async def discord_finish(self, request):
+        """The first same-site request after sign-in. It proves the session cookie arrives."""
+        session, _ = self.current_session(request)
+        if session is None:
+            return self.signin_failed("cookie", counted=False)
+        return _redirect(_next_page(request.query.get("next")), status=303)
+
     async def logout(self, request):
-        self.sessions.pop(request.cookies.get(COOKIE, ""), None)
-        response = web.json_response({"authenticated": False})
+        session = self.sessions.pop(request.cookies.get(COOKIE, ""), None)
+        if session is not None:
+            logger.info("review_logout", extra={"fields": {
+                "actor_id": session.user["id"] if session.user else None}})
+        response = web.json_response({"authenticated": False, "method": self.method})
         response.del_cookie(COOKIE, path="/")
         return response
 
     async def alerts(self, request):
-        result = await self.repository.review_alerts()
+        result = await self.repository.review_alerts(guilds=self.guilds(request))
         names = {}
         if self.channel_names is not None:
             try:
@@ -320,11 +616,12 @@ class ReviewServer:
         return web.json_response(result)
 
     async def rules(self, request):
-        return web.json_response(await self.service.rules(request.match_info["id"]))
+        return web.json_response(await self.service.rules(request.match_info["id"], self.guilds(request)))
 
     async def candidates(self, request):
         query = request.query
         alert_id = identifier(query["alert_id"], "alert_id") if query.get("alert_id") else None
+        guild_id = identifier(query["guild_id"], "guild_id") if query.get("guild_id") else None
         search = query.get("search", "")
         if len(search) > 256:
             raise ReviewValidation("Search must contain at most 256 characters")
@@ -335,49 +632,80 @@ class ReviewServer:
             feedback=_choice(query, "feedback", FEEDBACK | {"unlabeled"}, "Unknown feedback label"),
             limit=_whole_number(query, "limit", 50, 1, 100),
             offset=_whole_number(query, "offset", 0, 0, 10 ** 7),
-            cursor=query.get("cursor") or None, latest=_flag(query, "latest"), facets=_flag(query, "facets"))
+            cursor=query.get("cursor") or None, latest=_flag(query, "latest"), facets=_flag(query, "facets"),
+            guilds=self.guilds(request), guild_id=guild_id)
         return web.json_response(result)
 
     async def validate(self, request):
         return web.json_response(self.service.validate(await self.body(request)))
 
     async def preview(self, request):
-        return web.json_response(await self.service.preview(await self.body(request)))
+        return web.json_response(await self.service.preview(await self.body(request), self.guilds(request)))
 
     async def replay(self, request):
-        return web.json_response(await self.service.replay(await self.body(request)))
+        return web.json_response(await self.service.replay(await self.body(request), self.guilds(request)))
+
+    def log_labels(self, request, items, label):
+        logger.info("review_labels_changed", extra={"fields": {
+            **self.actor(request), "label": label, "count": len(items),
+            "alert_ids": sorted({item["alert_id"] for item in items if item["alert_id"]}),
+            "guild_ids": sorted({item["guild_id"] for item in items if item["guild_id"]})}})
 
     async def feedback(self, request):
         label = _label(await self.body(request))
-        return web.json_response(await self.repository.set_candidate_feedback(
-            identifier(request.match_info["id"]), label))
+        item = await self.repository.set_candidate_feedback(
+            identifier(request.match_info["id"]), label, guilds=self.guilds(request))
+        self.log_labels(request, [item], label)
+        return web.json_response(item)
 
     async def feedback_many(self, request):
         data = await self.body(request)
-        return web.json_response(await self.repository.set_candidates_feedback(data.get("ids"), _label(data)))
+        result = await self.repository.set_candidates_feedback(data.get("ids"), _label(data),
+                                                               guilds=self.guilds(request))
+        self.log_labels(request, result["items"], data.get("label"))
+        return web.json_response(result)
 
     async def publish(self, request):
-        return web.json_response(await self.service.publish(
-            request.match_info["id"], await self.body(request)))
+        version = await self.service.publish(request.match_info["id"], await self.body(request),
+                                             self.guilds(request))
+        logger.info("review_rules_published", extra={"fields": {
+            **self.actor(request), "alert_id": version["alert_id"], "guild_id": version["guild_id"],
+            "version_id": version["id"], "version": version["version"]}})
+        return web.json_response(version)
 
     async def rollback(self, request):
-        return web.json_response(await self.service.rollback(
-            request.match_info["id"], await self.body(request)))
+        version = await self.service.rollback(request.match_info["id"], await self.body(request),
+                                              self.guilds(request))
+        logger.info("review_rules_restored", extra={"fields": {
+            **self.actor(request), "alert_id": version["alert_id"], "guild_id": version["guild_id"],
+            "version_id": version["id"], "version": version["version"],
+            "restored_from_version_id": version["restored_from_version_id"]}})
+        return web.json_response(version)
 
     async def import_history(self, request):
         await self.body(request)
-        return web.json_response(await self.repository.bootstrap_history())
+        result = await self.repository.bootstrap_history(guilds=self.guilds(request))
+        logger.info("review_history_imported", extra={"fields": {
+            **self.actor(request), "imported": result["imported"], "skipped": result["skipped"]}})
+        return web.json_response(result)
 
     async def post_removal_preview(self, request):
-        result = await self.service.post_removal_preview(request.match_info["id"], await self.body(request))
+        result = await self.service.post_removal_preview(request.match_info["id"], await self.body(request),
+                                                         self.guilds(request))
         return web.json_response({**result, "bot_running": self.bot_running})
 
     async def post_removal(self, request):
-        result = await self.service.remove_posts(request.match_info["id"], await self.body(request))
+        data = await self.body(request)
+        result = await self.service.remove_posts(request.match_info["id"], data, self.guilds(request))
+        guild_id = result.pop("guild_id")
+        logger.info("review_post_removal_queued", extra={"fields": {
+            **self.actor(request), "alert_id": request.match_info["id"], "guild_id": guild_id,
+            "version_id": str(data.get("version_id")), "queued": result["queued"], "skipped": result["skipped"]}})
         return web.json_response({**result, "bot_running": self.bot_running})
 
     async def post_removal_status(self, request):
-        result = await self.repository.post_removal_status(identifier(request.match_info["id"], "alert_id"))
+        result = await self.repository.post_removal_status(identifier(request.match_info["id"], "alert_id"),
+                                                           guilds=self.guilds(request))
         return web.json_response({**result, "bot_running": self.bot_running})
 
 
@@ -405,22 +733,38 @@ def main(argv=None):
         parser.error("Port must be between 1 and 65535")
     if not args.init and not Path(settings.database_path).is_file():
         parser.error("Database does not exist. Start the bot once or use --init for an empty archive.")
-    configure_logging(settings.log_level, secrets=(settings.token, settings.review_token))
+    configure_logging(settings.log_level, secrets=(
+        settings.token, settings.review_token, settings.review_discord_client_secret))
     configure_database(settings.database_path)
     create_tables()
     repository = Repository(Metrics())
-    server = ReviewServer(settings, repository, repository.metrics)
-    token = review_key(settings)
-    app = server.application(token)
+    # Without the gateway there is no cache; Discord sign-in asks Discord's REST API with the bot token.
+    guild_access = DiscordGuilds() if settings.discord_sign_in else None
+    rest_app = None
+    server = ReviewServer(settings, repository, repository.metrics, guild_access=guild_access)
+    app = server.application(None if settings.discord_sign_in else review_key(settings))
 
     async def startup(_):
+        nonlocal rest_app
         await repository.start()
+        if guild_access is not None:
+            import hikari
+
+            rest_app = hikari.RESTApp()
+            await rest_app.start()
+            guild_access.rest = rest_app.acquire(settings.token, hikari.TokenType.BOT)
+            guild_access.rest.start()
 
     async def cleanup(_):
         try:
             await server.close()
         finally:
-            await repository.close()
+            try:
+                if rest_app is not None:
+                    await guild_access.rest.close()
+                    await rest_app.close()
+            finally:
+                await repository.close()
 
     app.on_startup.append(startup)
     app.on_cleanup.append(cleanup)

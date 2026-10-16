@@ -311,7 +311,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("npm run build", await response.text())
 
     async def test_session_reports_time_left_and_api_errors_use_specific_codes(self):
-        self.assertEqual(await (await self.client.get("/api/session")).json(), {"authenticated": False})
+        self.assertEqual(await (await self.client.get("/api/session")).json(),
+                         {"authenticated": False, "method": "access_key"})
         self.assertEqual((await (await self.client.get("/api/alerts")).json())["error"], "unauthorized")
         await self.login()
         session = await (await self.client.get("/api/session")).json()

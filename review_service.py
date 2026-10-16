@@ -286,4 +286,4 @@ class ReviewService:
         result = await self._evaluate(self._sort_posts, posts["posts"], active["ruleset"], legacy)
         queued = await self.repository.queue_post_removals(
             alert_id, version_id, [post["message_id"] for post, _ in result["removable"]], guilds=guilds)
-        return {"queued": queued, "skipped": len(message_ids) - queued}
+        return {"queued": queued, "skipped": len(message_ids) - queued, "guild_id": posts["guild_id"]}

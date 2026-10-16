@@ -54,6 +54,7 @@ def create_application(settings=None):
     from providers import HttpClient, PROVIDERS
     from repositories import Repository
     from review import ReviewServer
+    from review_auth import DiscordGuilds
     from runtime import Runtime
     from storechecker import Ingestion
 
@@ -62,7 +63,8 @@ def create_application(settings=None):
         settings = Settings.from_env()
     if not settings.token:
         raise ValueError("BOT_TOKEN is required")
-    configure_logging(settings.log_level, secrets=(settings.token, settings.review_token))
+    configure_logging(settings.log_level, secrets=(
+        settings.token, settings.review_token, settings.review_discord_client_secret))
     configure_database(settings.database_path)
     create_tables()
     metrics = Metrics()
@@ -84,7 +86,10 @@ def create_application(settings=None):
                 names[channel_id] = channel.name
         return names
 
-    review = ReviewServer(settings, repository, metrics, channel_names=channel_names, bot_running=True)
+    # Discord sign-in checks people's servers and roles with the bot's REST client and cache.
+    guild_access = DiscordGuilds(bot.rest, bot.cache) if settings.discord_sign_in else None
+    review = ReviewServer(settings, repository, metrics, channel_names=channel_names, bot_running=True,
+                          guild_access=guild_access)
     runtime = Runtime(bot, settings, repository, http, ingestion, delivery, providers, metrics,
                       review_server=review)
     bot.services = ApplicationServices(repository, runtime, metrics, client)
