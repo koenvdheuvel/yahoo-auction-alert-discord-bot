@@ -160,6 +160,45 @@ profile it captured; the next check uses the newly published profile.
 Publication does not resend historical listings, cancel already queued
 notifications or reset baselines.
 
+## Removing posts the rules filter
+
+Publishing never deletes a Discord post by itself. To clean up the channel too,
+tick **Also remove Discord posts these rules filter** in the Publish dialog, or
+use **Remove filtered posts** on the published version under Versions. Both
+show a preview first and remove nothing until you confirm.
+
+The preview checks the search's own posts in its channel against the rules,
+with the same decision code as checks and Replay, using the listing facts the
+bot saved when it posted. **Posts from** limits it to the last 7, 30 (the
+default) or 90 days, or all time. Ages come from the Discord message itself, so
+posts from before the database conversion keep their real age. The preview
+lists the posts with photos and links, counts them by reason, and lets you
+untick a reason to keep its posts.
+
+Only posts of listings the rules filter can go. These always stay:
+
+- posts with 🔔 subscribers, because the post is where people unsubscribe;
+- posts whose listing facts are incomplete, or whose check ran out of time;
+- posts of listings the rules allow or hold for review;
+- other searches' posts in the same channel, DMs, and posts the bot has no
+  record of.
+
+One run removes at most 1,000 posts, newest first. The preview says when more
+match; run it again afterwards for the rest. The preview checks up to 20,000 of
+the newest posts in the range within 10 seconds and says when it stopped early.
+Confirming checks each chosen post against the published rules again, and asks
+you to check again if other rules were published meanwhile.
+
+Removals go through the same queue as posts, so they survive restarts and
+retry on errors. New alert posts always go first, and posts are deleted one at
+a time at Discord's pace, so a large run can take a while. Versions shows the
+progress of the latest run. Queued posts of the same listings are cancelled, so
+nothing comes back. A removed listing is not blocked the way 🗑️ blocks it: if
+later rules allow it again, the bot does not post it again as new, and only a
+later price or stock change would post an update. When Filter Lab runs without
+the bot (`review.py`), removals wait in the queue until the bot runs. Removed
+posts cannot be brought back; the listings and labels in Filter Lab stay.
+
 ## History and storage
 
 New polling saves accepted, filtered, review, blacklisted and invalid
@@ -214,8 +253,13 @@ repeats rows when labels or new checks change the list between pages.
 `latest=1` keeps each listing's latest decision, and `facets=1` adds the counts
 for the filters. `POST /api/candidates/feedback` labels up to 200 listings at
 once and reports the ones retention removed meanwhile. `POST /api/rules/validate`
-checks a ruleset without saving it. Errors are JSON with `error` and `message`;
-ruleset errors add `field`, such as `groups.1.terms.2`.
+checks a ruleset without saving it. `POST /api/alerts/{id}/posts/removal-preview`
+shows which posts a ruleset, or else the published one, filters.
+`POST /api/alerts/{id}/posts/removal` queues up to 1,000 chosen posts for removal
+under the published version, and `GET` on the same path reports the latest run.
+Discord message IDs travel as text, because they do not fit in a JavaScript
+number. Errors are JSON with `error` and `message`; ruleset errors add `field`,
+such as `groups.1.terms.2`.
 
 ## Developing the UI
 
