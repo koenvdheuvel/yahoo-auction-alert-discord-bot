@@ -334,6 +334,29 @@ def test_failed_check_waits_for_sibling_and_records_partial_cycle():
     asyncio.run(scenario())
 
 
+def test_the_status_page_gets_each_searchs_last_check_from_memory():
+    async def scenario():
+        async def check(provider, item):
+            if item["id"] == 1:
+                raise RuntimeError("https://example.com/search?q=secret answered 500")
+
+        runtime = build_runtime(check, [alert(1), alert(2)])
+        await runtime.poll_cycle()
+        status = runtime.status()
+        failed, passed = status["checks"][1][0], status["checks"][2][0]
+        # Only the error's type: its message can hold a marketplace URL.
+        assert (failed["outcome"], failed["error"]) == ("error", "RuntimeError")
+        assert (passed["outcome"], passed["error"]) == ("success", None)
+        assert status["last_poll_at"] is not None and status["last_success_at"] is None
+        # Results of a search that was unregistered go with it on the next cycle.
+        runtime.repository.alerts = [alert(2)]
+        await runtime.poll_cycle()
+        assert set(runtime.status()["checks"]) == {2}
+        assert runtime.status()["last_success_at"] is not None
+
+    asyncio.run(scenario())
+
+
 def test_worker_pool_is_bounded_and_never_skips_a_query():
     async def scenario():
         active, peak, seen, tasks = 0, 0, [], set()
