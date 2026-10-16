@@ -259,7 +259,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
     async def sign_in(self, user_id):
         location = (await self.start()).headers["Location"]
         response = await self.callback(self.fake.approve(location, user_id))
-        self.assertEqual(response.status, 200)
+        self.assertEqual(response.status, 200, self.events("dashboard_login_denied")[-1:])
         finish = await self.client.get("/auth/discord/finish", params={"next": "/?alert=1&tab=rules"},
                                        allow_redirects=False)
         self.assertEqual((finish.status, finish.headers["Location"]), (303, "/?alert=1&tab=rules"))

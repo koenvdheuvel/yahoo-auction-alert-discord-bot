@@ -56,8 +56,10 @@ def _not_found(code, message):
 
 
 class FakeDiscord:
-    def __init__(self, *, client_secret, bot_token, host="localhost", port=0):
+    def __init__(self, *, client_secret, bot_token, host="127.0.0.1", port=0):
         self.client_secret, self.bot_token = client_secret, bot_token
+        # One address by default: with port 0, "localhost" opens ::1 and 127.0.0.1 on two different
+        # ports, base_url carries only one of them, and a client that tries the other address fails.
         self.host, self.port = host, port
         self.users = {}
         self.guilds = {}

@@ -82,7 +82,9 @@ async def run(args):
     # A server without searches, so the server list has more than one.
     guild_ids.append(guild_ids[-1] + 1000)
 
-    fake = FakeDiscord(client_secret=SECRET, bot_token=BOT_TOKEN, port=args.discord_port)
+    # localhost, so the browser treats the fake as another site than the dashboard's 127.0.0.1, like
+    # discord.com. Its fixed port is the same on both of localhost's addresses.
+    fake = FakeDiscord(client_secret=SECRET, bot_token=BOT_TOKEN, host="localhost", port=args.discord_port)
     for user_id, username, name in USERS:
         fake.add_user(user_id, username, name)
     for index, guild_id in enumerate(guild_ids):
