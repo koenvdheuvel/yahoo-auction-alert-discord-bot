@@ -7,10 +7,20 @@ from dataclasses import dataclass
 
 import hikari
 
-from commands.base import HISTORY_SCAN_LIMIT, is_bot_post
 
-
+# This module does not import the commands package: the commands import it.
+HISTORY_SCAN_LIMIT = 1000
 MAX_DELETE_COUNT = 100
+
+
+def is_bot_post(message, bot_id):
+    """The bot's own posts, without its answers to commands."""
+    return (
+        message.author.id == bot_id
+        and getattr(message, "type", hikari.MessageType.DEFAULT)
+        not in (hikari.MessageType.CHAT_INPUT, hikari.MessageType.CONTEXT_MENU_COMMAND)
+        and not getattr(message, "interaction_metadata", None)
+    )
 
 
 @dataclass

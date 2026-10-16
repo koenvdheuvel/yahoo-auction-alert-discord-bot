@@ -85,6 +85,16 @@ def test_import_has_no_token_database_or_bot_side_effects(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("module", ["channel_maintenance", "commands", "config", "dashboard", "dashboard_auth",
+                                    "dashboard_limits", "dashboard_manage", "discord_directory", "main"])
+def test_each_module_imports_first_in_a_fresh_interpreter(tmp_path, module):
+    # Import cycles only show when a module is the first one loaded, as `python dashboard.py` does.
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    result = subprocess.run([sys.executable, "-c", f"import {module}"], cwd=tmp_path, env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_factory_registers_commands_without_starting_network_or_workers(tmp_path, monkeypatch):
     import main
     import observability

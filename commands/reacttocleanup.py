@@ -2,10 +2,9 @@ import logging
 
 import hikari
 import lightbulb
-from channel_maintenance import add_cleanup_reactions
+from channel_maintenance import HISTORY_SCAN_LIMIT, add_cleanup_reactions
 from commands.base import (
-    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, HISTORY_SCAN_LIMIT,
-    log_change, management_hooks, respond,
+    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, log_change, management_hooks, respond,
 )
 
 

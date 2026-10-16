@@ -11,7 +11,6 @@ import lightbulb
 ADMIN_PERMISSION = hikari.Permissions.MANAGE_CHANNELS
 GUILD_CONTEXTS = [hikari.ApplicationContextType.GUILD]
 GUILD_INSTALLS = [hikari.ApplicationIntegrationType.GUILD_INSTALL]
-HISTORY_SCAN_LIMIT = 1000
 # The longest search query /register takes. Discord enforces it on the option; the dashboard
 # checks it with clean_search_query.
 SEARCH_QUERY_MAX_LENGTH = 100
@@ -57,16 +56,6 @@ def clean_search_query(value):
     if not value:
         raise ValueError("Enter a non-empty search query.")
     return value
-
-
-def is_bot_post(message, bot_id):
-    """Exclude command responses from channel maintenance on current Hikari."""
-    return (
-        message.author.id == bot_id
-        and getattr(message, "type", hikari.MessageType.DEFAULT)
-        not in (hikari.MessageType.CHAT_INPUT, hikari.MessageType.CONTEXT_MENU_COMMAND)
-        and not getattr(message, "interaction_metadata", None)
-    )
 
 
 async def respond(ctx, content, *, ephemeral=False, **kwargs):

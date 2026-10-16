@@ -14,8 +14,9 @@ import time
 from aiohttp import web
 import hikari
 
-from channel_maintenance import MAX_DELETE_COUNT, Progress, add_cleanup_reactions, delete_recent_bot_posts
-from commands.base import HISTORY_SCAN_LIMIT, clean_search_query
+from channel_maintenance import (HISTORY_SCAN_LIMIT, MAX_DELETE_COUNT, Progress, add_cleanup_reactions,
+                                 delete_recent_bot_posts)
+from commands.base import clean_search_query
 from dashboard_auth import MANAGER, MEMBER, DiscordUnavailable, can_manage
 from discord_directory import Lookup, member_permissions, posting, sidebar
 from review_repository import POST_REMOVAL_LIMIT, ReviewNotFound, ReviewValidation, removal_days
@@ -162,7 +163,8 @@ class Management:
         session = request[self.server.session_key]
         managed = self.server.guilds(request)
         if session.guilds is not None:
-            servers = [{**guild, "level": session.levels.get(guild_id, MEMBER)} for guild_id, guild in session.guilds.items()]
+            levels = session.levels or {}
+            servers = [{**guild, "level": levels.get(guild_id, MEMBER)} for guild_id, guild in session.guilds.items()]
         else:
             try:
                 servers = await self.directory.servers() if self.directory.available else []
