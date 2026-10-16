@@ -10,7 +10,7 @@ import unittest
 from urllib.parse import parse_qs, urlsplit
 
 from aiohttp import CookieJar
-from aiohttp.test_utils import TestClient, TestServer, unused_port
+from aiohttp.test_utils import TestClient, TestServer
 import hikari
 import pytest
 
@@ -192,10 +192,10 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.rest = self.rest_app.acquire(BOT_TOKEN, hikari.TokenType.BOT)
         self.rest.start()
 
-        port = unused_port()
-        self.public = f"http://127.0.0.1:{port}"
-        settings = replace(Settings(), token=BOT_TOKEN, database_path=self.path, review_public_url=self.public,
-                           review_discord_client_secret=SECRET)
+        # The real address is known once the test server listens; port 0 lets the system pick one.
+        settings = replace(Settings(), token=BOT_TOKEN, database_path=self.path,
+                           review_public_url="http://127.0.0.1:1", review_discord_client_secret=SECRET,
+                           review_port=0)
         assets = Path(self.directory.name) / "dist"
         assets.mkdir()
         (assets / "index.html").write_text(INDEX, encoding="utf-8")
@@ -203,9 +203,11 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
                                            cdn_url=self.fake.base_url)
         self.review = ReviewServer(settings, self.repository, self.metrics, assets=assets,
                                    guild_access=DiscordGuilds(self.rest), oauth=oauth)
-        self.client = TestClient(TestServer(self.review.application(), host="127.0.0.1", port=port),
+        self.client = TestClient(TestServer(self.review.application(), host="127.0.0.1"),
                                  cookie_jar=CookieJar(unsafe=True))
         await self.client.start_server()
+        self.public = f"http://127.0.0.1:{self.client.port}"
+        self.review.public_url, oauth.redirect_uri = self.public, self.public + "/auth/discord/callback"
         self.headers = {"Origin": self.public}
         self.logs = []
         handler = logging.Handler()
@@ -404,7 +406,14 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         revoked = self.events("review_access_revoked")[0]
         self.assertEqual((revoked["actor_id"], revoked["guild_ids"], revoked["session_ended"]),
                          (str(ALICE), [str(GUILD_A)], True))
-        self.assertEqual((await self.client.get("/api/alerts")).status, 401)
+        # A reload still says why, until the person signs out or signs in again.
+        response = await self.client.get("/api/alerts")
+        self.assertEqual((response.status, (await response.json())["error"]), (401, "access_revoked"))
+        self.assertEqual(await (await self.client.get("/api/session")).json(),
+                         {"authenticated": False, "method": "discord", "reason": "access_revoked"})
+        await self.client.delete("/api/session", headers=self.headers)
+        self.assertEqual(await (await self.client.get("/api/session")).json(),
+                         {"authenticated": False, "method": "discord"})
 
     async def test_losing_the_role_in_one_server_removes_only_that_server(self):
         await self.sign_in(ERIN)

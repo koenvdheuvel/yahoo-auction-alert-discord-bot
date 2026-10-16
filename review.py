@@ -38,6 +38,8 @@ FINISH_PATH = LOGIN_PATH + "/finish"
 # requests are refused for this long before Discord is asked again.
 ACCESS_SECONDS = 300
 ACCESS_RETRY_SECONDS = 30
+# A session ended by a check is remembered this long, so a reload can still say why.
+REVOKED_SECONDS = 600
 # Failed sign-ins allowed per minute, for the access key and Discord together.
 LOGIN_FAILURES_PER_MINUTE = 10
 # Where sign-in may return to: the UI's page with its search and tab, nothing else.
@@ -191,6 +193,8 @@ class ReviewServer:
         self.token = None
         self.sessions = {}
         self.pending = {}
+        # Cookies of sessions a check ended, to the time they are forgotten.
+        self.revoked = {}
         self.login_failures = deque()
         self.started = False
 
@@ -208,6 +212,8 @@ class ReviewServer:
 
     async def require_session(self, request):
         session, cookie = self.current_session(request)
+        if session is None and self.revoked.get(cookie, 0) > time.monotonic():
+            raise AccessRevoked()
         if session is None:
             raise web.HTTPUnauthorized(reason="Sign in with Discord" if self.discord
                                        else "Sign in with your access key")
@@ -251,6 +257,11 @@ class ReviewServer:
         session.guilds, session.checked = access.guilds, time.monotonic()
         if not access.guilds:
             self.sessions.pop(cookie, None)
+            now = time.monotonic()
+            self.revoked = {key: until for key, until in self.revoked.items() if until > now}
+            if len(self.revoked) >= MAX_SESSIONS:
+                del self.revoked[min(self.revoked, key=self.revoked.get)]
+            self.revoked[cookie] = now + REVOKED_SECONDS
         outcome = "revoked" if not access.guilds else "reduced" if lost else "kept"
         self.count("review_access_checks", outcome)
         if lost:
@@ -431,6 +442,7 @@ class ReviewServer:
         await asyncio.gather(*checks, return_exceptions=True)
         self.sessions.clear()
         self.pending.clear()
+        self.revoked.clear()
         self.started = False
 
     @staticmethod
@@ -472,6 +484,8 @@ class ReviewServer:
                 await self.confirm_access(cookie, session)
             except AccessRevoked:
                 return web.json_response({"authenticated": False, "method": self.method, "reason": "access_revoked"})
+        if session is None and self.revoked.get(cookie, 0) > time.monotonic():
+            return web.json_response({"authenticated": False, "method": self.method, "reason": "access_revoked"})
         if session is None:
             return web.json_response({"authenticated": False, "method": self.method})
         guilds = None if session.guilds is None else sorted(
@@ -594,6 +608,7 @@ class ReviewServer:
         return _redirect(_next_page(request.query.get("next")), status=303)
 
     async def logout(self, request):
+        self.revoked.pop(request.cookies.get(COOKIE, ""), None)
         session = self.sessions.pop(request.cookies.get(COOKIE, ""), None)
         if session is not None:
             logger.info("review_logout", extra={"fields": {
