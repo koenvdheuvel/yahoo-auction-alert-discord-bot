@@ -65,9 +65,17 @@ class ChannelPermissionTests(unittest.TestCase):
         text = channel(1, overwrites={GUILD: Overwrite(True, deny=P.SEND_MESSAGES)})
         server = guild([text], owner_id=BOT_ID)
         self.assertEqual(member_permissions(server, text, BOT_ID, []), P.all_permissions())
-        server = guild([text], roles={GUILD: EVERYONE_VIEW, ROLE: POST})
-        self.assertEqual(member_permissions(server, channel(2), BOT_ID, [ROLE], timed_out=True),
+        self.assertEqual(member_permissions(server, text, BOT_ID, [], timed_out=True), P.all_permissions())
+        # The timeout applies after the overwrites: a channel that allows more does not undo it.
+        generous = channel(2, overwrites={ROLE: Overwrite(True, allow=P.SEND_MESSAGES | P.MANAGE_CHANNELS)})
+        server = guild([text, generous], roles={GUILD: EVERYONE_VIEW, ROLE: POST})
+        self.assertEqual(member_permissions(server, generous, BOT_ID, [ROLE], timed_out=True),
                          P.VIEW_CHANNEL | P.READ_MESSAGE_HISTORY)
+
+    def test_a_thread_without_a_known_parent_gets_nothing(self):
+        orphan = channel(5, "thread", parent_id=404)
+        server = guild([orphan], roles={GUILD: EVERYONE_VIEW | P.MANAGE_CHANNELS, ROLE: POST})
+        self.assertEqual(member_permissions(server, orphan, BOT_ID, [ROLE]), P.NONE)
 
 
 class PostingTests(unittest.TestCase):

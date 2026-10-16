@@ -127,15 +127,25 @@ def channel_permissions(base, guild_id, member_id, role_ids, overwrites):
     return permissions
 
 
+# A member in timeout keeps only these, whatever a channel's overwrites allow.
+TIMEOUT_ALLOWS = P.VIEW_CHANNEL | P.READ_MESSAGE_HISTORY
+
+
 def member_permissions(guild, channel, member_id, role_ids, timed_out=False, implied=True):
     """What a member may do in a channel of the server. A thread uses its parent channel's overwrites.
 
-    implied=False leaves out what Discord takes away without Send Messages, for saying which
-    permission is missing.
+    A thread whose parent is not known gets nothing: without the parent's overwrites, the
+    server-wide permissions would be too generous. A timeout applies after the overwrites, as
+    Discord applies it, except to the owner and administrators. implied=False leaves out what
+    Discord takes away without Send Messages, for saying which permission is missing.
     """
-    base = guild_permissions(member_id, guild.owner_id, guild.id, guild.roles, role_ids, timed_out)
     target = guild.channels.get(channel.parent_id) if channel.kind in THREADS else channel
-    permissions = channel_permissions(base, guild.id, member_id, role_ids, target.overwrites if target else {})
+    if target is None:
+        return P.NONE
+    base = guild_permissions(member_id, guild.owner_id, guild.id, guild.roles, role_ids)
+    permissions = channel_permissions(base, guild.id, member_id, role_ids, target.overwrites)
+    if timed_out and permissions != P.all_permissions():
+        permissions &= TIMEOUT_ALLOWS
     if implied and channel.kind not in THREADS and not permissions & P.SEND_MESSAGES:
         permissions &= ~NEEDS_SEND
     return permissions
