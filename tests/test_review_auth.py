@@ -358,7 +358,9 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         callback = self.fake.approve(location, ALICE)
         state = parse_qs(urlsplit(callback).query)["state"][0]
         issued, signature = state.split(".")
-        for forged in ("forged-state", f"{int(issued) + 1}.{signature}", f"{issued}.{signature[:-1]}A"):
+        # A signature's last character is one of 16; swap it for another so it always changes.
+        tampered = signature[:-1] + ("E" if signature.endswith("A") else "A")
+        for forged in ("forged-state", f"{int(issued) + 1}.{signature}", f"{issued}.{tampered}"):
             self.denied(await self.callback(callback.replace(state, forged)), "state")
         # The real state still works once: the callback removes the login cookie.
         self.assertEqual((await self.callback(callback)).status, 200)
