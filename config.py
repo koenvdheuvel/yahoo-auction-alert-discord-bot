@@ -59,6 +59,21 @@ def public_url(value):
     return f"{parts.scheme}://{host}{port}"
 
 
+# Settings that were renamed along with the dashboard. An old name stops startup, so a missed
+# rename does not go unnoticed. A missed REVIEW_DISCORD_CLIENT_SECRET, for example, would
+# otherwise turn Discord sign-in off and switch to the access key.
+RENAMED = {f"REVIEW_{name}": f"DASHBOARD_{name}" for name in (
+    "ENABLED", "HOST", "PORT", "TOKEN", "TOKEN_FILE", "PUBLIC_URL", "DISCORD_CLIENT_SECRET",
+    "DISCORD_CLIENT_SECRET_FILE", "REPLAY_LIMIT")}
+
+
+def refuse_renamed():
+    """Raise when the environment still sets a renamed setting, even to an empty value."""
+    old = sorted(name for name in RENAMED if name in os.environ)
+    if old:
+        raise ValueError("Rename these settings: " + ", ".join(f"{name} to {RENAMED[name]}" for name in old))
+
+
 @dataclass(frozen=True)
 class Settings:
     token: str = field(default="", repr=False)
@@ -96,6 +111,7 @@ class Settings:
 
     @classmethod
     def from_env(cls, require_token=True):
+        refuse_renamed()
         token = os.getenv("BOT_TOKEN", "").strip()
         if require_token and not token:
             raise ValueError("BOT_TOKEN is required")
@@ -109,11 +125,11 @@ class Settings:
             raise ValueError("LOG_LEVEL is invalid")
         dashboard_token = os.getenv("DASHBOARD_TOKEN", "").strip()
         dashboard_token_file = os.getenv("DASHBOARD_TOKEN_FILE", "")
-        review_url = public_url(os.getenv("DASHBOARD_PUBLIC_URL", ""))
+        address = public_url(os.getenv("DASHBOARD_PUBLIC_URL", ""))
         client_secret = secret("DASHBOARD_DISCORD_CLIENT_SECRET")
-        if client_secret and not review_url:
+        if client_secret and not address:
             raise ValueError("Discord sign-in needs DASHBOARD_PUBLIC_URL, the address Discord sends people back to")
-        if review_url and not client_secret:
+        if address and not client_secret:
             raise ValueError("DASHBOARD_PUBLIC_URL is only used for Discord sign-in; "
                              "also set DASHBOARD_DISCORD_CLIENT_SECRET or DASHBOARD_DISCORD_CLIENT_SECRET_FILE")
         if client_secret and (not 16 <= len(client_secret) <= 512 or any(c.isspace() for c in client_secret)):
@@ -146,7 +162,7 @@ class Settings:
             dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
             dashboard_port=positive("DASHBOARD_PORT", 9101, maximum=65535),
             dashboard_token=dashboard_token, dashboard_token_file=dashboard_token_file,
-            dashboard_public_url=review_url, dashboard_discord_client_secret=client_secret,
+            dashboard_public_url=address, dashboard_discord_client_secret=client_secret,
             dashboard_replay_limit=positive("DASHBOARD_REPLAY_LIMIT", 500, maximum=500),
             history_retention_days=positive("HISTORY_RETENTION_DAYS", 90, maximum=3650),
             history_max_rows=positive("HISTORY_MAX_ROWS", 50000, maximum=1000000),

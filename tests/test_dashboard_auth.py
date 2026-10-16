@@ -701,6 +701,38 @@ def test_discord_sign_in_settings_are_checked_at_startup(monkeypatch, tmp_path):
         Settings.from_env(require_token=False)
 
 
+def test_startup_refuses_the_old_setting_names_and_names_their_replacements(monkeypatch):
+    from config import RENAMED
+
+    configure(monkeypatch, BOT_TOKEN="token")
+    for name in RENAMED:
+        monkeypatch.delenv(name, raising=False)
+    Settings.from_env()
+    # An empty value counts too: an old .env file has REVIEW_TOKEN= in it.
+    configure(monkeypatch, BOT_TOKEN="token", REVIEW_TOKEN="", REVIEW_DISCORD_CLIENT_SECRET=SECRET)
+    with pytest.raises(ValueError) as error:
+        Settings.from_env()
+    assert str(error.value) == ("Rename these settings: REVIEW_DISCORD_CLIENT_SECRET to "
+                                "DASHBOARD_DISCORD_CLIENT_SECRET, REVIEW_TOKEN to DASHBOARD_TOKEN")
+    assert SECRET not in str(error.value)
+    # The standalone dashboard reads the same settings.
+    with pytest.raises(ValueError, match="REVIEW_TOKEN to DASHBOARD_TOKEN"):
+        Settings.from_env(require_token=False)
+    assert set(RENAMED.values()) == {
+        "DASHBOARD_ENABLED", "DASHBOARD_HOST", "DASHBOARD_PORT", "DASHBOARD_TOKEN", "DASHBOARD_TOKEN_FILE",
+        "DASHBOARD_PUBLIC_URL", "DASHBOARD_DISCORD_CLIENT_SECRET", "DASHBOARD_DISCORD_CLIENT_SECRET_FILE",
+        "DASHBOARD_REPLAY_LIMIT"}
+
+
+def test_the_example_environment_file_uses_only_current_names():
+    from config import RENAMED
+
+    names = {line.lstrip("# ").split("=", 1)[0] for line in
+             (Path(__file__).resolve().parent.parent / ".env.example").read_text().splitlines() if "=" in line}
+    assert not names & set(RENAMED)
+    assert {"DASHBOARD_ENABLED", "DASHBOARD_PORT", "DASHBOARD_PUBLIC_URL"} <= names
+
+
 def test_the_client_secret_and_oauth_tokens_are_redacted_from_logs():
     formatter = JsonFormatter(secrets=(SECRET,))
     record = logging.LogRecord("dashboard", logging.INFO, __file__, 1, "using %s", (SECRET,), None)

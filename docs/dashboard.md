@@ -370,6 +370,10 @@ Configuration is listed in [.env.example](../.env.example): `DASHBOARD_ENABLED`,
 `DASHBOARD_DISCORD_CLIENT_SECRET_FILE`, `DASHBOARD_TOKEN`, `DASHBOARD_TOKEN_FILE`,
 `DASHBOARD_REPLAY_LIMIT`, `HISTORY_RETENTION_DAYS` and `HISTORY_MAX_ROWS`.
 
+These settings were called `REVIEW_*` before, for example `REVIEW_PORT`. The bot
+and `dashboard.py` refuse to start while an old name is set, even to an empty
+value, and the error lists the new name for each one.
+
 For a local Docker deployment, add `-e DASHBOARD_HOST=0.0.0.0` and
 `-p 127.0.0.1:9101:9101` to the README's container command. This maps the UI to
 the host's loopback interface. Without Discord sign-in and with
