@@ -37,11 +37,12 @@ flowchart LR
 | `normalization.py` | Versioned Unicode title normalization; original titles remain intact |
 | `filtering.py` | Validated grouped rules, legacy compatibility, bounded regex evaluation and explainable decisions |
 | `storechecker.py` | Applies eligibility rules, archives candidates and coordinates observations; malformed items do not prevent valid siblings from being stored |
-| `models.py` | Schema v3, explicit database binding and transactional migrations with backups |
+| `models.py` | Schema v4, explicit database binding and transactional migrations with backups |
 | `repositories.py` | Async persistence API over a single database thread; no Peewee objects escape to callers |
 | `review_repository.py` | Candidate snapshots, feedback, immutable rule versions, atomic activation and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
-| `review.py`, `review_ui/*` | Authenticated same-origin operator API and dependency-free browser UI; separate listener from monitoring |
+| `review.py` | Authenticated same-origin operator API that also serves the built UI; separate listener from monitoring |
+| `frontend/` | Filter Lab's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
 | `delivery.py` | Formats embeds and sends durable channel/DM jobs with independent retries |
 | `observability.py` | Bounded-label Prometheus collectors, JSON correlation/redaction, health endpoints |
 | `commands/*` | Thin Discord command adapters using repository methods and guild/channel checks |
@@ -116,7 +117,9 @@ provider facts and channel blacklists. Accepted
 candidate history, listing facts, per-alert baselines and outbox intentions
 commit together. Rejected candidates create only archive records. Snapshots
 retain original titles, normalized titles, decision reasons, normalization
-version, rule-version ID and alert/channel identity. Unregistering an alert
+version, rule-version ID and alert/channel identity. A listing seen again with
+the same decision refreshes its row and last-seen time instead of adding a copy;
+a new decision adds a row and keeps the listing's label. Unregistering an alert
 detaches its history instead of deleting it; reusing a SQLite ID does not attach
 old history to a different alert.
 
@@ -124,8 +127,9 @@ Rule versions are immutable. Publishing uses a compare-and-swap check against
 the active version; restoring copies the selected version into a new version.
 Checks capture the active profile at their start, so a publication takes effect
 on subsequent checks. Preview and replay have no ingestion or delivery side
-effects. Replay uses one separate worker, at most 500 recent snapshots and a
-10-second processing budget; incomplete listing snapshots stay in review. It
+effects. Replay uses one separate worker, the latest decision of at most 500
+recently seen listings plus up to 1,000 labeled ones, and a 10-second
+processing budget; incomplete listing snapshots stay in review. It
 compares title/source/price eligibility while retaining recorded channel
 blacklist vetoes. It does not reconstruct delivery, changing blacklist state,
 subscriptions or stock-change behavior. Feedback supports relevant, wrong
@@ -150,13 +154,17 @@ Retries preserve acknowledged message IDs. The CLI never migrates or creates a m
 
 ## Migration and compatibility
 
-Startup migrates the original five-table schema to schema v3. Both the original
-conversion and the additive migration from schema v2 create an online SQLite
-backup named `alerts.db.pre-v3.<UTC timestamp>.bak` before changing tables.
-Schema changes and data conversion
+Startup migrates the original five-table schema to schema v4. The original
+conversion and the migrations from schema v2 and v3 create an online SQLite
+backup named `alerts.db.pre-v4.<UTC timestamp>.bak`, with the database file's
+own permissions, before changing tables. Schema changes and data conversion
 are transactional, foreign keys are validated, and startup refuses unknown
-versioned schemas. The v3 migration adds review tables without changing existing
-listing, baseline or delivery data.
+versioned schemas. The v2 migration adds review tables without changing existing
+listing, baseline or delivery data. The v3 migration adds `last_seen_at`, indexes
+candidates by alert and listing, and folds the repeated copies earlier polls
+saved into one row per decision; each kept row takes the newest label of the
+rows it replaces. On the dev database this removed 38,896 of 50,000 rows in
+about a second.
 
 Known checker class names map to stable marketplace keys. IDs, mute state, subscriptions, blacklists, and the latest available message mapping are preserved. Duplicate subscriptions/blacklists are collapsed. Orphaned child rows are counted in the migration log and remain in the backup. Listings with unknown sources are retained under their legacy source and reported for manual mapping.
 
@@ -164,7 +172,7 @@ Old filters saved blacklist/whitelist policy but lost the selected text/regex me
 
 Overwritten alert associations and older message IDs were absent from the old database and cannot be recovered automatically. The migration preserves what is present, then discovers additional alert/listing associations in future checks. Legacy guild IDs are backfilled from known Discord channel IDs, not guessed from search query text.
 
-Re-registration and filter management are channel scoped. Mutating commands and `/allalerts` require the guild's Manage Channels permission. `/allalerts` lists the current guild and includes current-channel legacy rows. Cleanup requests are bounded to 1–100 deletes over the latest 1,000 messages; historical reaction backfill visits only tracked listing posts. Subscription confirmation DMs are best-effort and do not undo the saved subscription when DMs are unavailable.
+Re-registration and filter management are channel scoped. Mutating commands and `/allalerts` require the guild's Manage Channels permission. `/allalerts` lists the current guild and includes current-channel legacy rows. Cleanup requests are bounded to 1 to 100 deletes over the latest 1,000 messages; historical reaction backfill visits only tracked listing posts. Subscription confirmation DMs are best-effort and do not undo the saved subscription when DMs are unavailable.
 
 ## Monitoring and validation
 
@@ -172,6 +180,6 @@ See [monitoring.md](monitoring.md) for metric names, health semantics, Prometheu
 
 Per-alert check metrics carry `alert_id`. The `auction_bot_alert_info` metadata series maps it to the query and channel so Grafana can join in friendly names without repeating query text on every counter and histogram. Metadata refreshes between polls; removed alerts retire their live collectors. Global metrics retain their original label sets.
 
-Tests use temporary databases, fake Discord REST, and temporary local HTTP servers. They cover migrations/backups, identity and alert isolation, filters, delivery failure windows, HTTP retries/pagination, command permissions, reactions, bounded scheduling, cancellation, metrics, readiness, and token redaction. GitHub Actions runs Ruff and pytest before building or deploying.
+Tests use temporary databases, fake Discord REST, and temporary local HTTP servers. They cover migrations/backups, identity and alert isolation, filters, delivery failure windows, HTTP retries/pagination, command permissions, reactions, bounded scheduling, cancellation, metrics, readiness, and token redaction. GitHub Actions runs Ruff, pytest and the UI's lint, type check, tests and build before building or deploying.
 
-The runtime dependency list now includes only directly used libraries, and Docker caches dependency installation before copying source. A `.dockerignore` excludes credentials, databases, backups, virtual environments, and caches. The deployment mounts the entire database directory so migration backups survive container replacement, uses an explicit database path, and configures restart behavior and a container readiness probe.
+The runtime dependency list now includes only directly used libraries, and Docker caches dependency installation before copying source. A Node stage builds the UI, and the runtime image receives only the built files. A `.dockerignore` excludes credentials, databases, backups, virtual environments, and caches. The deployment mounts the entire database directory so migration backups survive container replacement, uses an explicit database path, and configures restart behavior and a container readiness probe.

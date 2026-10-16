@@ -33,11 +33,18 @@ Price decreases greater than ¥500, buyout changes greater than ¥500 in either 
 The operator UI opens at **http://127.0.0.1:9101** when the bot starts. Sign in with
 the key in `alerts.db.review-token` next to your configured database, or set
 `REVIEW_TOKEN` in `.env`. The generated file is private and excluded from Git and
-container builds. `REVIEW_ENABLED=false` disables the listener.
+container builds. `REVIEW_ENABLED=false` disables the listener. The container
+image includes the built UI; from a checkout, build it once with Node 22.12 or
+newer:
 
-Filter Lab lets you browse original and normalized candidate titles, inspect
-decision reasons, label wrong products/accessories/bundles, edit grouped rules,
-and compare drafts against saved history before publishing. Each required group
+```bash
+cd frontend && npm ci && npm run build
+```
+
+Filter Lab shows what each search found as a photo grid or as rows, with the
+bot's decision and its reasons. You label wrong products, accessories and
+bundles from the keyboard, one listing or a selection at a time, edit grouped
+rules, and compare drafts against saved history before publishing. Each required group
 must match; aliases within a group can match any term. Exclusion groups veto a
 listing, while review groups hold ambiguous listings for inspection. Published
 versions can be restored as a new version.
@@ -101,8 +108,12 @@ To scrape from outside the container, set `MONITORING_HOST=0.0.0.0` and expose t
 pip install -r requirements-dev.txt
 ruff check .
 python -m pytest -q
+
+cd frontend
+npm ci
+npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-Tests use temporary SQLite files and local HTTP fixtures with fake Discord REST; they do not contact marketplace or Discord services. GitHub Actions tests before deploying pushes to `master`.
+Tests use temporary SQLite files and local HTTP fixtures with fake Discord REST; they do not contact marketplace or Discord services. GitHub Actions runs both sets of checks before deploying pushes to `develop` (the dev bot) and `master` (production). The [Filter Lab guide](docs/filter-lab.md#developing-the-ui) explains live reloading for the UI.
 
 This project originated as a rewrite of [vlourme's bot](https://github.com/vlourme/yahoo-auction-alert-discord-bot). It is licensed under the [GNU General Public License](LICENSE).
