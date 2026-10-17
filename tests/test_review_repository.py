@@ -10,10 +10,9 @@ import unittest
 from unittest.mock import patch
 
 from filtering import default_ruleset
-from models import (ActiveReviewRules, Alert, AlertItem, CandidateFeedback,
-                    CandidateObservation, DeliveryJob, Filter, Item, Message, Notification, REVIEW_TABLES,
-                    ReviewRuleVersion, SCHEMA_VERSION, SchemaVersion, TABLES,
-                    configure_database, create_tables, database, utcnow)
+from models import (ActiveReviewRules, Alert, AlertItem, CandidateObservation, DeliveryJob, Filter,
+                    Item, Message, Notification, REVIEW_TABLES, ReviewRuleVersion, SCHEMA_VERSION,
+                    SchemaVersion, TABLES, configure_database, create_tables, database, utcnow)
 from observability import Metrics
 from repositories import Repository
 from review_repository import (ReviewConflict, ReviewNotFound, ReviewRepositoryMixin,
@@ -81,37 +80,18 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["normalized_title"], decision()["normalized_title"])
         self.assertEqual(row["normalization_version"], 1)
         self.assertTrue(row["observed_at"].endswith("Z"))
-        self.assertEqual((page["total"], page["has_more"], row["feedback"]), (1, False, None))
+        self.assertEqual((page["total"], page["has_more"]), (1, False))
         for model in (Item, AlertItem, DeliveryJob, Message):
             self.assertEqual(await self.rows(model), [])
         summary = (await self.repository.review_alerts())["alerts"][0]
         self.assertEqual((summary["id"], summary["archived_count"], summary["active_version_id"]),
                          (str(self.alert["id"]), 1, None))
 
-    async def test_feedback_is_separate_upsert_and_can_be_cleared_without_changing_decision(self):
-        identifier = await self.archive()
-        first = await self.repository.set_candidate_feedback(identifier, "wrong_product")
-        self.assertEqual(first["feedback"], "wrong_product")
-        self.assertTrue(first["feedback_updated_at"].endswith("Z"))
-        updated = await self.repository.set_candidate_feedback(identifier, "relevant")
-        self.assertEqual(updated["feedback"], "relevant")
-        self.assertEqual(updated["decision"], decision())
-        self.assertEqual(len(await self.rows(CandidateFeedback)), 1)
-        cleared = await self.repository.set_candidate_feedback(identifier, None)
-        self.assertIsNone(cleared["feedback"])
-        self.assertIsNone(cleared["feedback_updated_at"])
-        self.assertEqual(await self.rows(CandidateFeedback), [])
-        with self.assertRaises(ReviewValidation):
-            await self.repository.set_candidate_feedback(identifier, "incorrect-label")
-        with self.assertRaises(ReviewNotFound):
-            await self.repository.set_candidate_feedback("99999", "unsure")
-
-    async def test_pagination_search_source_verdict_feedback_and_replay_are_bounded(self):
-        filtered = await self.archive(external_id="filtered")
+    async def test_pagination_search_source_and_verdict_are_bounded(self):
+        await self.archive(external_id="filtered")
         accepted = await self.archive("accepted", "accepted")
         await self.repository.archive_candidate(self.alert, facts("review", "Separate book", "surugaya"),
                                                 decision("review", normalized_title="separate book"))
-        await self.repository.set_candidate_feedback(filtered, "accessory")
         page = await self.repository.list_candidates(limit=2)
         self.assertEqual((page["total"], len(page["items"]), page["has_more"], page["next_offset"]), (3, 2, True, 2))
         final = await self.repository.list_candidates(limit=2, offset=2)
@@ -120,10 +100,8 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.repository.list_candidates(search="babymetal ベビーメタル"))["total"], 2)
         self.assertEqual((await self.repository.list_candidates(source="surugaya"))["total"], 1)
         self.assertEqual((await self.repository.list_candidates(verdict="accepted"))["items"][0]["id"], accepted)
-        self.assertEqual((await self.repository.list_candidates(feedback="accessory"))["items"][0]["id"], filtered)
-        self.assertEqual((await self.repository.list_candidates(feedback="unreviewed"))["total"], 2)
         self.assertEqual((await self.repository.list_candidates(alert_id=str(self.alert["id"])))["total"], 3)
-        for parameters in ({"limit": 501}, {"limit": 0}, {"offset": -1}, {"search": "x" * 257}, {"feedback": "bad"}):
+        for parameters in ({"limit": 501}, {"limit": 0}, {"offset": -1}, {"search": "x" * 257}, {"verdict": "bad"}):
             with self.subTest(parameters=parameters), self.assertRaises(ReviewValidation):
                 await self.repository.list_candidates(**parameters)
         self.assertEqual(await self.rows(Item), [])
@@ -176,15 +154,13 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored["ruleset"], first["ruleset"])
         self.assertEqual(restored["version"], 36)
 
-    async def test_history_and_feedback_survive_unregister_and_cannot_follow_reused_alert_ids(self):
+    async def test_history_survives_unregister_and_cannot_follow_reused_alert_ids(self):
         version = await self.repository.publish_review_rules(self.alert["id"], {"groups": []})
         identifier = await self.archive(ruleset_version_id=version["id"])
-        await self.repository.set_candidate_feedback(identifier, "bundle")
         await self.repository.unregister_alert(self.channel, self.alert["search_query"])
         row = (await self.repository.list_candidates())["items"][0]
         self.assertIsNone(row["alert_id"])
-        self.assertEqual(row["alert_snapshot_id"], str(self.alert["id"]))
-        self.assertEqual(row["feedback"], "bundle")
+        self.assertEqual((row["id"], row["alert_snapshot_id"]), (identifier, str(self.alert["id"])))
         self.assertEqual(row["ruleset_version_id"], version["id"])
         self.assertEqual(await self.rows(ActiveReviewRules), [])
         self.assertIsNone((await self.rows(ReviewRuleVersion))[0]["alert"])
@@ -286,33 +262,33 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["items"][0]["draft_decision"]["verdict"], "review")
         self.assertEqual(await self.rows(DeliveryJob), jobs)
 
-    async def test_pruning_removes_least_recently_seen_unlabeled_rows_and_never_reuses_ids(self):
+    async def test_pruning_removes_least_recently_seen_rows_and_never_reuses_ids(self):
         ids = [await self.archive(external_id=str(index)) for index in range(5)]
-        await self.repository.set_candidate_feedback(ids[0], "accessory")
 
         def backdate():
-            for index, days in ((0, 120), (1, 100), (2, 91)):
-                CandidateObservation.update(observed_at=utcnow() - timedelta(days=days),
-                                            last_seen_at=utcnow() - timedelta(days=days)).where(
+            # (row, days since first seen, days since last seen)
+            for index, first, last in ((0, 100, 100), (1, 120, 120), (2, 91, 91), (3, 200, 1), (4, 2, 2)):
+                CandidateObservation.update(observed_at=utcnow() - timedelta(days=first),
+                                            last_seen_at=utcnow() - timedelta(days=last)).where(
                     CandidateObservation.id == ids[index]).execute()
-            # First seen long ago but still in the search results: not old.
-            CandidateObservation.update(observed_at=utcnow() - timedelta(days=200)).where(
-                CandidateObservation.id == ids[3]).execute()
         await self.repository._call("test_backdate", backdate)
+
+        async def remaining():
+            return {str(row["id"]) for row in await self.rows(CandidateObservation)}
         first = await self.repository.prune_candidates(limit=1)
         self.assertEqual((first["deleted"], first["remaining"], first["has_more"]), (1, 4, True))
+        # The row seen least recently goes first, not the one with the lowest ID.
+        self.assertEqual(await remaining(), {ids[0], ids[2], ids[3], ids[4]})
         second = await self.repository.prune_candidates()
-        self.assertEqual((second["deleted"], second["remaining"], second["has_more"]), (1, 3, False))
-        remaining = {row["id"] for row in await self.rows(CandidateObservation)}
-        self.assertEqual(remaining, {int(ids[0]), int(ids[3]), int(ids[4])})
-        self.assertEqual([row["label"] for row in await self.rows(CandidateFeedback)], ["accessory"])
-        third = await self.repository.prune_candidates(max_rows=1)
-        self.assertEqual((third["deleted"], third["remaining"], third["has_more"]), (2, 1, False))
-        # Only the labeled row is left, so a cap below it removes nothing and reports no backlog.
+        self.assertEqual((second["deleted"], second["remaining"], second["has_more"]), (2, 2, False))
+        # Row 3 was first seen long ago but is still in the search results, so it is not old.
+        self.assertEqual(await remaining(), {ids[3], ids[4]})
+        third = await self.repository.prune_candidates(max_rows=0, limit=1)
+        self.assertEqual((third["deleted"], third["remaining"], third["has_more"]), (1, 1, True))
+        # Down to the cap, row 4 goes first: row 3 was first seen earlier but was seen again since.
+        self.assertEqual(await remaining(), {ids[3]})
         fourth = await self.repository.prune_candidates(max_rows=0)
-        self.assertEqual((fourth["deleted"], fourth["remaining"], fourth["has_more"]), (0, 1, False))
-        await self.repository.set_candidate_feedback(ids[0], None)
-        self.assertEqual((await self.repository.prune_candidates(max_rows=0))["deleted"], 1)
+        self.assertEqual((fourth["deleted"], fourth["remaining"], fourth["has_more"]), (1, 0, False))
         next_id = await self.archive()
         self.assertGreater(int(next_id), max(map(int, ids)))
         self.assertEqual(await self.rows(Item), [])
@@ -453,9 +429,8 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("notes", snapshot["archive_omitted_fields"])
         self.assertEqual(payload["notes"], "n" * 150000)
 
-    async def test_repeat_sightings_refresh_one_row_and_a_new_decision_adds_a_row_with_the_label(self):
+    async def test_repeat_sightings_refresh_one_row_and_a_new_decision_adds_a_row(self):
         first = await self.archive("accepted", "listing")
-        await self.repository.set_candidate_feedback(first, "relevant")
         before = (await self.rows(CandidateObservation))[0]
         version = await self.repository.publish_review_rules(self.alert["id"], {"groups": []})
         repeat = await self.repository.archive_candidate(
@@ -466,11 +441,11 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(after["last_seen_at"], before["last_seen_at"])
         self.assertEqual(json.loads(after["payload"])["price"], 2400)
         self.assertEqual(after["ruleset_version"], int(version["id"]))
-        # A different decision is history worth keeping: it gets its own row and keeps the label.
+        # A different decision is history worth keeping: it gets its own row.
         changed = await self.archive("filtered", "listing")
         self.assertNotEqual(changed, first)
         rows = (await self.repository.list_candidates())["items"]
-        self.assertEqual([(row["id"], row["feedback"]) for row in rows], [(changed, "relevant"), (first, "relevant")])
+        self.assertEqual([row["id"] for row in rows], [changed, first])
         latest = (await self.repository.list_candidates(latest=True))["items"]
         self.assertEqual([row["id"] for row in latest], [changed])
         # Other listings and rows without a listing ID are never merged.
@@ -493,16 +468,16 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(rows[0]["payload"])["price"], 1500)
         self.assertEqual(len(await self.rows(DeliveryJob)), 2)
 
-    async def test_cursor_pages_neither_skip_nor_repeat_rows_while_labeling_and_polling(self):
+    async def test_cursor_pages_neither_skip_nor_repeat_rows_while_polling(self):
         ids = [await self.archive(external_id=f"item-{index}") for index in range(5)]
-        first = await self.repository.list_candidates(feedback="unlabeled", limit=2)
+        first = await self.repository.list_candidates(limit=2)
         self.assertEqual([row["id"] for row in first["items"]], [ids[4], ids[3]])
-        for row in first["items"]:
-            await self.repository.set_candidate_feedback(row["id"], "bundle")
+        # A later poll sees one listing again and finds a new one.
+        await self.archive(external_id="item-1")
         await self.archive(external_id="arrived-later")
-        second = await self.repository.list_candidates(feedback="unlabeled", limit=2, cursor=first["next_cursor"])
+        second = await self.repository.list_candidates(limit=2, cursor=first["next_cursor"])
         self.assertEqual(([row["id"] for row in second["items"]], second["next_offset"]), ([ids[2], ids[1]], None))
-        third = await self.repository.list_candidates(feedback="unlabeled", limit=2, cursor=second["next_cursor"])
+        third = await self.repository.list_candidates(limit=2, cursor=second["next_cursor"])
         self.assertEqual(([row["id"] for row in third["items"]], third["has_more"], third["next_cursor"]),
                          ([ids[0]], False, None))
         for cursor in ("", "x" * 129, "not base64!", "YmFk", "MjAyNi0xMC0xNnwx"):
@@ -511,48 +486,35 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_facets_count_each_value_with_the_other_filters_applied(self):
         await self.archive("accepted", "a")
-        filtered = await self.archive("filtered", "b")
-        await self.archive("review", "c")
-        await self.repository.set_candidate_feedback(filtered, "accessory")
+        await self.archive("filtered", "b")
+        await self.repository.archive_candidate(self.alert, facts("c", source="surugaya"), decision("review"))
         page = await self.repository.list_candidates(verdict="filtered", facets=True)
         self.assertEqual(page["total"], 1)
-        self.assertEqual(page["facets"]["verdict"], {"accepted": 1, "filtered": 1, "review": 1})
-        self.assertEqual(page["facets"]["feedback"], {"unlabeled": 0, "accessory": 1, "bundle": 0, "relevant": 0,
-                                                      "unsure": 0, "wrong_product": 0})
-        unlabeled = await self.repository.list_candidates(feedback="unlabeled", facets=True)
-        self.assertEqual(unlabeled["facets"]["verdict"], {"accepted": 1, "filtered": 0, "review": 1})
+        self.assertEqual(page["facets"], {"verdict": {"accepted": 1, "filtered": 1, "review": 1}})
+        mercari = await self.repository.list_candidates(source="mercari", facets=True)
+        self.assertEqual(mercari["facets"], {"verdict": {"accepted": 1, "filtered": 1, "review": 0}})
         self.assertNotIn("facets", await self.repository.list_candidates())
 
-    async def test_bulk_feedback_labels_existing_rows_and_reports_missing_ones(self):
-        first, second = await self.archive(external_id="a"), await self.archive(external_id="b")
-        result = await self.repository.set_candidates_feedback([first, second, "99999", first], "wrong_product")
-        self.assertEqual([row["id"] for row in result["items"]], [first, second])
-        self.assertEqual({row["feedback"] for row in result["items"]}, {"wrong_product"})
-        self.assertEqual(result["missing"], ["99999"])
-        cleared = await self.repository.set_candidates_feedback([first], None)
-        self.assertIsNone(cleared["items"][0]["feedback"])
-        self.assertEqual(len(await self.rows(CandidateFeedback)), 1)
-        for ids, label in (([], "bundle"), (["1"] * 201, "bundle"), ("1", "bundle"), ([first], "bad"), ([True], None)):
-            with self.subTest(ids=str(ids)[:20], label=label), self.assertRaises(ReviewValidation):
-                await self.repository.set_candidates_feedback(ids, label)
-
-    async def test_replay_sample_uses_latest_decisions_and_adds_labeled_listings_beyond_it(self):
-        await self.repository.set_candidate_feedback(await self.archive("accepted", "old-labeled"), "wrong_product")
-        await self.repository.set_candidate_feedback(await self.archive("accepted", "old-unsure"), "unsure")
+    async def test_replay_sample_is_the_latest_decisions_of_the_most_recently_seen_listings(self):
+        await self.archive("accepted", "old")
         for index in range(3):
             await self.archive("accepted", f"recent-{index}")
         await self.archive("filtered", "recent-2")
-        result = await self.repository.replay_candidates(self.alert["id"], limit=2, labeled_limit=10)
-        self.assertEqual((result["available"], result["recent"], result["labeled_extra"]), (5, 2, 1))
+        result = await self.repository.replay_candidates(self.alert["id"], limit=2)
+        self.assertEqual((result["available"], result["recent"]), (4, 2))
         self.assertEqual([(row["external_id"], row["verdict"]) for row in result["items"]],
-                         [("recent-2", "filtered"), ("recent-1", "accepted"), ("old-labeled", "accepted")])
-        none_extra = await self.repository.replay_candidates(self.alert["id"], limit=2, labeled_limit=0)
-        self.assertEqual(len(none_extra["items"]), 2)
+                         [("recent-2", "filtered"), ("recent-1", "accepted")])
+        # Seeing a listing again puts it back among the most recently seen.
+        await self.archive("accepted", "old")
+        result = await self.repository.replay_candidates(self.alert["id"], limit=2)
+        self.assertEqual([row["external_id"] for row in result["items"]], ["old", "recent-2"])
+        with self.assertRaises(ReviewValidation):
+            await self.repository.replay_candidates(self.alert["id"], limit=501)
 
     async def test_alert_summaries_count_latest_decisions_and_unassigned_history(self):
         await self.archive("accepted", "a")
         await self.archive("filtered", "a")
-        await self.repository.set_candidate_feedback(await self.archive("review", "b"), "bundle")
+        await self.archive("review", "b")
         await self.repository.register_alert(555555555555555555, "detached")
         other = next(row for row in await self.repository.list_alerts() if row["search_query"] == "detached")
         await self.repository.archive_candidate(other, facts("x"), decision())
@@ -560,9 +522,8 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         result = await self.repository.review_alerts()
         summary = result["alerts"][0]
         self.assertEqual({key: summary[key] for key in (
-            "archived_count", "listing_count", "accepted_count", "filtered_count", "review_count", "labeled_count")},
-            {"archived_count": 3, "listing_count": 2, "accepted_count": 0, "filtered_count": 1,
-             "review_count": 1, "labeled_count": 1})
+            "archived_count", "listing_count", "accepted_count", "filtered_count", "review_count")},
+            {"archived_count": 3, "listing_count": 2, "accepted_count": 0, "filtered_count": 1, "review_count": 1})
         self.assertTrue(summary["last_seen_at"].endswith("Z"))
         self.assertEqual(result["totals"], {"archived_count": 4, "unassigned_count": 1})
         await self.repository.register_alert(self.channel, "empty")
@@ -613,6 +574,7 @@ class ReviewMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertTrue({model._meta.table_name for model in REVIEW_TABLES}.issubset(tables))
+            self.assertNotIn("candidate_feedback", tables)
         backups = list(self.path.parent.glob(f"v2.sqlite.pre-v{SCHEMA_VERSION}.*.bak"))
         self.assertEqual(len(backups), 1)
         with sqlite3.connect(backups[0]) as connection:
@@ -671,11 +633,14 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
                 "VALUES (?, ?, 123, 'poster', 'mercari', ?, 'title', 'title', '{}', ?, ?, 'listing', ?, 0, ?)",
                 (alert.id, alert.id, external_id, recorded, json.loads(recorded)["verdict"], origin,
                  str(datetime(2026, 10, 16, 7) + timedelta(minutes=minute))))
-        # "x" has a label in each of its first two runs. "y" has two labels in one run; row 6
-        # was labeled last, so its label wins over the later sighting's.
+        # v3 also had listing labels. The table is created the way v3 created it.
+        database.execute_sql('CREATE TABLE "candidate_feedback" ("candidate_id" INTEGER NOT NULL PRIMARY KEY, '
+                             '"label" VARCHAR(255) NOT NULL, "updated_at" DATETIME NOT NULL, '
+                             'FOREIGN KEY ("candidate_id") REFERENCES "candidate_observation" ("id") ON DELETE CASCADE)')
+        database.execute_sql('CREATE INDEX "candidatefeedback_label" ON "candidate_feedback" ("label")')
         database.execute_sql('INSERT INTO "candidate_feedback" ("candidate_id", "label", "updated_at") VALUES '
                              "(1, 'wrong_product', '2026-10-16 07:10:00'), (3, 'accessory', '2026-10-16 08:10:00'), "
-                             "(6, 'unsure', '2026-10-16 09:00:00'), (7, 'relevant', '2026-10-16 08:00:00')")
+                             "(5, 'unsure', '2026-10-16 09:00:00'), (9, 'relevant', '2026-10-16 08:00:00')")
         database.close()
         self.path.chmod(0o600)
 
@@ -687,7 +652,7 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
         return connection.execute('SELECT "id", "external_id", "verdict", "observed_at", "last_seen_at" '
                                   'FROM "candidate_observation" ORDER BY "id"').fetchall()
 
-    def test_upgrade_folds_repeated_sightings_moves_labels_keeps_imports_and_is_backed_up(self):
+    def test_upgrade_folds_repeated_sightings_removes_labels_keeps_imports_and_is_backed_up(self):
         with self.assertLogs("models", "WARNING") as logs:
             create_tables()
         with sqlite3.connect(self.path) as connection:
@@ -702,14 +667,9 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
                 (11, "", "filtered", "2026-10-16 07:00:00", "2026-10-16 07:00:00"),
                 (12, "", "filtered", "2026-10-16 07:30:00", "2026-10-16 07:30:00"),
             ])
-            # Each kept row has its run's newest label; the last "x" run has none and inherits one.
+            # The label table and its index are gone.
             self.assertEqual(connection.execute(
-                "SELECT candidate_id, label, updated_at FROM candidate_feedback ORDER BY candidate_id").fetchall(), [
-                (2, "wrong_product", "2026-10-16 07:10:00"),
-                (4, "accessory", "2026-10-16 08:10:00"),
-                (5, "accessory", "2026-10-16 08:10:00"),
-                (8, "unsure", "2026-10-16 09:00:00"),
-            ])
+                "SELECT name FROM sqlite_master WHERE tbl_name = 'candidate_feedback'").fetchall(), [])
             column = next(row for row in connection.execute("PRAGMA table_info(candidate_observation)")
                           if row[1] == "last_seen_at")
             self.assertEqual(column[3], 1)
@@ -726,8 +686,8 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_observation").fetchone()[0], 12)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 4)
         migrated = next(record for record in logs.records if record.getMessage() == "database_migrated")
-        self.assertEqual(migrated.fields["repeated_snapshots_removed"], 4)
-        self.assertEqual(migrated.fields["labels_moved_to_latest"], 4)
+        self.assertEqual(migrated.fields, {"schema_version": 4, "previous_version": 3, "backup": str(backups[0]),
+                                           "labels_removed": 4, "repeated_snapshots_removed": 4})
         create_tables()
         self.assertEqual(list(self.path.parent.glob("*.bak")), backups)
 
@@ -740,3 +700,5 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
             columns = {row[1] for row in connection.execute("PRAGMA table_info(candidate_observation)")}
             self.assertNotIn("last_seen_at", columns)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_observation").fetchone()[0], 12)
+            # The labels were dropped before the fold failed, so this shows the drop was undone too.
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 4)

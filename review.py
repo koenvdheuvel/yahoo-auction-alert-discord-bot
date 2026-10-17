@@ -25,7 +25,6 @@ ASSETS = Path(__file__).resolve().parent / "frontend" / "dist"
 COOKIE = "filter_lab_session"
 SESSION_SECONDS = 12 * 3600
 SOURCES = {"yahooauction", "mercari", "surugaya"}
-FEEDBACK = {"relevant", "wrong_product", "accessory", "bundle", "unsure"}
 # Vite writes this placeholder into index.html (html.cspNonce); each page view gets a new value.
 NONCE_PLACEHOLDER = "__CSP_NONCE__"
 ASSET_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}")
@@ -90,13 +89,6 @@ def _choice(query, name, allowed, message):
 
 def _flag(query, name):
     return _choice(query, name, {"0", "1", "true", "false"}, f"{name} must be true or false") in {"1", "true"}
-
-
-def _label(data):
-    label = data.get("label")
-    if label is not None and (not isinstance(label, str) or label not in FEEDBACK):
-        raise ReviewValidation("Select a valid relevance label")
-    return label
 
 
 class ReviewServer:
@@ -196,8 +188,6 @@ class ReviewServer:
             web.get("/api/alerts", self.alerts, name="alerts"),
             web.get("/api/alerts/{id}/rules", self.rules, name="rules"),
             web.get("/api/candidates", self.candidates, name="candidates"),
-            web.post("/api/candidates/feedback", self.feedback_many, name="feedback_bulk"),
-            web.post("/api/candidates/{id}/feedback", self.feedback, name="feedback"),
             web.post("/api/rules/validate", self.validate, name="rules_validate"),
             web.post("/api/preview", self.preview, name="preview"),
             web.post("/api/replay", self.replay, name="replay"),
@@ -332,7 +322,6 @@ class ReviewServer:
             alert_id=alert_id, search=search,
             source=_choice(query, "source", SOURCES, "Unknown source"),
             verdict=_choice(query, "verdict", {"accepted", "filtered", "review"}, "Unknown decision"),
-            feedback=_choice(query, "feedback", FEEDBACK | {"unlabeled"}, "Unknown feedback label"),
             limit=_whole_number(query, "limit", 50, 1, 100),
             offset=_whole_number(query, "offset", 0, 0, 10 ** 7),
             cursor=query.get("cursor") or None, latest=_flag(query, "latest"), facets=_flag(query, "facets"))
@@ -346,15 +335,6 @@ class ReviewServer:
 
     async def replay(self, request):
         return web.json_response(await self.service.replay(await self.body(request)))
-
-    async def feedback(self, request):
-        label = _label(await self.body(request))
-        return web.json_response(await self.repository.set_candidate_feedback(
-            identifier(request.match_info["id"]), label))
-
-    async def feedback_many(self, request):
-        data = await self.body(request)
-        return web.json_response(await self.repository.set_candidates_feedback(data.get("ids"), _label(data)))
 
     async def publish(self, request):
         return web.json_response(await self.service.publish(

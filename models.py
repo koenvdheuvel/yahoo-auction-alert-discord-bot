@@ -1,5 +1,6 @@
 """Versioned SQLite schema. Configuration and migration are explicit startup work."""
 from datetime import datetime, timezone
+from itertools import groupby
 import logging
 import os
 from pathlib import Path
@@ -184,15 +185,6 @@ class CandidateObservation(BaseModel):
         indexes = ((("alert", "observed_at"), False), (("alert", "source", "external_id"), False))
 
 
-class CandidateFeedback(BaseModel):
-    candidate = ForeignKeyField(CandidateObservation, primary_key=True, backref="feedback", on_delete="CASCADE")
-    label = CharField(index=True)
-    updated_at = DateTimeField(default=utcnow)
-
-    class Meta:
-        table_name = "candidate_feedback"
-
-
 class SchemaVersion(BaseModel):
     version = IntegerField()
 
@@ -200,7 +192,7 @@ class SchemaVersion(BaseModel):
         table_name = "schema_version"
 
 
-REVIEW_TABLES = [ReviewRuleVersion, ActiveReviewRules, CandidateObservation, CandidateFeedback]
+REVIEW_TABLES = [ReviewRuleVersion, ActiveReviewRules, CandidateObservation]
 TABLES = [Alert, Item, AlertItem, Message, Blacklist, Notification, Filter,
           DeliveryJob, *REVIEW_TABLES, SchemaVersion]
 SOURCE_ALIASES = {"YahooAuctionsChecker": "yahooauction", "MercariChecker": "mercari",
@@ -306,53 +298,24 @@ def _fold_repeated_snapshots():
     """Before v4 every poll archived another copy of each listing it saw.
 
     For each run of identical decisions on one listing, keep the last row and set its
-    `observed_at` to the run's first sighting. A label describes the listing, as in live
-    archiving: the newest label of a run moves to the kept row, and a run without labels
-    takes the label of the run before it. Imported history stays as it is. Returns the
-    number of removed rows and the number of kept rows whose label was set.
+    `observed_at` to the run's first sighting. Imported history stays as it is. Returns the
+    number of removed rows.
     """
-    labels = {row[0]: (row[1], row[2]) for row in database.execute_sql(
-        'SELECT "candidate_id", "label", "updated_at" FROM "candidate_feedback"')}
     rows = database.execute_sql(
         'SELECT "id", "alert_id", "source", "external_id", "decision", "observed_at" '
         "FROM \"candidate_observation\" WHERE \"origin\" = 'live' AND \"alert_id\" IS NOT NULL "
         "AND \"external_id\" != '' ORDER BY \"alert_id\", \"source\", \"external_id\", \"id\"").fetchall()
-    removed, first_seen, relabeled = [], [], []
-
-    def close(run, carried):
-        kept = run[-1][0]
-        # The most recently updated label in the run; the later row wins a tie.
-        own = max(((labels[row[0]], row[0]) for row in run if row[0] in labels), default=None,
-                  key=lambda item: (item[0][1], item[1]))
-        label = own[0] if own else carried
-        removed.extend(row[0] for row in run[:-1])
-        if len(run) > 1:
-            first_seen.append((run[0][5], kept))
-        if label is not None and labels.get(kept) != label:
-            relabeled.append((kept, *label))
-        return label
-
-    listing, run, carried = None, [], None
-    for row in rows:
-        if row[1:4] != listing:
-            if run:
-                close(run, carried)
-            listing, run, carried = row[1:4], [], None
-        elif row[4] != run[-1][4]:
-            carried = close(run, carried)
-            run = []
-        run.append(row)
-    if run:
-        close(run, carried)
+    removed, first_seen = [], []
+    # The rows are sorted by listing, oldest first, so each group is one run of the same decision.
+    for _, run in groupby(rows, key=lambda row: row[1:5]):
+        *earlier, kept = run
+        if earlier:
+            removed.extend(row[0] for row in earlier)
+            first_seen.append((earlier[0][5], kept[0]))
     connection = database.connection()
-    connection.executemany('DELETE FROM "candidate_feedback" WHERE "candidate_id" = ?',
-                           [(identifier,) for identifier in removed if identifier in labels])
     connection.executemany('DELETE FROM "candidate_observation" WHERE "id" = ?', [(identifier,) for identifier in removed])
     connection.executemany('UPDATE "candidate_observation" SET "observed_at" = ? WHERE "id" = ?', first_seen)
-    connection.executemany('INSERT INTO "candidate_feedback" ("candidate_id", "label", "updated_at") VALUES (?, ?, ?) '
-                           'ON CONFLICT ("candidate_id") DO UPDATE SET "label" = excluded."label", '
-                           '"updated_at" = excluded."updated_at"', relabeled)
-    return len(removed), len(relabeled)
+    return len(removed)
 
 
 def _upgrade(previous):
@@ -371,8 +334,11 @@ def _upgrade(previous):
             # Nothing queried (source, external_id). Repeat sightings are matched per alert now.
             database.execute_sql('DROP INDEX IF EXISTS "candidateobservation_source_external_id"')
             CandidateObservation._schema.create_indexes(safe=True)
-            removed, relabeled = _fold_repeated_snapshots()
-            details.update(repeated_snapshots_removed=removed, labels_moved_to_latest=relabeled)
+            # Filter Lab no longer has listing labels. The backup keeps them.
+            labels = database.execute_sql('SELECT COUNT(*) FROM "candidate_feedback"').fetchone()[0]
+            database.execute_sql('DROP TABLE IF EXISTS "candidate_feedback"')
+            removed = _fold_repeated_snapshots()
+            details.update(labels_removed=labels, repeated_snapshots_removed=removed)
         SchemaVersion.update(version=SCHEMA_VERSION).where(SchemaVersion.id == 1).execute()
         if database.execute_sql("PRAGMA foreign_key_check").fetchall():
             raise RuntimeError("Foreign key validation failed; migration rolled back")

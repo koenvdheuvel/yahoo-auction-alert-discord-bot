@@ -153,23 +153,17 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.repository.list_candidates())["total"], 0)
         self.assertEqual(await self.repository.due_deliveries(), [])
 
-    async def test_replay_feedback_publish_and_live_rejections_share_one_engine(self):
+    async def test_replay_publish_and_live_rejections_share_one_engine(self):
         await self.login()
-        saved = await self.seed()
+        await self.seed()
         original_jobs = await self.repository.due_deliveries()
         self.assertEqual(len(original_jobs), 4)
-        labels = {"old-0": "relevant", "old-1": "accessory", "old-2": "bundle", "old-3": "wrong_product"}
-        for candidate in saved["items"]:
-            response = await self.post(f'/api/candidates/{candidate["id"]}/feedback',
-                                       {"label": labels[candidate["external_id"]]})
-            self.assertEqual(response.status, 200)
         response = await self.post("/api/replay", {"alert_id": self.alert["id"], "ruleset": product_rules()})
         self.assertEqual(response.status, 200)
         replay = await response.json()
-        self.assertEqual(replay["summary"]["newly_blocked"], 3)
-        self.assertEqual(replay["summary"]["relevant_allowed"], 1)
-        self.assertEqual(replay["summary"]["unwanted_blocked"], 3)
-        self.assertEqual(replay["summary"]["labeled"], 4)
+        self.assertEqual(replay["summary"], {
+            "total": 4, "accepted": 1, "filtered": 3, "review": 0, "newly_blocked": 3, "newly_allowed": 0,
+            "unchanged": 1, "changed": 0, "truncated": False, "budget_exceeded": False, "available": 4, "recent": 4})
         self.assertEqual(await self.repository.due_deliveries(), original_jobs)
         self.assertEqual((await self.repository.list_candidates())["total"], 4)
         response = await self.post(f'/api/alerts/{self.alert["id"]}/publish',
@@ -214,6 +208,10 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 415)
         response = await self.post(f'/api/alerts/{self.alert["id"]}/publish', {"ruleset": default_ruleset()})
         self.assertEqual(response.status, 400)
+        # Signed in, but the request does not come from a Filter Lab page.
+        response = await self.client.post(f'/api/alerts/{self.alert["id"]}/publish',
+                                          json={"ruleset": default_ruleset(), "expected_version_id": None})
+        self.assertEqual(response.status, 403)
         self.assertIsNone((await self.repository.get_review_rules(self.alert["id"]))["active_version"])
 
     async def test_incomplete_snapshots_and_recorded_blacklists_cannot_become_allowed(self):
@@ -320,12 +318,8 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session["replay_limit"], 500)
         response = await self.client.get("/api/nothing-here")
         self.assertEqual((response.status, (await response.json())["error"]), (404, "not_found"))
-        for path, data in (("/api/preview", {"title": "x", "source": ["not", "text"]}),
-                           ("/api/candidates/1/feedback", {"label": {"not": "text"}}),
-                           ("/api/candidates/feedback", {"ids": ["1"], "label": ["bundle"]})):
-            with self.subTest(path=path):
-                response = await self.post(path, data)
-                self.assertEqual((response.status, (await response.json())["error"]), (400, "invalid_request"))
+        response = await self.post("/api/preview", {"title": "x", "source": ["not", "text"]})
+        self.assertEqual((response.status, (await response.json())["error"]), (400, "invalid_request"))
 
     async def test_validate_returns_the_canonical_ruleset_or_the_field_at_fault(self):
         await self.login()
@@ -344,24 +338,17 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await response.json())["field"], "price")
         self.assertEqual((await self.post("/api/rules/validate", {})).status, 400)
 
-    async def test_candidate_pages_facets_and_bulk_labels_over_http(self):
+    async def test_candidate_pages_and_facets_over_http(self):
         await self.login()
         await self.seed()
         params = {"alert_id": self.alert["id"], "limit": "3", "latest": "1", "facets": "1"}
         page = await (await self.client.get("/api/candidates", params=params)).json()
         self.assertEqual((len(page["items"]), page["total"], page["has_more"]), (3, 4, True))
-        self.assertEqual(page["facets"]["verdict"], {"accepted": 4, "filtered": 0, "review": 0})
+        self.assertEqual(page["facets"], {"verdict": {"accepted": 4, "filtered": 0, "review": 0}})
         rest = await (await self.client.get("/api/candidates", params={**params, "cursor": page["next_cursor"]})).json()
         self.assertEqual((len(rest["items"]), rest["has_more"]), (1, False))
-        ids = [row["id"] for row in page["items"]]
-        response = await self.client.post("/api/candidates/feedback", json={"ids": ids, "label": "bundle"})
-        self.assertEqual(response.status, 403)
-        response = await self.post("/api/candidates/feedback", {"ids": ids + ["999999"], "label": "bundle"})
-        body = await response.json()
-        self.assertEqual(([row["id"] for row in body["items"]], body["missing"]), (ids, ["999999"]))
-        self.assertEqual({row["feedback"] for row in body["items"]}, {"bundle"})
         for bad in ({"limit": "0"}, {"limit": "abc"}, {"latest": "maybe"}, {"verdict": "nope"}, {"cursor": "bad"},
-                    {"source": "ebay"}, {"feedback": "great"}, {"search": "x" * 257}):
+                    {"source": "ebay"}, {"search": "x" * 257}):
             with self.subTest(params=bad):
                 self.assertEqual((await self.client.get("/api/candidates", params=bad)).status, 400)
 
@@ -381,21 +368,15 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertIsNone((await response.json())["alerts"][0]["channel_name"])
 
-    async def test_replay_checks_labeled_listings_outside_the_recent_sample(self):
+    async def test_replay_checks_the_most_recently_seen_listings_up_to_the_limit(self):
         await self.login()
-        saved = await self.seed()
-        labels = {"old-0": "relevant", "old-1": "accessory"}
-        for candidate in saved["items"]:
-            if candidate["external_id"] in labels:
-                await self.post(f'/api/candidates/{candidate["id"]}/feedback', {"label": labels[candidate["external_id"]]})
+        await self.seed()
         response = await self.post("/api/replay", {"alert_id": self.alert["id"], "ruleset": product_rules(), "limit": 1})
         replay = await response.json()
         summary = replay["summary"]
-        self.assertEqual((summary["recent"], summary["labeled_extra"], summary["available"], summary["total"]),
-                         (1, 2, 4, 3))
+        self.assertEqual((summary["recent"], summary["available"], summary["total"]), (1, 4, 1))
         self.assertTrue(summary["truncated"])
         self.assertFalse(summary["budget_exceeded"])
-        self.assertEqual((summary["labeled"], summary["relevant_allowed"], summary["unwanted_blocked"]), (2, 1, 1))
         candidate = replay["items"][0]["candidate"]
         self.assertEqual(candidate["external_id"], "old-3")
         self.assertNotIn("payload", candidate)

@@ -6,12 +6,9 @@ import time
 
 from domain import FilterRule
 from filtering import CompiledRuleset, Decision, default_ruleset, validate_ruleset
-from review_repository import (JUDGED_LABELS, POST_REMOVAL_DAYS, POST_REMOVAL_LIMIT, ReviewConflict,
-                               ReviewValidation)
+from review_repository import POST_REMOVAL_DAYS, POST_REMOVAL_LIMIT, ReviewConflict, ReviewValidation
 
 
-# Labeled listings outside the recent sample that replay still checks.
-REPLAY_LABELED_LIMIT = 1000
 REPLAY_BUDGET_SECONDS = 10
 # The reasons that make a listing filtered. A post to remove is shown with the first one.
 BLOCKING_REASONS = frozenset({"source_excluded", "price_below_minimum", "price_above_maximum",
@@ -62,7 +59,7 @@ def _replay_candidate(row):
     payload = row.get("payload") or {}
     result = {key: row.get(key) for key in (
         "id", "source", "external_id", "title", "normalized_title", "observation_kind", "origin",
-        "incomplete", "observed_at", "last_seen_at", "feedback")}
+        "incomplete", "observed_at", "last_seen_at")}
     result.update({key: payload.get(key) for key in ("price", "url", "image_url")})
     return result
 
@@ -138,10 +135,10 @@ class ReviewService:
         active = state["active_version"]
         active_ruleset = active["ruleset"] if active else default_ruleset()
         legacy = _enabled_rules(await self.repository.review_filters(alert_id))
-        rows = await self.repository.replay_candidates(alert_id, limit=limit, labeled_limit=REPLAY_LABELED_LIMIT)
+        rows = await self.repository.replay_candidates(alert_id, limit=limit)
         result = await self._evaluate(self._replay, rows["items"], active_ruleset, draft, legacy)
         summary = result["summary"]
-        summary.update(available=rows["available"], recent=rows["recent"], labeled_extra=rows["labeled_extra"])
+        summary.update(available=rows["available"], recent=rows["recent"])
         summary["truncated"] = summary["budget_exceeded"] or rows["available"] > rows["recent"]
         result["active_version_id"] = active["id"] if active else None
         return result
@@ -152,9 +149,7 @@ class ReviewService:
         draft = CompiledRuleset(draft_ruleset, legacy_rules=legacy)
         summary = {"total": 0, "accepted": 0, "filtered": 0, "review": 0,
                    "newly_blocked": 0, "newly_allowed": 0, "unchanged": 0, "changed": 0,
-                   "truncated": False, "budget_exceeded": False, "labeled": 0, "unwanted_allowed": 0,
-                   "relevant_blocked": 0, "relevant_allowed": 0,
-                   "unwanted_blocked": 0, "relevant_review": 0, "unwanted_review": 0}
+                   "truncated": False, "budget_exceeded": False}
         items, deadline = [], time.monotonic() + REPLAY_BUDGET_SECONDS
         for row in candidates:
             if time.monotonic() >= deadline:
@@ -181,12 +176,6 @@ class ReviewService:
             summary["total"] += 1
             summary[after] += 1
             summary[change] += 1
-            label = row.get("feedback")
-            if label in JUDGED_LABELS:
-                summary["labeled"] += 1
-                prefix = "relevant" if label == "relevant" else "unwanted"
-                suffix = {"accepted": "allowed", "filtered": "blocked", "review": "review"}[after]
-                summary[prefix + "_" + suffix] += 1
             items.append({"candidate": _replay_candidate(row), "original_decision": row["decision"],
                           "active_decision": current, "draft_decision": proposed, "change": change})
         return {"items": items, "summary": summary}
