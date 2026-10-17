@@ -1,14 +1,267 @@
-// Shapes returned by review.py. IDs are strings because Discord snowflakes exceed 2^53.
+// Shapes returned by dashboard.py. IDs are strings because Discord snowflakes exceed 2^53.
 
 export type Source = "yahooauction" | "mercari" | "surugaya";
 export type Verdict = "accepted" | "filtered" | "review";
 export type Policy = "require" | "exclude" | "review";
 export type TermMethod = "contains" | "exact" | "regex";
 
+/** How this dashboard signs people in: with Discord, or with the access key when Discord sign-in is not set up. */
+export type SignInMethod = "discord" | "access_key";
+
+export interface DiscordUser {
+  id: string;
+  name: string;
+  username: string;
+  avatar_url: string;
+}
+
+/** A manager has Manage Channels for the whole server; a member only manages their own 🔔 notifications. */
+export type Level = "manager" | "member";
+
+/** A Discord server of the bot that the signed-in person is in. */
+export interface Guild {
+  id: string;
+  name: string;
+  icon_url: string | null;
+  level?: Level;
+}
+
+/** The bot as Discord shows it. */
+export interface BotUser {
+  id: string;
+  name: string;
+  avatar_url: string;
+}
+
 export interface Session {
   authenticated: boolean;
+  method?: SignInMethod;
+  /** The dashboard's name, such as "PosterFinder Dashboard". */
+  title?: string;
+  bot?: BotUser | null;
+  /** Whether this process is the bot itself, which sends and removes posts. */
+  bot_running?: boolean;
+  /** Set when this check found that the person lost access to every server. */
+  reason?: "access_revoked";
   expires_in?: number;
   replay_limit?: number;
+  /** Null when signed in with the access key. */
+  user?: DiscordUser | null;
+  /** The servers this person may see; null with the access key, which sees every server. */
+  guilds?: Guild[] | null;
+  features?: { notifications: boolean; discord_data: boolean };
+}
+
+/** A server in the server list. Its name is null when only its ID is known. The counts are only there
+ * for servers you manage. */
+export interface GuildSummary {
+  id: string;
+  name: string | null;
+  icon_url: string | null;
+  level: Level;
+  searches?: number;
+  failing_searches?: number;
+  failed_deliveries?: number;
+}
+
+export type ChannelKind = "text" | "announcement" | "forum" | "media" | "voice" | "stage" | "thread" | "private_thread" | "other";
+
+/** Whether the bot can post a search's listings in a channel. */
+export interface Posting {
+  can_post: boolean;
+  /** Discord permission names the bot lacks there, such as "Add Reactions". */
+  missing: string[];
+  problems: string[];
+  bulk_delete: boolean;
+  read_history: boolean;
+}
+
+export interface ChannelRow {
+  id: string;
+  name: string;
+  kind: ChannelKind;
+  parent_id: string | null;
+  archived: boolean;
+  locked: boolean;
+  searches: number;
+  hidden: number;
+  posting: Posting;
+  /** Whether you have Manage Channels there, which changes need. */
+  can_manage: boolean;
+  threads?: ChannelRow[];
+}
+
+export interface UnknownChannel {
+  id: string;
+  /** True when Discord said the channel no longer exists. */
+  deleted: boolean;
+  searches: number;
+  hidden: number;
+}
+
+export interface ChannelList {
+  guild: { id: string; name: string | null; icon_url: string | null };
+  /** Where the list came from: the bot's gateway cache, Discord's REST API, or nowhere. */
+  source: "gateway" | "rest" | "none";
+  discord_unavailable: boolean;
+  sections: { category: { id: string; name: string } | null; channels: ChannelRow[] }[];
+  unknown: UnknownChannel[];
+}
+
+export interface CheckResult {
+  source: Source;
+  outcome: "success" | "error" | "timeout";
+  /** Seconds since 1970. */
+  finished_at: number;
+  duration_seconds: number;
+  error: string | null;
+}
+
+export interface Backlog {
+  pending: number;
+  failed: number;
+  oldest_pending_seconds: number | null;
+}
+
+export interface SearchStatus extends AlertSummary {
+  /** Null when the bot does not run in this process. */
+  checks: CheckResult[] | null;
+  backlog: Backlog;
+}
+
+export interface BotStatus {
+  ready: boolean;
+  discord_connected: boolean;
+  database_available: boolean;
+  failed_worker: string | null;
+  last_poll_at: number | null;
+  last_success_at: number | null;
+  started_at: number | null;
+  interval_seconds: number;
+  sources: Record<string, number | null>;
+}
+
+export interface GuildStatus {
+  bot_running: boolean;
+  bot: BotStatus | null;
+  enabled_sources: Source[];
+  interval_seconds: number;
+  searches: SearchStatus[];
+  totals: { searches: number; pending: number; failed: number };
+}
+
+/** What unregistering a search touches. */
+export interface AlertUsage {
+  posts: number;
+  waiting_posts: number;
+  rule_versions: number;
+  archived: number;
+  legacy_filters: number;
+}
+
+export interface AlertDetail {
+  alert: AlertSummary;
+  usage: AlertUsage;
+  channel: { name: string; kind: ChannelKind; posting: Posting; can_manage: boolean } | null;
+  channel_deleted: boolean;
+}
+
+/** A listing as the bot stored it. */
+export interface StoredListing {
+  item_id: string;
+  source: string;
+  external_id: string;
+  title: string;
+  price: number;
+  buyout_price: number;
+  stock: number;
+  image_url: string | null;
+  url: string | null;
+  end_time: string | null;
+  muted: boolean;
+  updated_at: string | null;
+  last_seen_at: string | null;
+}
+
+export interface ChannelPost {
+  message_id: string;
+  posted_at: string;
+  alert_id: string | null;
+  item_id: string;
+  listing: { id: string; source: string; title: string; price: number; stock: number; buyout_price: number;
+    image_url: string; url: string };
+  hidden: boolean;
+  subscribers: number;
+  subscribed_by_me: boolean;
+  queued: boolean;
+}
+
+export interface ChannelPosts {
+  posts: ChannelPost[];
+  next_before: string | null;
+  /** Whether 🔔 works for you here: it needs Discord sign-in. */
+  notifications: boolean;
+}
+
+export interface HiddenListings {
+  items: StoredListing[];
+  total: number;
+}
+
+export interface CleanupPost {
+  message_id: string;
+  posted_at: string;
+  alert_id: string | null;
+  title: string;
+  source: string;
+  external_id: string;
+  price: number;
+  image_url: string;
+  url: string;
+}
+
+export interface CleanupPreview {
+  days: RemovalDays;
+  posts_in_range: number;
+  removable_total: number;
+  limit: number;
+  bot_running: boolean;
+  kept: { subscribed: number; queued: number };
+  posts: CleanupPost[];
+}
+
+export type ScanAction = "delete_bot_posts" | "add_reactions";
+
+export interface HistoryScan {
+  action: ScanAction;
+  count: number | null;
+  state: "running" | "done" | "forbidden" | "failed";
+  started_at: number;
+  finished_at: number | null;
+  done: number;
+  history_limit: number;
+}
+
+export interface SubscriptionPost {
+  channel_id: string;
+  /** Null when the listing was only tracked there, not posted. */
+  message_id: string | null;
+  guild_id: string;
+  search_query: string | null;
+  channel_name: string;
+}
+
+export interface Subscription extends StoredListing {
+  /** Where it was posted or tracked, in channels you can view now. */
+  posts: SubscriptionPost[];
+  waiting_dms: number;
+  redacted?: false;
+}
+
+/** A listing you follow that is only in channels you cannot view, or in servers you left. */
+export interface HiddenSubscription {
+  item_id: string;
+  redacted: true;
 }
 
 export interface AlertSummary {
@@ -26,9 +279,14 @@ export interface AlertSummary {
   active_version_id: string | null;
 }
 
+export interface ArchiveTotals {
+  archived_count: number;
+  unassigned_count: number;
+}
+
 export interface AlertsResponse {
   alerts: AlertSummary[];
-  totals: { archived_count: number; unassigned_count: number };
+  totals: ArchiveTotals & { guilds: Record<string, ArchiveTotals> };
 }
 
 export interface Reason {
@@ -79,6 +337,10 @@ export interface Candidate {
   incomplete: boolean;
   observed_at: string;
   last_seen_at: string | null;
+  /** The stored listing, which 🔔 follows. Null for listings the bot filtered and never stored. */
+  item_id?: string | null;
+  /** Whether you follow this listing with 🔔. */
+  subscribed?: boolean;
 }
 
 export interface Facets {

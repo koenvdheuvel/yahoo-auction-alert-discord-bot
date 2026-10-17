@@ -1,7 +1,7 @@
 name: Docker Build and Deploy
 
 # master  -> :latest  -> compose service yahoo_auction_alert     (production bot)
-# develop -> :develop -> compose service yahoo_auction_alert_dev (dev bot + Filter Lab at yahoo.internal.waxdt.com)
+# develop -> :develop -> compose service yahoo_auction_alert_dev (dev bot; its dashboard is at yahoo-dev.waxdt.com and yahoo.internal.waxdt.com)
 on:
   push:
     branches: [master, develop]
@@ -24,7 +24,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: python -m pytest -q
-      # Filter Lab's UI. The Docker build compiles it again; this catches errors before that.
+      # The dashboard's UI. The Docker build compiles it again; this catches errors before that.
       - uses: actions/setup-node@v4
         with:
           node-version: '24'

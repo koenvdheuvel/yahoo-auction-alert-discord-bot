@@ -10,7 +10,7 @@ import lightbulb
 from commands import register_commands
 from commands.base import CommandServices, GuildOnlyError, PageMenu, paginate_lines
 from commands.filters import filters_group
-from commands.reacttocleanup import add_reaction_to_bot_messages
+from channel_maintenance import add_cleanup_reactions
 
 
 class History:
@@ -236,7 +236,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             lambda channel, message: {"item_id": 1} if message == 3 else None
         )
         history, rest = self.fake_history([post(1), post(2, author_id=600), post(3)])
-        added = await add_reaction_to_bot_messages(self.services, 10)
+        added = await add_cleanup_reactions(rest, self.repository, 500, 10)
         self.assertEqual(added, 1)
         rest.add_reaction.assert_awaited_once_with(10, 3, "🗑️")
         self.assertEqual(history.requested_limit, 1000)

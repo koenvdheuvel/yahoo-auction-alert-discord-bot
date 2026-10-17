@@ -41,12 +41,15 @@ interface ConfirmProps {
   /** For example while something the confirmation depends on still loads. */
   confirmDisabled?: boolean;
   maxWidth?: "xs" | "sm";
+  /** Red for something that cannot be undone, such as deleting posts. */
+  danger?: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }
 
 export function ConfirmDialog(props: ConfirmProps) {
-  const { open, title, children, confirm, busy = false, confirmDisabled = false, maxWidth = "xs", onConfirm, onClose } = props;
+  const { open, title, children, confirm, busy = false, confirmDisabled = false, maxWidth = "xs", danger = false, onConfirm,
+    onClose } = props;
   return (
     <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth={maxWidth} fullWidth={maxWidth !== "xs"}
       aria-labelledby="confirm-title">
@@ -54,7 +57,8 @@ export function ConfirmDialog(props: ConfirmProps) {
       <DialogContent>{children}</DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={busy} color="inherit">Cancel</Button>
-        <Button onClick={onConfirm} disabled={busy || confirmDisabled} variant="contained" autoFocus>{busy ? "Working" : confirm}</Button>
+        <Button onClick={onConfirm} disabled={busy || confirmDisabled} variant="contained" color={danger ? "error" : "primary"}
+          autoFocus>{busy ? "Working" : confirm}</Button>
       </DialogActions>
     </Dialog>
   );

@@ -12,13 +12,13 @@ import { formatCount, safeUrl } from "../../lib/format";
 import { isTyping, useDebounced } from "../../lib/hooks";
 import { figures } from "../../theme";
 import type { TitleSeed } from "../TitleTestDialog";
-import type { ListingFilters } from "../Workspace";
+import type { ListingFilters } from "../views/SearchView";
 import { EmptyState, LoadError } from "../common/Feedback";
 import { FilterBar, ViewOptions, type View } from "./FilterBar";
 import { ListingDrawer } from "./ListingDrawer";
 import { ListingFrame } from "./ListingFrame";
 
-const VIEW_KEY = "filter-lab:view";
+const VIEW_KEY = "dashboard:view";
 // Frames of at least 196px; a phone still gets two columns (the gap is 12px).
 const GRID_COLUMNS = "repeat(auto-fill, minmax(min(196px, calc(50% - 6px)), 1fr))";
 
@@ -29,17 +29,20 @@ function seedFrom(candidate: Candidate): TitleSeed {
 
 interface Props {
   alertId: string | null;
+  /** With no alert selected, the Discord server whose listings to show; null for every server. */
+  guildId: string | null;
   filters: ListingFilters;
   onFilters: (next: ListingFilters) => void;
   onTestTitle: (seed: TitleSeed) => void;
 }
 
-export function ListingsPanel({ alertId, filters, onFilters, onTestTitle }: Props) {
+export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitle }: Props) {
   const [view, setView] = useState<View>(() => (localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid"));
   const search = useDebounced(filters.search.trim(), 300);
   const query = useMemo<CandidateQuery>(() => ({
-    alertId, search, source: filters.source, verdict: filters.verdict, latest: filters.latest,
-  }), [alertId, search, filters.source, filters.verdict, filters.latest]);
+    alertId, guildId: alertId ? null : guildId, search, source: filters.source, verdict: filters.verdict,
+    latest: filters.latest,
+  }), [alertId, guildId, search, filters.source, filters.verdict, filters.latest]);
   const candidates = useCandidates(query);
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = candidates;
   const items = useMemo(() => candidates.data?.pages.flatMap((page) => page.items) ?? [], [candidates.data]);

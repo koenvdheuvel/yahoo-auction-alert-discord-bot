@@ -10,7 +10,7 @@ interface Notice {
   severity: AlertColor;
 }
 
-/** Short confirmations and failures at the bottom of the screen, one at a time. */
+/** Short confirmations and failures at the top of the screen, one at a time. */
 export function NoticeProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<Notice[]>([]);
   const notify = useCallback<Notify>((message, severity = "success") => {
@@ -26,8 +26,8 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
         open={current !== undefined}
         autoHideDuration={current?.severity === "error" ? 9000 : 4000}
         onClose={(_, reason) => reason !== "clickaway" && close()}
-        // Bottom left sits over the list of searches, clear of the draft bar.
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        // Top centre, as Discord shows its notices: clear of the account panel and the draft bar.
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
       >
         {current && (
           <Alert onClose={close} severity={current.severity} variant="filled" sx={{ maxWidth: 560 }}>

@@ -10,12 +10,13 @@ import CircularProgress from "@mui/material/CircularProgress";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ApiError, api } from "../../api/client";
-import { keys, useValidation } from "../../api/hooks";
+import { keys, refreshAccess, useValidation } from "../../api/hooks";
 import type { AlertSummary, Policy, RemovalResult, RuleGroup, RulesResponse, Ruleset } from "../../api/types";
 import { errorMessage } from "../../lib/errors";
 import { formatRelative, plural } from "../../lib/format";
@@ -23,7 +24,7 @@ import { useDebounced } from "../../lib/hooks";
 import { LIMITS, cannotAddTerm, fieldLocation, groupsFromSearch, newGroup } from "../../lib/ruleset";
 import type { Draft } from "../../lib/useDraft";
 import { usePostRemoval } from "../../lib/usePostRemoval";
-import type { StoredReplay } from "../Workspace";
+import type { StoredReplay } from "../views/SearchView";
 import { ConfirmDialog, EmptyState, LoadError } from "../common/Feedback";
 import { useNotify } from "../common/notify";
 import { PostRemovalPreview } from "../removal/PostRemovalPreview";
@@ -37,12 +38,14 @@ interface Props {
   alert: AlertSummary | null;
   rules: UseQueryResult<RulesResponse>;
   draft: Draft;
+  /** Whether you may change the search, which deleting its Discord filters needs. */
+  canChange?: boolean;
   replay: StoredReplay | null;
   onTestTitle: () => void;
   onReplay: () => void;
 }
 
-export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay }: Props) {
+export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay, canChange = false }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
   const [confirming, setConfirming] = useState(false);
@@ -85,6 +88,8 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay 
       draft.discard();
       closePublish();
       if (removalError) {
+        // The removal's error is caught above, so the global 404 handling does not see it.
+        refreshAccess(client, removalError);
         notify(`Published version ${version.version}, but its posts were not queued for removal: ${errorMessage(removalError)} `
           + "You can remove them from Versions.", "warning");
       } else if (removed) {
@@ -190,6 +195,7 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay 
         <Box component="aside" aria-label="Settings for all groups" sx={{ bgcolor: "background.paper", border: 1, borderColor: "divider",
           borderRadius: 1, p: 2 }}>
           <RuleSettings ruleset={ruleset} onChange={update} filters={alert ? rules.data?.legacy_filters ?? [] : null}
+            alertId={alert?.id ?? null} canChange={canChange}
             priceError={invalid && fault.section === "price" ? invalid.message : null} />
         </Box>
       </Box>
@@ -235,9 +241,14 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay 
           <Button variant="outlined" color="inherit" onClick={onTestTitle}>Test a title</Button>
           {alert && <Button variant="outlined" color="inherit" onClick={onReplay} disabled={Boolean(invalid)}>Replay draft</Button>}
           {alert && (
-            <Button variant="contained" onClick={() => setConfirming(true)} disabled={!canPublish || publish.isPending}>
-              Publish
-            </Button>
+            <Tooltip title={canChange ? "" : "You need Manage Channels in this search's channel to publish"}>
+              <span>
+                <Button variant="contained" onClick={() => setConfirming(true)}
+                  disabled={!canPublish || publish.isPending || !canChange}>
+                  Publish
+                </Button>
+              </span>
+            </Tooltip>
           )}
         </Stack>
       </Box>

@@ -2,18 +2,21 @@ import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
 import CssBaseline from "@mui/material/CssBaseline";
 import { ThemeProvider } from "@mui/material/styles";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { ApiError, onSessionEnded } from "./api/client";
-import { keys, useSession } from "./api/hooks";
+import { draftOwner, keys, refreshAccess, useSession } from "./api/hooks";
 import type { Session } from "./api/types";
-import { Login } from "./components/Login";
-import { Workspace } from "./components/Workspace";
+import { Login, type SessionEnd } from "./components/Login";
+import { Shell } from "./components/shell/Shell";
 import { NoticeProvider } from "./components/common/Notices";
+import { claimDrafts } from "./lib/drafts";
 import { theme } from "./theme";
 
-const queryClient = new QueryClient({
+const queryClient: QueryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: (error) => refreshAccess(queryClient, error) }),
+  mutationCache: new MutationCache({ onError: (error) => refreshAccess(queryClient, error) }),
   defaultOptions: {
     queries: {
       // Retry network blips and server errors, not answers such as 400, 401 or 404.
@@ -39,33 +42,40 @@ export function App() {
 function SessionGate() {
   const client = useQueryClient();
   const session = useSession();
-  const [ended, setEnded] = useState(false);
+  const [ended, setEnded] = useState<SessionEnd | null>(null);
 
-  useEffect(() => onSessionEnded(() => {
+  useEffect(() => onSessionEnded((error) => {
     // After signing out on purpose, requests that were still on their way come back 401.
-    if (client.getQueryData<Session>(keys.session)?.authenticated === false) return;
-    setEnded(true);
-    client.setQueryData<Session>(keys.session, { authenticated: false });
+    const current = client.getQueryData<Session>(keys.session);
+    if (current?.authenticated === false) return;
+    setEnded(error.code === "access_revoked" ? "revoked" : "ended");
+    client.setQueryData<Session>(keys.session, { authenticated: false, method: current?.method, title: current?.title,
+      bot: current?.bot, bot_running: current?.bot_running });
   }), [client]);
 
   if (session.isPending) {
     return (
       <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-        <CircularProgress aria-label="Opening Filter Lab" />
+        <CircularProgress aria-label={`Opening ${document.title}`} />
       </Box>
     );
   }
   if (!session.data?.authenticated) {
     return (
       <Login
-        sessionEnded={ended}
+        method={session.data?.method}
+        title={session.data?.title}
+        bot={session.data?.bot}
+        ended={session.data?.reason === "access_revoked" ? "revoked" : ended}
         unreachable={session.isError ? session.error : null}
+        onRetry={() => void session.refetch()}
         onSignedIn={(data) => {
-          setEnded(false);
+          setEnded(null);
+          claimDrafts(draftOwner(data));
           client.setQueryData<Session>(keys.session, data);
         }}
       />
     );
   }
-  return <Workspace />;
+  return <Shell />;
 }

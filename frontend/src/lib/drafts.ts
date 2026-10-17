@@ -2,9 +2,10 @@ import { useMemo, useSyncExternalStore } from "react";
 
 import type { Ruleset } from "../api/types";
 
-// Drafts survive reloads and expired sessions. Signing out removes them. The access key is
-// never stored in the browser.
-const PREFIX = "filter-lab:draft:";
+// Drafts survive reloads and expired sessions. Signing out removes them, and so does someone
+// else signing in on this browser. The access key is never stored in the browser.
+const PREFIX = "dashboard:draft:";
+const OWNER = "dashboard:draft-owner";
 const listeners = new Set<() => void>();
 
 export interface StoredDraft {
@@ -72,6 +73,23 @@ export function clearAllDrafts() {
   if (!store) return;
   for (const key of Object.keys(store)) if (key.startsWith(PREFIX)) store.removeItem(key);
   emit();
+}
+
+/**
+ * Marks the stored drafts as belonging to whoever just signed in: a Discord user ID, or
+ * "access_key". When someone else signed in last, their drafts are removed first, so nobody
+ * publishes another person's unfinished edits. Drafts saved before owners were recorded are kept.
+ */
+export function claimDrafts(owner: string) {
+  const store = storage();
+  if (!store) return;
+  const previous = store.getItem(OWNER);
+  if (previous !== null && previous !== owner) clearAllDrafts();
+  try {
+    store.setItem(OWNER, owner);
+  } catch {
+    // Storage blocked: drafts cannot be kept anyway.
+  }
 }
 
 export function countDrafts(): number {

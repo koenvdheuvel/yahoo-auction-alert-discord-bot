@@ -53,7 +53,9 @@ def create_application(settings=None):
     from processors.hikari_event import HikariEventProcessor
     from providers import HttpClient, PROVIDERS
     from repositories import Repository
-    from review import ReviewServer
+    from dashboard import DashboardServer
+    from dashboard_auth import DiscordGuilds
+    from discord_directory import ChannelDirectory
     from runtime import Runtime
     from storechecker import Ingestion
 
@@ -62,7 +64,8 @@ def create_application(settings=None):
         settings = Settings.from_env()
     if not settings.token:
         raise ValueError("BOT_TOKEN is required")
-    configure_logging(settings.log_level, secrets=(settings.token, settings.review_token))
+    configure_logging(settings.log_level, secrets=(
+        settings.token, settings.dashboard_token, settings.dashboard_discord_client_secret))
     configure_database(settings.database_path)
     create_tables()
     metrics = Metrics()
@@ -75,18 +78,14 @@ def create_application(settings=None):
     delivery = DeliveryWorker(bot, repository, metrics, settings)
     providers = {source: PROVIDERS[source](http, settings) for source in settings.enabled_sources}
 
-    def channel_names(channel_ids):
-        """Filter Lab shows channel names from the gateway cache instead of bare IDs."""
-        names = {}
-        for channel_id in channel_ids:
-            channel = bot.cache.get_guild_channel(int(channel_id)) or bot.cache.get_thread(int(channel_id))
-            if channel is not None and channel.name:
-                names[channel_id] = channel.name
-        return names
-
-    review = ReviewServer(settings, repository, metrics, channel_names=channel_names, bot_running=True)
+    # Discord sign-in checks people's servers and roles with the bot's REST client and cache, and
+    # the dashboard's channel lists come from the same cache.
+    guild_access = DiscordGuilds(bot.rest, bot.cache) if settings.discord_sign_in else None
+    dashboard = DashboardServer(settings, repository, metrics, directory=ChannelDirectory(bot.rest, bot.cache),
+                                bot=bot, bot_running=True, guild_access=guild_access)
     runtime = Runtime(bot, settings, repository, http, ingestion, delivery, providers, metrics,
-                      review_server=review)
+                      dashboard_server=dashboard)
+    dashboard.runtime = runtime
     bot.services = ApplicationServices(repository, runtime, metrics, client)
     processor = HikariEventProcessor()
     load_commands(bot, client, repository)
@@ -111,14 +110,26 @@ def create_application(settings=None):
         runtime.set_expected_shards(bot.shards.keys())
         try:
             await client.start()
-            channel_guilds = {int(channel_id): int(channel.guild_id)
-                             for channel_id, channel in bot.cache.get_guild_channels_view().items()}
-            await repository.reconcile_guilds(channel_guilds)
             await runtime.start()
         except asyncio.CancelledError:
             raise
         except Exception:
             await startup_failed()
+
+    # Alerts saved before servers were recorded get their server from its channels. Discord
+    # sends a server's channels after the bot connects (StartedEvent comes before them), and
+    # again when the bot joins a server.
+    @bot.listen(hikari.GuildAvailableEvent)
+    @bot.listen(hikari.GuildJoinEvent)
+    async def on_guild_available(event):
+        channels = {int(channel_id): int(event.guild_id)
+                    for channel_id in (*event.channels.keys(), *event.threads.keys())}
+        try:
+            await repository.reconcile_guilds(channels)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("guild_reconcile_failed", extra={"fields": {"guild_id": int(event.guild_id)}})
 
     @bot.listen(hikari.StoppingEvent)
     async def on_stopping(event):

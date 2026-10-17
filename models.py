@@ -324,7 +324,7 @@ def _upgrade(previous):
     details = {}
     with database.atomic():
         if previous == 2:
-            # Filter Lab tables did not exist yet, so they are created in their current shape.
+            # Rule version and archive tables did not exist yet, so they are created in their current shape.
             database.create_tables(REVIEW_TABLES)
         else:
             # SQLite needs a constant default to add a NOT NULL column. Every row is set next.

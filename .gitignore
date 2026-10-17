@@ -2,6 +2,7 @@
 .venv
 .env
 *.db*
+*.dashboard-token
 *.review-token
 *.key
 *__pycache__*

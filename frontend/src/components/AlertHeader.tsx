@@ -4,7 +4,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 
-import type { AlertSummary, AlertsResponse } from "../api/types";
+import type { AlertSummary, ArchiveTotals } from "../api/types";
 import { formatCount, formatDateTime, formatRelative } from "../lib/format";
 import type { Draft } from "../lib/useDraft";
 import { channelName } from "../lib/vocabulary";
@@ -21,24 +21,33 @@ function Fact({ value, children, tone }: { value: ReactNode; children: ReactNode
 
 interface Props {
   alert: AlertSummary | null;
-  totals: AlertsResponse["totals"] | undefined;
+  totals: ArchiveTotals | undefined;
+  /** The Discord server the totals cover, when the person picked one. */
+  guildName: string | null;
   draft: Draft;
+  /** Buttons for the search, such as Unregister. */
+  actions?: ReactNode;
 }
 
-export function AlertHeader({ alert, totals, draft }: Props) {
+export function AlertHeader({ alert, totals, guildName, draft, actions }: Props) {
   return (
     <Box component="header" sx={{ px: { xs: 2, md: 3 }, pt: 3, pb: 2 }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ justifyContent: "space-between", alignItems: { sm: "flex-start" } }}>
-        <Typography variant="h1" sx={{ overflowWrap: "anywhere" }}>{alert ? alert.search_query : "All listings"}</Typography>
+        <Typography variant="h1" component="h2" sx={{ overflowWrap: "anywhere" }}>
+          {alert ? alert.search_query : "All listings"}
+        </Typography>
         {alert && draft.ready && (
-          <Box sx={{ textAlign: { sm: "right" }, flex: "none" }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {draft.published ? `Published rules: version ${draft.published.version}` : "No published rules yet"}
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              {draft.edited ? "Your draft has unpublished changes" : draft.published
-                ? `Since ${formatDateTime(draft.published.created_at)}` : "Only the Discord filters apply"}
-            </Typography>
+          <Box sx={{ textAlign: { sm: "right" }, flex: "none", display: "flex", gap: 2, alignItems: "flex-start" }}>
+            <Box>
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {draft.published ? `Published rules: version ${draft.published.version}` : "No published rules yet"}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {draft.edited ? "Your draft has unpublished changes" : draft.published
+                  ? `Since ${formatDateTime(draft.published.created_at)}` : "Only the Discord filters apply"}
+              </Typography>
+            </Box>
+            {actions}
           </Box>
         )}
       </Stack>
@@ -56,7 +65,9 @@ export function AlertHeader({ alert, totals, draft }: Props) {
           </>
         ) : totals ? (
           <>
-            <Fact value={formatCount(totals.archived_count)}>saved decisions across all searches</Fact>
+            <Fact value={formatCount(totals.archived_count)}>
+              {guildName ? `saved decisions across the searches in ${guildName}` : "saved decisions across all searches"}
+            </Fact>
             {totals.unassigned_count > 0 && <Fact value={formatCount(totals.unassigned_count)}>from removed searches</Fact>}
           </>
         ) : null}

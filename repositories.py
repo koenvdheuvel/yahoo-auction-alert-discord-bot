@@ -2,16 +2,45 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from datetime import timedelta
+from datetime import timedelta, timezone
 import json
+import logging
 import time
 
-from peewee import fn
+from peewee import chunked, fn
 
 from domain import FilterRule, changes
 from models import (Alert, AlertItem, Blacklist, DeliveryJob, Filter, Item, Message,
                     Notification, database, utcnow)
-from review_repository import ReviewRepositoryMixin
+from review_repository import (POST_REMOVAL_SCAN_LIMIT, ReviewRepositoryMixin, live_posts,
+                               post_json, queue_removals, queued_removals, removal_days, removal_run)
+
+
+logger = logging.getLogger(__name__)
+# Delete jobs a channel cleanup queues, and those hiding a listing queues. Hiding removes the
+# listing's posts even when someone subscribed with 🔔, as the 🗑️ reaction does.
+CLEANUP = {"reason": "cleanup"}
+HIDDEN = {"reason": "hidden"}
+MAX_HIDDEN_RETURNED = 500
+
+
+def _time(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        from datetime import datetime
+        value = datetime.fromisoformat(value)
+    return value.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _item_json(item):
+    """A listing's facts as the dashboard shows them. item is an Item or a dict of its columns."""
+    get = item.get if isinstance(item, dict) else lambda name: getattr(item, name)
+    return {"item_id": str(get("id")), "source": get("checker"), "external_id": get("item_id"),
+            "title": get("title"), "price": get("price"), "buyout_price": get("buyout_price"),
+            "stock": get("stock"), "image_url": get("image_url") or None, "url": get("url") or None,
+            "end_time": _time(get("end_time")), "muted": bool(get("muted")),
+            "updated_at": _time(get("updated_at")), "last_seen_at": _time(get("last_seen_at"))}
 
 
 class Repository(ReviewRepositoryMixin):
@@ -74,12 +103,29 @@ class Repository(ReviewRepositoryMixin):
         return await self._call("register_alert", create)
 
     async def reconcile_guilds(self, channel_to_guild):
+        """Set the server of alerts that have none, from a channel ID to server ID mapping.
+
+        Alerts that already have a server keep it. Returns how many alerts got one.
+        """
+        by_guild = {}
+        for channel_id, guild_id in channel_to_guild.items():
+            by_guild.setdefault(int(guild_id), []).append(int(channel_id))
+
         def update():
+            updated = 0
             with database.atomic():
-                for channel_id, guild_id in channel_to_guild.items():
-                    Alert.update(guild_id=guild_id).where(
-                        Alert.channel_id == channel_id, Alert.guild_id.is_null()).execute()
-        await self._call("reconcile_guilds", update)
+                for guild_id, channel_ids in by_guild.items():
+                    for batch in chunked(channel_ids, 500):
+                        updated += Alert.update(guild_id=guild_id).where(
+                            Alert.channel_id.in_(batch), Alert.guild_id.is_null()).execute()
+            return updated
+        if not by_guild:
+            return 0
+        updated = await self._call("reconcile_guilds", update)
+        if updated:
+            logger.info("alert_guilds_reconciled", extra={"fields": {
+                "guild_ids": sorted(by_guild), "alerts": updated}})
+        return updated
 
     async def unregister_alert(self, channel_id, search_query):
         def delete():
@@ -215,14 +261,41 @@ class Repository(ReviewRepositoryMixin):
         await self._call("delete_message", lambda: Message.update(deleted=True).where(
             Message.channel_id == channel_id, Message.message_id == message_id).execute())
 
+    @staticmethod
+    def _blacklist(item_id, channel_id):
+        Blacklist.insert(item=item_id, channel_id=channel_id).on_conflict_ignore().execute()
+        DeliveryJob.update(status="cancelled").where(
+            DeliveryJob.item == item_id, DeliveryJob.kind == "channel",
+            DeliveryJob.destination_id == channel_id, DeliveryJob.status.in_(("pending", "failed"))).execute()
+
     async def blacklist_item(self, item_id, channel_id):
         def create():
             with database.atomic():
-                Blacklist.insert(item=item_id, channel_id=channel_id).on_conflict_ignore().execute()
-                DeliveryJob.update(status="cancelled").where(
-                    DeliveryJob.item == item_id, DeliveryJob.kind == "channel",
-                    DeliveryJob.destination_id == channel_id, DeliveryJob.status.in_(("pending", "failed"))).execute()
+                self._blacklist(item_id, channel_id)
         await self._call("blacklist_item", create)
+
+    async def hide_item(self, item_id, channel_id):
+        """Hide a listing in a channel, as the 🗑️ reaction does, and queue the removal of its posts there.
+
+        Returns how many posts were queued for removal. Posts already waiting in an earlier cleanup
+        are marked hidden too, so a 🔔 follow made since then does not keep them.
+        """
+        def hide():
+            with database.atomic("IMMEDIATE"):
+                self._blacklist(item_id, channel_id)
+                posts = live_posts(channel_id).select(Message.message_id).where(Message.item == item_id)
+                DeliveryJob.update(payload=json.dumps(HIDDEN)).where(
+                    DeliveryJob.kind == "delete", DeliveryJob.status == "pending",
+                    DeliveryJob.destination_id == channel_id, DeliveryJob.message_id.in_(posts)).execute()
+                rows = list(live_posts(channel_id).select(Message.message_id, Message.item)
+                            .where(Message.item == item_id, Message.message_id.not_in(queued_removals())).tuples())
+                return queue_removals(channel_id, rows, HIDDEN)
+        return await self._call("hide_item", hide)
+
+    async def unhide_item(self, item_id, channel_id):
+        """Show a hidden listing in the channel again. It is not posted again until it changes."""
+        return await self._call("unhide_item", lambda: bool(Blacklist.delete().where(
+            Blacklist.item == item_id, Blacklist.channel_id == channel_id).execute()))
 
     async def subscribe(self, item_id, user_id):
         def create():
@@ -241,7 +314,7 @@ class Repository(ReviewRepositoryMixin):
         return await self._call("unsubscribe", delete)
 
     async def due_deliveries(self, limit=50, removal_limit=100):
-        """Posts and DMs first. Post removals from Filter Lab come only when nothing else waits,
+        """Posts and DMs first. Post removals from the dashboard come only when nothing else waits,
         newest post first, so the ones young enough for Discord's bulk delete come together."""
         def select():
             due = DeliveryJob.select().where(DeliveryJob.status == "pending", DeliveryJob.next_attempt_at <= utcnow())
@@ -259,9 +332,11 @@ class Repository(ReviewRepositoryMixin):
                 if job is None:
                     return None
                 if job.kind == "delete":
-                    # Skip posts that are already gone, and keep posts someone subscribed to meanwhile.
+                    # Skip posts that are already gone, and keep posts someone subscribed to meanwhile,
+                    # unless the listing was hidden: then its posts go like the 🗑️ reaction's.
                     allowed = (Message.select().where(Message.message_id == job.message_id, ~Message.deleted).exists()
-                               and not Notification.select().where(Notification.item == job.item_id).exists())
+                               and (json.loads(job.payload) == HIDDEN
+                                    or not Notification.select().where(Notification.item == job.item_id).exists()))
                 else:
                     allowed = (not Blacklist.select().where(Blacklist.item == job.item_id,
                                Blacklist.channel_id == job.destination_id).exists()) if job.kind == "channel" else (
@@ -310,7 +385,7 @@ class Repository(ReviewRepositoryMixin):
     async def stats(self):
         def select():
             # Post removals are left out: a long cleanup is expected to take a while, and the
-            # backlog alerts are about posts and DMs that are late. Filter Lab shows its progress.
+            # backlog alerts are about posts and DMs that are late. The dashboard shows its progress.
             jobs = DeliveryJob.select().where(DeliveryJob.kind != "delete")
             pending = jobs.where(DeliveryJob.status == "pending")
             oldest = pending.select(fn.MIN(DeliveryJob.created_at)).scalar()
@@ -324,3 +399,210 @@ class Repository(ReviewRepositoryMixin):
                     "oldest_pending_age": max(0, (utcnow() - oldest).total_seconds()) if oldest else 0,
                     "disabled_legacy_filters": Filter.select().where(~Filter.enabled).count()}
         return await self._call("stats", select)
+
+    async def alert_guilds(self, channel_id):
+        """The servers saved on a channel's alerts. Only for channels Discord says are gone."""
+        return await self._call("alert_guilds", lambda: {row[0] for row in Alert.select(Alert.guild_id).where(
+            Alert.channel_id == channel_id, Alert.guild_id.is_null(False)).tuples()})
+
+    async def guild_summaries(self, guild_ids=None):
+        """Server ID to its searches and its failed posts and DMs. None means every server with a search."""
+        def select():
+            alerts = Alert.select(Alert.id, Alert.guild_id).where(Alert.guild_id.is_null(False))
+            if guild_ids is not None:
+                alerts = alerts.where(Alert.guild_id.in_(list(guild_ids)))
+            summary = {}
+            for alert_id, guild_id in alerts.tuples():
+                entry = summary.setdefault(guild_id, {"alert_ids": [], "failed_deliveries": 0})
+                entry["alert_ids"].append(alert_id)
+            failed = (DeliveryJob.select(Alert.guild_id, fn.COUNT(DeliveryJob.id)).join(Alert)
+                      .where(DeliveryJob.status == "failed", DeliveryJob.kind != "delete",
+                             Alert.guild_id.in_(list(summary))).group_by(Alert.guild_id))
+            for guild_id, count in failed.tuples():
+                summary[guild_id]["failed_deliveries"] = count
+            return summary
+        return await self._call("guild_summaries", select)
+
+    async def search_counts(self, guild_id):
+        """Channel ID to how many searches it has, for the alerts saved with this server."""
+        return await self._call("search_counts", lambda: dict(
+            Alert.select(Alert.channel_id, fn.COUNT(Alert.id)).where(Alert.guild_id == guild_id)
+            .group_by(Alert.channel_id).tuples()))
+
+    async def hidden_counts(self, channel_ids):
+        def select():
+            counts = {}
+            for batch in chunked(sorted(channel_ids), 500):
+                counts.update(Blacklist.select(Blacklist.channel_id, fn.COUNT(Blacklist.id))
+                              .where(Blacklist.channel_id.in_(batch)).group_by(Blacklist.channel_id).tuples())
+            return counts
+        return await self._call("hidden_counts", select)
+
+    async def hidden_items(self, channel_id, limit=MAX_HIDDEN_RETURNED):
+        """The listings hidden in a channel, most recently changed first."""
+        def select():
+            query = (Item.select(Item).join(Blacklist).where(Blacklist.channel_id == channel_id)
+                     .order_by(Item.updated_at.desc(), Item.id.desc()))
+            return {"items": [_item_json(row) for row in query.limit(limit).dicts()], "total": query.count()}
+        return await self._call("hidden_items", select)
+
+    async def item_in_channel(self, item_id, channel_id):
+        """True when the listing was posted, tracked or hidden in the channel, so it may be hidden there."""
+        def select():
+            in_channel = Alert.select(Alert.id).where(Alert.channel_id == channel_id)
+            return (Message.select().where(Message.item == item_id, Message.channel_id == channel_id).exists()
+                    or AlertItem.select().where(AlertItem.item == item_id, AlertItem.alert.in_(in_channel)).exists()
+                    or Blacklist.select().where(Blacklist.item == item_id, Blacklist.channel_id == channel_id).exists())
+        return await self._call("item_in_channel", select)
+
+    async def item_in_guilds(self, item_id, guilds):
+        """True when the listing was posted or tracked by a search in one of these servers."""
+        def select():
+            alerts = Alert.select(Alert.id).where(Alert.guild_id.in_(list(guilds)))
+            return (Item.select().where(Item.id == item_id).exists() and (
+                Message.select().where(Message.item == item_id, Message.alert.in_(alerts)).exists()
+                or AlertItem.select().where(AlertItem.item == item_id, AlertItem.alert.in_(alerts)).exists()))
+        return await self._call("item_in_guilds", select)
+
+    async def channel_posts(self, channel_id, *, alert_id=None, before=None, limit=50, user_id=None):
+        """The bot's live posts in a channel, newest first, a page at a time.
+
+        Each post says whether its listing is hidden, how many people subscribed with 🔔 and, for
+        user_id, whether that person did. Who the other subscribers are is never returned.
+        """
+        def select():
+            query = live_posts(channel_id, alert_id)
+            if before is not None:
+                query = query.where(Message.message_id < before)
+            rows = list(query.order_by(Message.message_id.desc()).limit(limit + 1).dicts())
+            items = {row["item"] for row in rows[:limit]}
+            subscribers = dict(Notification.select(Notification.item, fn.COUNT(Notification.id))
+                               .where(Notification.item.in_(list(items))).group_by(Notification.item).tuples())
+            mine = set() if user_id is None else {row[0] for row in Notification.select(Notification.item).where(
+                Notification.item.in_(list(items)), Notification.user_id == user_id).tuples()}
+            hidden = {row[0] for row in Blacklist.select(Blacklist.item).where(
+                Blacklist.item.in_(list(items)), Blacklist.channel_id == channel_id).tuples()}
+            posts = []
+            for row in rows[:limit]:
+                post = post_json(row)
+                post.update({"message_id": str(row["message_id"]), "item_id": str(row["item"]),
+                             "hidden": row["item"] in hidden, "subscribers": subscribers.get(row["item"], 0),
+                             "subscribed_by_me": row["item"] in mine})
+                posts.append(post)
+            return {"posts": posts, "next_before": str(rows[limit - 1]["message_id"]) if len(rows) > limit else None}
+        return await self._call("channel_posts", select)
+
+    async def channel_removable_posts(self, channel_id, days=None, alert_id=None, limit=POST_REMOVAL_SCAN_LIMIT):
+        """A channel's live posts for a cleanup, newest first. alert_id narrows it to one search's posts."""
+        removal_days(days)
+
+        def select():
+            query = live_posts(channel_id, alert_id, days)
+            rows = list(query.order_by(Message.message_id.desc()).limit(limit).dicts())
+            return {"posts": [post_json(row) for row in rows],
+                    "total": query.count() if len(rows) >= limit else len(rows)}
+        return await self._call("channel_removable_posts", select)
+
+    async def queue_channel_removals(self, channel_id, message_ids):
+        """Queue the deletion of chosen posts in a channel. Posts that are gone, have a 🔔 subscriber
+        or are already queued are skipped, as in a search's removal. Returns how many were queued."""
+        def queue():
+            with database.atomic("IMMEDIATE"):
+                rows = list(live_posts(channel_id, message_ids=message_ids).select(Message.message_id, Message.item)
+                            .where(Message.item.not_in(Notification.select(Notification.item)),
+                                   Message.message_id.not_in(queued_removals())).tuples())
+                return queue_removals(channel_id, rows, CLEANUP)
+        return await self._call("queue_channel_removals", queue)
+
+    async def channel_removal_status(self, channel_id):
+        """Progress of the channel's newest cleanup run."""
+        return await self._call("channel_removal_status", lambda: removal_run(DeliveryJob.select().where(
+            DeliveryJob.destination_id == channel_id, DeliveryJob.kind == "delete",
+            DeliveryJob.payload == json.dumps(CLEANUP))))
+
+    async def subscriptions(self, user_id):
+        """The listings one person gets 🔔 DMs for, with the channels each was posted or tracked in.
+
+        Nobody else's. The dashboard decides which of those channels the person may see.
+        """
+        def select():
+            items = list(Item.select(Item).join(Notification).where(Notification.user_id == user_id)
+                         .order_by(Item.updated_at.desc(), Item.id.desc()).dicts())
+            places = {}
+            for batch in chunked([row["id"] for row in items], 500):
+                posted = (Message.select(Message.item, Message.channel_id, fn.MAX(Message.message_id))
+                          .where(Message.item.in_(batch)).group_by(Message.item, Message.channel_id))
+                for item, channel, message in posted.tuples():
+                    places.setdefault(item, {})[channel] = {"channel_id": str(channel), "message_id": str(message),
+                                                            "search_query": None}
+                tracked = (AlertItem.select(AlertItem.item, Alert.channel_id, Alert.search_query).join(Alert)
+                           .where(AlertItem.item.in_(batch)))
+                for item, channel, query in tracked.tuples():
+                    place = places.setdefault(item, {}).setdefault(channel, {
+                        "channel_id": str(channel), "message_id": None, "search_query": None})
+                    place["search_query"] = place["search_query"] or query
+            pending = dict(DeliveryJob.select(DeliveryJob.item, fn.COUNT(DeliveryJob.id)).where(
+                DeliveryJob.kind == "dm", DeliveryJob.destination_id == user_id,
+                DeliveryJob.status.in_(("pending", "failed"))).group_by(DeliveryJob.item).tuples())
+            return [{**_item_json(row), "places": list(places.get(row["id"], {}).values()),
+                     "waiting_dms": pending.get(row["id"], 0)} for row in items]
+        return await self._call("subscriptions", select)
+
+    async def listing_items(self, listings, user_id=None):
+        """(source, external ID) to the stored listing's ID and, for user_id, whether they subscribed."""
+        def select():
+            found = {}
+            for batch in chunked(sorted(set(listings)), 200):
+                condition = None
+                for source, external_id in batch:
+                    match = (Item.checker == source) & (Item.item_id == external_id)
+                    condition = match if condition is None else condition | match
+                for item_id, source, external_id in Item.select(Item.id, Item.checker, Item.item_id).where(
+                        condition).tuples():
+                    found[(source, external_id)] = {"item_id": str(item_id), "subscribed": False}
+            if user_id is not None and found:
+                ids = [int(value["item_id"]) for value in found.values()]
+                mine = {row[0] for row in Notification.select(Notification.item).where(
+                    Notification.item.in_(ids), Notification.user_id == user_id).tuples()}
+                for value in found.values():
+                    value["subscribed"] = int(value["item_id"]) in mine
+            return found
+        return await self._call("listing_items", select)
+
+    async def delivery_backlog(self, alert_ids):
+        """Alert ID to its posts and DMs waiting to be sent or failed, and the age of the oldest waiting one."""
+        def select():
+            now = utcnow()
+            backlog = {alert_id: {"pending": 0, "failed": 0, "oldest_pending_seconds": None} for alert_id in alert_ids}
+            for batch in chunked(sorted(alert_ids), 500):
+                query = (DeliveryJob.select(DeliveryJob.alert, DeliveryJob.status, fn.COUNT(DeliveryJob.id),
+                                            fn.MIN(DeliveryJob.created_at))
+                         .where(DeliveryJob.alert.in_(batch), DeliveryJob.kind != "delete",
+                                DeliveryJob.status.in_(("pending", "failed")))
+                         .group_by(DeliveryJob.alert, DeliveryJob.status))
+                for alert_id, status, count, oldest in query.tuples():
+                    entry = backlog[alert_id]
+                    entry[status] = count
+                    if status == "pending" and oldest is not None:
+                        if isinstance(oldest, str):
+                            from datetime import datetime
+                            oldest = datetime.fromisoformat(oldest)
+                        entry["oldest_pending_seconds"] = max(0, round((now - oldest).total_seconds()))
+            return backlog
+        return await self._call("delivery_backlog", select)
+
+    async def alert_usage(self, alert_id):
+        """What unregistering a search touches, for the dashboard to explain before it happens."""
+        def select():
+            from models import CandidateObservation, ReviewRuleVersion
+            return {
+                "posts": Message.select().where(Message.alert == alert_id, ~Message.deleted).count(),
+                "waiting_posts": DeliveryJob.select().where(
+                    DeliveryJob.alert == alert_id, DeliveryJob.kind != "delete",
+                    DeliveryJob.status.in_(("pending", "failed"))).count(),
+                "rule_versions": ReviewRuleVersion.select().where(ReviewRuleVersion.alert == alert_id).count(),
+                "archived": CandidateObservation.select().where(CandidateObservation.alert == alert_id).count(),
+                "legacy_filters": Filter.select().where(Filter.alert == alert_id).count(),
+            }
+        return await self._call("alert_usage", select)
+

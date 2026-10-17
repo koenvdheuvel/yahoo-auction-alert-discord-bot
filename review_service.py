@@ -65,7 +65,10 @@ def _replay_candidate(row):
 
 
 class ReviewService:
-    """One bounded CPU worker; database access remains on its own executor."""
+    """One bounded CPU worker; database access remains on its own executor.
+
+    `guilds` is the set of server IDs the person may see, or None for every server.
+    """
 
     def __init__(self, repository, replay_limit=500):
         self.repository = repository
@@ -93,10 +96,10 @@ class ReviewService:
                 await future
                 raise
 
-    async def rules(self, alert_id):
+    async def rules(self, alert_id, guilds=None):
         alert_id = identifier(alert_id, "alert_id")
-        result = await self.repository.get_review_rules(alert_id)
-        result["legacy_filters"] = await self.repository.review_filters(alert_id)
+        result = await self.repository.get_review_rules(alert_id, guilds)
+        result["legacy_filters"] = await self.repository.review_filters(alert_id, guilds)
         result["default_ruleset"] = default_ruleset()
         return result
 
@@ -104,7 +107,7 @@ class ReviewService:
     def validate(data):
         return {"ruleset": validate_ruleset(data.get("ruleset"))}
 
-    async def preview(self, data):
+    async def preview(self, data, guilds=None):
         ruleset = validate_ruleset(data.get("ruleset", default_ruleset()))
         title = data.get("title", "")
         if not isinstance(title, str):
@@ -119,23 +122,24 @@ class ReviewService:
                 raise ReviewValidation(f"{name} must be a nonnegative integer")
         legacy = []
         if data.get("alert_id") is not None:
-            legacy = _enabled_rules(await self.repository.review_filters(identifier(data["alert_id"], "alert_id")))
+            legacy = _enabled_rules(await self.repository.review_filters(
+                identifier(data["alert_id"], "alert_id"), guilds))
         policy = CompiledRuleset(ruleset, legacy_rules=legacy)
         listing = {"title": title, "source": source, "price": price, "stock": stock}
         decision = await self._evaluate(policy.evaluate, listing)
         return {"decision": decision.payload()}
 
-    async def replay(self, data):
+    async def replay(self, data, guilds=None):
         alert_id = identifier(data.get("alert_id"), "alert_id")
         limit = data.get("limit", self.replay_limit)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= self.replay_limit:
             raise ReviewValidation(f"Replay limit must be between 1 and {self.replay_limit}")
         draft = validate_ruleset(data.get("ruleset", default_ruleset()))
-        state = await self.repository.get_review_rules(alert_id)
+        state = await self.repository.get_review_rules(alert_id, guilds)
         active = state["active_version"]
         active_ruleset = active["ruleset"] if active else default_ruleset()
-        legacy = _enabled_rules(await self.repository.review_filters(alert_id))
-        rows = await self.repository.replay_candidates(alert_id, limit=limit)
+        legacy = _enabled_rules(await self.repository.review_filters(alert_id, guilds))
+        rows = await self.repository.replay_candidates(alert_id, limit=limit, guilds=guilds)
         result = await self._evaluate(self._replay, rows["items"], active_ruleset, draft, legacy)
         summary = result["summary"]
         summary.update(available=rows["available"], recent=rows["recent"])
@@ -180,19 +184,19 @@ class ReviewService:
                           "active_decision": current, "draft_decision": proposed, "change": change})
         return {"items": items, "summary": summary}
 
-    async def publish(self, alert_id, data):
+    async def publish(self, alert_id, data, guilds=None):
         ruleset = validate_ruleset(data.get("ruleset"))
         if "expected_version_id" not in data:
             raise ReviewValidation("Reload the active version before publishing")
         expected = identifier(data["expected_version_id"], "expected_version_id", optional=True)
-        return await self.repository.publish_review_rules(identifier(alert_id), ruleset, expected)
+        return await self.repository.publish_review_rules(identifier(alert_id), ruleset, expected, guilds)
 
-    async def rollback(self, alert_id, data):
+    async def rollback(self, alert_id, data, guilds=None):
         if "expected_version_id" not in data:
             raise ReviewValidation("Reload the active version before restoring")
         expected = identifier(data["expected_version_id"], "expected_version_id", optional=True)
         return await self.repository.activate_review_version(
-            identifier(alert_id), identifier(data.get("version_id"), "version_id"), expected)
+            identifier(alert_id), identifier(data.get("version_id"), "version_id"), expected, guilds)
 
     @staticmethod
     def _sort_posts(posts, ruleset, legacy):
@@ -228,15 +232,15 @@ class ReviewService:
                 removable.append((post, reason))
         return {"removable": removable, "kept": kept, "checked": checked}
 
-    async def post_removal_preview(self, alert_id, data):
+    async def post_removal_preview(self, alert_id, data, guilds=None):
         """Which of the search's posts the given rules, or else the published ones, filter. Nothing changes."""
         alert_id = identifier(alert_id, "alert_id")
         days = _removal_days(data.get("days", 30))
-        posts = await self.repository.removable_posts(alert_id, days)
+        posts = await self.repository.removable_posts(alert_id, days, guilds=guilds)
         active = posts["active_version"]
         draft = data.get("ruleset")
         ruleset = validate_ruleset(draft if draft is not None else active["ruleset"] if active else default_ruleset())
-        legacy = _enabled_rules(await self.repository.review_filters(alert_id))
+        legacy = _enabled_rules(await self.repository.review_filters(alert_id, guilds))
         result = await self._evaluate(self._sort_posts, posts["posts"], ruleset, legacy)
         run = result["removable"][:POST_REMOVAL_LIMIT]
         reasons = {}
@@ -253,7 +257,7 @@ class ReviewService:
                 "channel_id": posts["channel_id"], "guild_id": posts["guild_id"],
                 "active_version_id": active["id"] if active else None}
 
-    async def remove_posts(self, alert_id, data):
+    async def remove_posts(self, alert_id, data, guilds=None):
         """Queue the removal of chosen posts. Each is checked against the published rules again first."""
         alert_id = identifier(alert_id, "alert_id")
         version_id = identifier(data.get("version_id"), "version_id")
@@ -261,12 +265,13 @@ class ReviewService:
         if not isinstance(values, list) or not 1 <= len(values) <= POST_REMOVAL_LIMIT:
             raise ReviewValidation(f"Choose between 1 and {POST_REMOVAL_LIMIT} posts")
         message_ids = sorted({identifier(value, "message_id") for value in values})
-        posts = await self.repository.removable_posts(alert_id, message_ids=message_ids, limit=POST_REMOVAL_LIMIT)
+        posts = await self.repository.removable_posts(alert_id, message_ids=message_ids, limit=POST_REMOVAL_LIMIT,
+                                                      guilds=guilds)
         active = posts["active_version"]
         if active is None or active["id"] != str(version_id):
             raise ReviewConflict("The published rules changed. Check the posts again.")
-        legacy = _enabled_rules(await self.repository.review_filters(alert_id))
+        legacy = _enabled_rules(await self.repository.review_filters(alert_id, guilds))
         result = await self._evaluate(self._sort_posts, posts["posts"], active["ruleset"], legacy)
         queued = await self.repository.queue_post_removals(
-            alert_id, version_id, [post["message_id"] for post, _ in result["removable"]])
-        return {"queued": queued, "skipped": len(message_ids) - queued}
+            alert_id, version_id, [post["message_id"] for post, _ in result["removable"]], guilds=guilds)
+        return {"queued": queued, "skipped": len(message_ids) - queued, "guild_id": posts["guild_id"]}

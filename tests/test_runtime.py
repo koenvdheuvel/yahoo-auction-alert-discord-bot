@@ -57,7 +57,7 @@ class Delivery:
 
 
 def build_runtime(check, alerts=None, settings=None, delivery=None):
-    settings = settings or replace(Settings(), monitoring_enabled=False, review_enabled=False)
+    settings = settings or replace(Settings(), monitoring_enabled=False, dashboard_enabled=False)
     bot = Bot()
     repo, http, metrics = Repository(alerts), Resource(), Metrics()
     runtime = Runtime(bot, settings, repo, http, SimpleNamespace(check=check),
@@ -85,6 +85,16 @@ def test_import_has_no_token_database_or_bot_side_effects(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("module", ["channel_maintenance", "commands", "config", "dashboard", "dashboard_auth",
+                                    "dashboard_limits", "dashboard_manage", "discord_directory", "main"])
+def test_each_module_imports_first_in_a_fresh_interpreter(tmp_path, module):
+    # Import cycles only show when a module is the first one loaded, as `python dashboard.py` does.
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    result = subprocess.run([sys.executable, "-c", f"import {module}"], cwd=tmp_path, env=env,
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_factory_registers_commands_without_starting_network_or_workers(tmp_path, monkeypatch):
     import main
     import observability
@@ -94,7 +104,7 @@ def test_factory_registers_commands_without_starting_network_or_workers(tmp_path
     monkeypatch.chdir(tmp_path)
     database_path = tmp_path / "configured.db"
     settings = replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK", database_path=str(database_path),
-                       monitoring_enabled=False, review_enabled=False)
+                       monitoring_enabled=False, dashboard_enabled=False)
     bot = main.create_application(settings)
     assert database_path.exists()
     assert not bot.services.runtime.tasks
@@ -144,7 +154,7 @@ def test_factory_gateway_events_open_resources_before_starting_workers(tmp_path,
     async def scenario():
         nonlocal bot
         bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
-                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, review_enabled=False))
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, dashboard_enabled=False))
 
         def listener(event_type, name):
             return next(callback for callback in bot.get_listeners(event_type) if callback.__name__ == name)
@@ -158,7 +168,8 @@ def test_factory_gateway_events_open_resources_before_starting_workers(tmp_path,
             bot.services.repository.reconcile_guilds = reconcile
             await listener(hikari.StartedEvent, "on_started")(None)
             synced.assert_awaited_once()
-            reconcile.assert_awaited_once_with({})
+            # Channels arrive after StartedEvent, so servers are filled in per server instead.
+            reconcile.assert_not_awaited()
             assert set(bot.services.runtime.tasks) == {"poller", "delivery", "event_loop", "database_stats"}
             await listener(hikari.StoppingEvent, "on_stopping")(None)
             assert stopped_before_runtime == [True]
@@ -169,6 +180,38 @@ def test_factory_gateway_events_open_resources_before_starting_workers(tmp_path,
             await bot.services.runtime.close()
 
     bot = None
+    asyncio.run(scenario())
+
+
+def test_server_channels_and_threads_fill_in_missing_alert_servers(tmp_path, monkeypatch, caplog):
+    import hikari
+    import main
+    import observability
+
+    monkeypatch.setattr(observability, "configure_logging", lambda *args, **kwargs: None)
+
+    async def scenario():
+        bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False,
+                                               dashboard_enabled=False))
+        try:
+            listeners = [callback for event_type in (hikari.GuildAvailableEvent, hikari.GuildJoinEvent)
+                         for callback in bot.get_listeners(event_type) if callback.__name__ == "on_guild_available"]
+            assert len(listeners) == 2
+            reconcile = AsyncMock(return_value=1)
+            bot.services.repository.reconcile_guilds = reconcile
+            event = SimpleNamespace(guild_id=hikari.Snowflake(5), channels={hikari.Snowflake(11): None},
+                                    threads={hikari.Snowflake(12): None})
+            await listeners[0](event)
+            reconcile.assert_awaited_once_with({11: 5, 12: 5})
+            # A failure is logged and does not reach the gateway's event loop.
+            reconcile.side_effect = RuntimeError("Repository is closed")
+            await listeners[1](event)
+            assert "guild_reconcile_failed" in caplog.text
+        finally:
+            await bot.services.commands.stop()
+            await bot.services.runtime.close()
+
     asyncio.run(scenario())
 
 
@@ -190,7 +233,7 @@ def test_command_sync_failure_stops_startup_before_background_work(tmp_path, mon
 
     async def scenario():
         bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
-                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, review_enabled=False))
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, dashboard_enabled=False))
 
         def listener(event_type, name):
             return next(callback for callback in bot.get_listeners(event_type) if callback.__name__ == name)
@@ -229,7 +272,7 @@ def test_command_error_handler_responds_privately_and_logs_unexpected_errors(tmp
 
     async def scenario():
         bot = main.create_application(replace(Settings(), token="MTIzNDU2Nzg5.MOCK.MOCK",
-                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, review_enabled=False))
+                                               database_path=str(tmp_path / "db"), monitoring_enabled=False, dashboard_enabled=False))
         client = bot.services.commands
         handler = next(callback for callbacks in client._error_handlers.values() for callback in callbacks)
         context = SimpleNamespace(channel_id=123, respond=AsyncMock(),
@@ -301,6 +344,29 @@ def test_failed_check_waits_for_sibling_and_records_partial_cycle():
     asyncio.run(scenario())
 
 
+def test_the_status_page_gets_each_searchs_last_check_from_memory():
+    async def scenario():
+        async def check(provider, item):
+            if item["id"] == 1:
+                raise RuntimeError("https://example.com/search?q=secret answered 500")
+
+        runtime = build_runtime(check, [alert(1), alert(2)])
+        await runtime.poll_cycle()
+        status = runtime.status()
+        failed, passed = status["checks"][1][0], status["checks"][2][0]
+        # Only the error's type: its message can hold a marketplace URL.
+        assert (failed["outcome"], failed["error"]) == ("error", "RuntimeError")
+        assert (passed["outcome"], passed["error"]) == ("success", None)
+        assert status["last_poll_at"] is not None and status["last_success_at"] is None
+        # Results of a search that was unregistered go with it on the next cycle.
+        runtime.repository.alerts = [alert(2)]
+        await runtime.poll_cycle()
+        assert set(runtime.status()["checks"]) == {2}
+        assert runtime.status()["last_success_at"] is not None
+
+    asyncio.run(scenario())
+
+
 def test_worker_pool_is_bounded_and_never_skips_a_query():
     async def scenario():
         active, peak, seen, tasks = 0, 0, [], set()
@@ -314,7 +380,7 @@ def test_worker_pool_is_bounded_and_never_skips_a_query():
             seen.append(item["id"])
             active -= 1
 
-        settings = replace(Settings(), concurrency=3, monitoring_enabled=False, review_enabled=False)
+        settings = replace(Settings(), concurrency=3, monitoring_enabled=False, dashboard_enabled=False)
         rows = [alert(index, "BABYMETAL BEGINS" if index == 0 else "query") for index in range(1000)]
         runtime = build_runtime(check, rows, settings)
         await runtime.poll_cycle()
@@ -361,7 +427,7 @@ def test_timeout_preserves_last_success_and_advances_completed_timestamp():
             if fail:
                 await asyncio.Future()
 
-        runtime = build_runtime(check, [alert(1)], replace(Settings(), check_timeout=.01, monitoring_enabled=False, review_enabled=False))
+        runtime = build_runtime(check, [alert(1)], replace(Settings(), check_timeout=.01, monitoring_enabled=False, dashboard_enabled=False))
         await runtime.poll_cycle()
         previous_success = value(runtime, "last_poll_success_timestamp_seconds")
         previous_source_success = value(runtime, "source_last_success_timestamp_seconds", {"source": "yahooauction"})
@@ -386,7 +452,7 @@ def test_recoverable_database_cycle_error_is_retried():
         async def check(provider, item):
             checked.set()
 
-        runtime = build_runtime(check, [alert(1)], replace(Settings(), interval=.001, monitoring_enabled=False, review_enabled=False))
+        runtime = build_runtime(check, [alert(1)], replace(Settings(), interval=.001, monitoring_enabled=False, dashboard_enabled=False))
         original = runtime.repository.list_alerts
         reads = 0
 

@@ -1,12 +1,12 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-// `npm run dev` serves the UI on :5173 and forwards /api to a running review server.
-const backend = process.env.FILTER_LAB_BACKEND ?? "http://127.0.0.1:9101";
+// `npm run dev` serves the UI on :5173 and forwards /api and Discord sign-in to a running dashboard.
+const backend = process.env.DASHBOARD_BACKEND ?? "http://127.0.0.1:9101";
 
 export default defineConfig({
   plugins: [react()],
-  // review.py swaps this placeholder for a new nonce on every page view (see its CSP header).
+  // dashboard.py swaps this placeholder for a new nonce on every page view (see its CSP header).
   html: { cspNonce: "__CSP_NONCE__" },
   build: {
     // The CSP allows images and fonts from 'self' only, so never inline assets as data: URLs.
@@ -18,9 +18,11 @@ export default defineConfig({
       "/api": {
         target: backend,
         changeOrigin: true,
-        // review.py only accepts changes whose Origin is the host it serves.
+        // dashboard.py only accepts changes whose Origin is the host it serves.
         configure: (proxy) => proxy.on("proxyReq", (request) => request.setHeader("origin", backend)),
       },
+      // Sign-in pages. Discord sends people back to DASHBOARD_PUBLIC_URL, which is the dashboard itself.
+      "/auth": { target: backend, changeOrigin: true },
     },
   },
   test: {

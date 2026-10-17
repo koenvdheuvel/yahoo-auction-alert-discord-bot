@@ -82,20 +82,28 @@ All application metrics use the `auction_bot_` prefix. Durations use seconds, co
 | Runtime health | `worker_alive{worker}`, `discord_connected`, `ready`, `event_loop_lag_seconds`, `started_timestamp_seconds` |
 | Configuration | `configured_alerts`, `disabled_legacy_filters`, `configured_poll_interval_seconds`, `configured_stats_interval_seconds`, `health_max_poll_age_seconds` |
 | Discord interactions | `reaction_errors_total`, `command_errors_total{outcome}` |
-| Filter Lab | `review_requests_total{operation,outcome}`, `review_request_duration_seconds{operation}` |
+| Dashboard | `dashboard_requests_total{operation,outcome}`, `dashboard_request_duration_seconds{operation}`, `dashboard_logins_total{method,outcome}`, `dashboard_access_checks_total{outcome}` |
 
 Histogram names also expose `_bucket`, `_count` and `_sum`. Standard Python GC/platform collectors and process metrics are included; process metrics depend on platform support. Each application uses its own registry so tests and application instances do not duplicate global metric registration.
 
 `last_poll_completed_timestamp_seconds` advances after a settled cycle even when some checks fail, or when a recoverable cycle read fails. `last_poll_success_timestamp_seconds` advances only when the cycle has no failed checks. Per-source success advances only when that source has at least one check and all its checks succeed in that cycle. No alerts is a successful empty cycle; it does not mark source checks as successful. Cancelled cycles do not count as completed cycles. Health freshness uses a monotonic clock; exported event timestamps use wall time.
 
-Provider counters count request attempts, including retries. Delivery counters count attempts rather than unique listings or messages. A successful ingestion check means listings were observed and delivery jobs were durably queued; delivery success is tracked independently. Queue gauges are periodic database snapshots. A zero queue gauge with a stale statistics timestamp is not evidence that delivery is healthy. Post removals that Filter Lab queues count in `delivery_attempts_total{kind="delete"}` but not in the three outbox gauges: a long cleanup is expected to take a while and should not set off the backlog or failure alerts. Filter Lab shows their progress, and `manage.py outbox-list` lists them with the other jobs.
+Provider counters count request attempts, including retries. Delivery counters count attempts rather than unique listings or messages. A successful ingestion check means listings were observed and delivery jobs were durably queued; delivery success is tracked independently. Queue gauges are periodic database snapshots. A zero queue gauge with a stale statistics timestamp is not evidence that delivery is healthy. Post removals that the dashboard queues count in `delivery_attempts_total{kind="delete"}` but not in the three outbox gauges: a long cleanup is expected to take a while and should not set off the backlog or failure alerts. The dashboard shows their progress, and `manage.py outbox-list` lists them with the other jobs.
 
-Filter Lab request labels use fixed API operation names and outcomes. Candidate
-IDs, rule text, access keys and search queries do not become metric labels.
+The dashboard request labels use fixed API operation names and outcomes. Candidate
+IDs, rule text, access keys, Discord user IDs and search queries do not become
+metric labels. `dashboard_logins_total` counts sign-ins by method (`discord` or
+`access_key`) and result: `success`, or why it was refused (`cancelled`,
+`state`, `not_member`, `missing_permission`, `discord_error`,
+`discord_unavailable`, `rate_limited`, `cookie`, `wrong_key`).
+`dashboard_access_checks_total` counts the repeated checks of signed-in people:
+`kept`, `reduced` (lost some servers), `revoked` (lost all, signed out) and
+`error` (Discord did not answer). A rise in `error` means people are being
+refused while Discord is unreachable.
 Ingestion item outcomes now also include `filtered`, `review`, `blacklisted`,
 `invalid` and `filter_timeout`. Database operation timing
 covers candidate writes, publication, post removals and history retention through
-the existing repository boundary. Standalone review mode does not expose a
+the existing repository boundary. The standalone dashboard does not expose a
 Prometheus listener; the embedded bot mode uses the normal monitoring registry.
 
 JSON logs include `timestamp`, `level`, `logger` and `event`, with contextual fields. Poll checks carry `cycle_id`, `alert_id` and `source`; delivery attempts carry `delivery_id` and `kind`. Context is local to the asyncio task and is restored after the operation. Exceptions retain their traceback. The configured bot token is redacted from messages, fields and tracebacks, and known secret field keys are redacted recursively. HTTP access logs are disabled. Keep logs in the process's stdout/stderr collection pipeline; no external logging service is required by the app.
@@ -173,6 +181,6 @@ python manage.py --database alerts.db outbox-retry --id 42
 
 The retry operation resets the attempt count and retains an acknowledged `message_id`. That prevents re-posting when only reactions failed; a process crash between Discord accepting a message and saving its acknowledgment can still produce a duplicate on retry. Metrics measure that pipeline but do not remove this external-system crash window.
 
-For legacy filter alerts, use the channel's filter commands to list migrated rows, recreate them with the intended `text` or `regex` matcher and remove disabled rows. The old database never saved the selected matcher, so migration cannot infer it safely.
+For legacy filter alerts, open the search in the dashboard: the Rules tab lists its Discord filters, including the disabled ones. Add each term you want to keep to a rule group, then delete the old filter there or with `/filters delete`. The old database never saved whether a filter was text or a regex, so migration cannot infer it safely.
 
 Tune concurrency after watching request/check latency, provider error rates, SQLite queue latency, event loop lag and outbox age together. Increasing ingestion parallelism can increase provider throttling and enqueue deliveries faster than Discord can accept them. Separate workers make that bottleneck visible and allow later changes to delivery concurrency without changing marketplace adapters.

@@ -194,6 +194,17 @@ def _latest_condition(alert=None):
             | (CandidateObservation.external_id == ""))
 
 
+def _in_guilds(guilds):
+    """Rows that belong to these servers: their alerts' rows, and detached rows saved there.
+
+    A row with an alert belongs to the alert's server. Unregistering an alert detaches its rows,
+    which keep the server they were saved in. Rows of alerts without a server match no server.
+    """
+    alerts = Alert.select(Alert.id).where(Alert.guild_id.in_(guilds))
+    return (CandidateObservation.alert.in_(alerts)
+            | (CandidateObservation.alert.is_null() & CandidateObservation.guild_id.in_(guilds)))
+
+
 def _candidate_json(row):
     decision = json.loads(row["decision"])
     return {"id": str(row["id"]), "alert_id": str(row["alert"]) if row["alert"] is not None else None,
@@ -211,11 +222,96 @@ def _candidate_json(row):
             "last_seen_at": _timestamp(row.get("last_seen_at"))}
 
 
+def removal_days(days):
+    if days not in POST_REMOVAL_DAYS:
+        raise ReviewValidation("Choose posts from the last 7, 30 or 90 days, or all posts")
+    return days
+
+
+def queued_removals():
+    """Message IDs whose removal is already waiting in the queue."""
+    return DeliveryJob.select(DeliveryJob.message_id).where(
+        DeliveryJob.kind == "delete", DeliveryJob.status == "pending", DeliveryJob.message_id.is_null(False))
+
+
+def live_posts(channel_id, alert=None, days=None, message_ids=None):
+    """The bot's live posts in a channel, with the listing facts they show. alert narrows it to one search.
+
+    Ages come from the message IDs. Converting an old database dated every earlier post to the
+    conversion, so the saved creation time cannot tell how old a post is.
+    """
+    subscribed = Notification.select(Notification.item)
+    query = (Message
+             .select(Message.message_id, Message.item, Message.alert, Item.item_id, Item.checker, Item.title,
+                     Item.price, Item.stock, Item.buyout_price, Item.image_url, Item.url,
+                     Case(None, [(Message.item.in_(subscribed), 1)], 0).alias("subscribed"),
+                     Case(None, [(Message.message_id.in_(queued_removals()), 1)], 0).alias("queued"))
+             .join(Item)
+             .where(Message.channel_id == channel_id, ~Message.deleted))
+    if alert is not None:
+        query = query.where(Message.alert == alert)
+    if days is not None:
+        query = query.where(Message.message_id >= first_discord_id_at(utcnow() - timedelta(days=days)))
+    if message_ids is not None:
+        query = query.where(Message.message_id.in_(message_ids))
+    return query
+
+
+def post_json(row):
+    return {"message_id": row["message_id"], "posted_at": _timestamp(discord_time(row["message_id"])),
+            "subscribed": bool(row["subscribed"]), "queued": bool(row["queued"]),
+            "alert_id": str(row["alert"]) if row["alert"] is not None else None,
+            "listing": {"id": row["item_id"], "source": row["checker"], "title": row["title"],
+                        "price": row["price"], "stock": row["stock"], "buyout_price": row["buyout_price"],
+                        "image_url": row["image_url"], "url": row["url"]}}
+
+
+def queue_removals(channel_id, rows, payload, alert_id=None):
+    """Queue the deletion of posts, as (message ID, item ID) rows, for the delivery worker.
+
+    All jobs of one run share their creation time, which identifies the run. Posts of the same
+    listings still waiting to be sent to the channel are cancelled, so they do not come back:
+    those of the search with alert_id, or of every search when it is None.
+    """
+    now = utcnow()
+    payload = json.dumps(payload)
+    for batch in chunked(rows, 100):
+        DeliveryJob.insert_many([
+            {"item": item_id, "alert": alert_id, "kind": "delete", "destination_id": channel_id,
+             "message_id": message_id, "payload": payload, "created_at": now, "next_attempt_at": now}
+            for message_id, item_id in batch]).execute()
+    for batch in chunked(sorted({item_id for _, item_id in rows}), 500):
+        waiting = DeliveryJob.update(status="cancelled").where(
+            DeliveryJob.item.in_(batch), DeliveryJob.kind == "channel", DeliveryJob.destination_id == channel_id,
+            DeliveryJob.status.in_(("pending", "failed")))
+        if alert_id is not None:
+            waiting = waiting.where(DeliveryJob.alert == alert_id)
+        waiting.execute()
+    return len(rows)
+
+
+def removal_run(removals):
+    """Progress of the newest run among these delete jobs."""
+    latest = removals.select(fn.MAX(DeliveryJob.created_at)).scalar()
+    if latest is None:
+        return {"run": None}
+    counts = dict(removals.select(DeliveryJob.status, fn.COUNT(DeliveryJob.id))
+                  .where(DeliveryJob.created_at == latest).group_by(DeliveryJob.status).tuples())
+    return {"run": {"queued_at": _timestamp(latest), "total": sum(counts.values()),
+                    "pending": counts.get("pending", 0), "removed": counts.get("sent", 0),
+                    "failed": counts.get("failed", 0), "cancelled": counts.get("cancelled", 0)}}
+
+
 class ReviewRepositoryMixin:
-    def _review_alert(self, alert_id):
+    """Methods behind the dashboard take `guilds`: the server IDs the person may see, or None for all.
+
+    An alert, candidate or version outside those servers is reported exactly like a missing one.
+    """
+
+    def _review_alert(self, alert_id, guilds=None):
         identifier = _identifier(alert_id, "alert_id")
         alert = Alert.get_or_none(Alert.id == identifier)
-        if alert is None:
+        if alert is None or (guilds is not None and alert.guild_id not in guilds):
             raise ReviewNotFound("Alert no longer exists")
         return alert
 
@@ -238,11 +334,18 @@ class ReviewRepositoryMixin:
             raise ReviewValidation("Active rule version does not belong to this alert")
         return version
 
-    async def review_alerts(self):
-        """Alerts with counts over each listing's latest decision, plus archive totals."""
+    async def review_alerts(self, guilds=None):
+        """Alerts with counts over each listing's latest decision, plus archive totals per server."""
         def select():
             archived = dict(CandidateObservation.select(CandidateObservation.alert, fn.COUNT(CandidateObservation.id))
+                            .where(CandidateObservation.alert.is_null(False))
                             .group_by(CandidateObservation.alert).tuples())
+            # Rows detached from an unregistered alert, counted per server they were saved in.
+            detached = dict(CandidateObservation.select(CandidateObservation.guild_id, fn.COUNT(CandidateObservation.id))
+                            .where(CandidateObservation.alert.is_null())
+                            .group_by(CandidateObservation.guild_id).tuples())
+            if guilds is not None:
+                detached = {guild: count for guild, count in detached.items() if guild in guilds}
             counts = [fn.SUM(Case(None, [(CandidateObservation.verdict == verdict, 1)], 0)) for verdict in VERDICTS]
             latest = (CandidateObservation
                       .select(CandidateObservation.alert, fn.COUNT(CandidateObservation.id), *counts,
@@ -251,30 +354,46 @@ class ReviewRepositoryMixin:
                       .group_by(CandidateObservation.alert).tuples())
             stats = {row[0]: row[1:] for row in latest}
             active = dict(ActiveReviewRules.select(ActiveReviewRules.alert, ActiveReviewRules.version).tuples())
-            alerts = []
-            for alert in Alert.select().order_by(Alert.channel_id, Alert.id):
+            query = Alert.select().order_by(Alert.channel_id, Alert.id)
+            if guilds is not None:
+                query = query.where(Alert.guild_id.in_(guilds))
+            alerts, servers = [], {}
+            for alert in query:
                 listings, accepted, filtered, review, last_seen = stats.get(alert.id, (0, 0, 0, 0, None))
                 alerts.append(_alert_json(alert, {
                     "archived_count": archived.get(alert.id, 0), "listing_count": listings,
                     "accepted_count": accepted, "filtered_count": filtered, "review_count": review,
                     "last_seen_at": _timestamp(last_seen),
                 }, active.get(alert.id)))
-            return {"alerts": alerts, "totals": {"archived_count": sum(archived.values()),
-                                                 "unassigned_count": archived.get(None, 0)}}
+                if alert.guild_id is not None:
+                    servers[alert.guild_id] = servers.get(alert.guild_id, 0) + archived.get(alert.id, 0)
+            for guild, count in detached.items():
+                if guild is not None:
+                    servers[guild] = servers.get(guild, 0) + count
+            by_guild = {str(guild): {"archived_count": count, "unassigned_count": detached.get(guild, 0)}
+                        for guild, count in servers.items()}
+            unassigned = sum(detached.values())
+            return {"alerts": alerts, "totals": {
+                "archived_count": sum(alert["archived_count"] for alert in alerts) + unassigned,
+                "unassigned_count": unassigned, "guilds": by_guild}}
         return await self._call("review_alerts", select)
 
-    async def review_filters(self, alert_id):
+    async def review_alert(self, alert_id, guilds=None):
+        """One alert as the dashboard lists it, or ReviewNotFound outside these servers."""
+        return await self._call("review_alert", lambda: _alert_json(self._review_alert(alert_id, guilds)))
+
+    async def review_filters(self, alert_id, guilds=None):
         """Every Discord filter on the alert, including disabled ones, for display."""
         def select():
-            alert = self._review_alert(alert_id)
+            alert = self._review_alert(alert_id, guilds)
             return [{"id": row.id, "method": row.method, "policy": row.type, "value": row.value,
                      "enabled": row.enabled, "matches": row.matches}
                     for row in Filter.select().where(Filter.alert == alert).order_by(Filter.id)]
         return await self._call("review_filters", select)
 
-    async def get_review_rules(self, alert_id):
+    async def get_review_rules(self, alert_id, guilds=None):
         def select():
-            alert = self._review_alert(alert_id)
+            alert = self._review_alert(alert_id, guilds)
             current = self._review_current_version(alert)
             query = ReviewRuleVersion.select().where(ReviewRuleVersion.alert == alert)
             total = query.count()
@@ -375,11 +494,19 @@ class ReviewRepositoryMixin:
         return await self._call("review_archive", self._archive_candidate_sync,
                                 alert_data, listing_payload, decision_payload, ruleset_version_id, origin)
 
-    def _review_candidates_query(self, alert_id=None, search="", source="", verdict="", latest=False):
+    def _review_candidates_query(self, alert_id=None, search="", source="", verdict="", latest=False,
+                                 guilds=None, guild_id=None):
         query = CandidateObservation.select()
+        if guilds is not None:
+            query = query.where(_in_guilds(guilds))
+        if guild_id is not None:
+            guild_id = _identifier(guild_id, "guild_id")
+            if guilds is not None and guild_id not in guilds:
+                raise ReviewNotFound("Server not found")
+            query = query.where(_in_guilds([guild_id]))
         alert = None
         if alert_id is not None:
-            alert = self._review_alert(alert_id)
+            alert = self._review_alert(alert_id, guilds)
             query = query.where(CandidateObservation.alert == alert,
                                 CandidateObservation.channel_id == alert.channel_id,
                                 CandidateObservation.search_query == alert.search_query)
@@ -403,7 +530,7 @@ class ReviewRepositoryMixin:
         return query
 
     async def list_candidates(self, alert_id=None, search="", source="", verdict="", limit=50,
-                              offset=0, cursor=None, latest=False, facets=False):
+                              offset=0, cursor=None, latest=False, facets=False, guilds=None, guild_id=None):
         """Newest first. A cursor continues after the last row of the previous page, so new
         polls between pages neither skip nor repeat rows; offset remains available."""
         _bounded_integer(limit, "limit", 1, 500)
@@ -413,7 +540,8 @@ class ReviewRepositoryMixin:
         def select():
             def scoped(**changes):
                 filters = {"search": search, "source": source, "verdict": verdict}
-                return self._review_candidates_query(alert_id, latest=latest, **{**filters, **changes})
+                return self._review_candidates_query(alert_id, latest=latest, guilds=guilds, guild_id=guild_id,
+                                                     **{**filters, **changes})
 
             query = scoped()
             page = query.order_by(CandidateObservation.observed_at.desc(), CandidateObservation.id.desc())
@@ -436,22 +564,23 @@ class ReviewRepositoryMixin:
             return result
         return await self._call("review_candidates", select)
 
-    async def replay_candidates(self, alert_id, limit=500):
+    async def replay_candidates(self, alert_id, limit=500, guilds=None):
         """The latest decision of the most recently seen listings, and how many listings there are."""
         _bounded_integer(limit, "limit", 1, 500)
 
         def select():
-            query = self._review_candidates_query(alert_id, latest=True)
+            query = self._review_candidates_query(alert_id, latest=True, guilds=guilds)
             ordered = query.order_by(CandidateObservation.last_seen_at.desc(), CandidateObservation.id.desc())
             recent = [_candidate_json(row) for row in ordered.limit(limit).dicts()]
             return {"items": recent, "available": query.count(), "recent": len(recent)}
         return await self._call("review_replay_candidates", select)
 
-    def _publish_review_rules_sync(self, alert_id, ruleset, expected_version_id, restored_from_id=None):
+    def _publish_review_rules_sync(self, alert_id, ruleset, expected_version_id, restored_from_id=None,
+                                   guilds=None):
         encoded = _json_object(ruleset, "ruleset")
         expected = _identifier(expected_version_id, "expected_version_id", nullable=True)
         with database.atomic("IMMEDIATE"):
-            alert = self._review_alert(alert_id)
+            alert = self._review_alert(alert_id, guilds)
             current = self._review_current_version(alert)
             if (current.id if current else None) != expected:
                 raise ReviewConflict("Active rules changed; reload before publishing")
@@ -471,18 +600,19 @@ class ReviewRepositoryMixin:
                 ActiveReviewRules.create(alert=alert, version=version)
             return _version_json(version)
 
-    async def publish_review_rules(self, alert_id, ruleset, expected_version_id=None):
+    async def publish_review_rules(self, alert_id, ruleset, expected_version_id=None, guilds=None):
         return await self._call("review_publish", self._publish_review_rules_sync,
-                                alert_id, ruleset, expected_version_id)
+                                alert_id, ruleset, expected_version_id, None, guilds)
 
-    async def activate_review_version(self, alert_id, version_id, expected_version_id):
+    async def activate_review_version(self, alert_id, version_id, expected_version_id, guilds=None):
         identifier = _identifier(version_id, "version_id")
         def activate():
-            alert = self._review_alert(alert_id)
+            alert = self._review_alert(alert_id, guilds)
             version = ReviewRuleVersion.get_or_none(ReviewRuleVersion.id == identifier, ReviewRuleVersion.alert == alert)
             if version is None or version.channel_id != alert.channel_id or version.search_query != alert.search_query:
                 raise ReviewNotFound("Rule version does not belong to this live alert")
-            return self._publish_review_rules_sync(alert.id, json.loads(version.ruleset), expected_version_id, version.id)
+            return self._publish_review_rules_sync(alert.id, json.loads(version.ruleset), expected_version_id,
+                                                   version.id, guilds)
         return await self._call("review_activate", activate)
 
     async def prune_candidates(self, days=90, max_rows=50000, limit=1000):
@@ -509,7 +639,7 @@ class ReviewRepositoryMixin:
                 return {"deleted": deleted, "remaining": remaining, "has_more": more}
         return await self._call("review_prune", prune)
 
-    async def bootstrap_history(self, limit=1000):
+    async def bootstrap_history(self, limit=1000, guilds=None):
         """Import recent available snapshots explicitly, never at startup.
 
         Current item rows and channel-job snapshots cannot reconstruct omitted
@@ -522,10 +652,16 @@ class ReviewRepositoryMixin:
 
         _bounded_integer(limit, "limit", 1, 1000)
         def bootstrap():
-            jobs = list(DeliveryJob.select().where(DeliveryJob.kind == "channel").order_by(
-                DeliveryJob.created_at.desc(), DeliveryJob.id.desc()).limit(limit + 1))
-            observations = list(AlertItem.select(AlertItem, Item, Alert).join(Item).switch(AlertItem).join(Alert)
-                                .order_by(AlertItem.observed_at.desc(), AlertItem.id.desc()).limit(limit + 1))
+            jobs = DeliveryJob.select().where(DeliveryJob.kind == "channel")
+            observations = AlertItem.select(AlertItem, Item, Alert).join(Item).switch(AlertItem).join(Alert)
+            if guilds is not None:
+                # Only the person's servers. Jobs of unregistered alerts have no server to check.
+                scoped = Alert.select(Alert.id).where(Alert.guild_id.in_(guilds))
+                jobs = jobs.where(DeliveryJob.alert.in_(scoped))
+                observations = observations.where(AlertItem.alert.in_(scoped))
+            jobs = list(jobs.order_by(DeliveryJob.created_at.desc(), DeliveryJob.id.desc()).limit(limit + 1))
+            observations = list(observations.order_by(AlertItem.observed_at.desc(), AlertItem.id.desc())
+                                .limit(limit + 1))
             available = [(job.created_at, "delivery_import", job) for job in jobs]
             available += [(row.observed_at, "item_import", row) for row in observations]
             available.sort(key=lambda value: (value[0], value[1], value[2].id), reverse=True)
@@ -582,95 +718,48 @@ class ReviewRepositoryMixin:
             return counts
         return await self._call("review_bootstrap", bootstrap)
 
-    async def removable_posts(self, alert_id, days=None, message_ids=None, limit=POST_REMOVAL_SCAN_LIMIT):
-        """The search's live posts in its channel, newest first, with the listing facts they show.
-
-        Ages come from the message IDs. Converting an old database dated every earlier post
-        to the conversion, so the saved creation time cannot tell how old a post is.
-        """
+    async def removable_posts(self, alert_id, days=None, message_ids=None, limit=POST_REMOVAL_SCAN_LIMIT,
+                              guilds=None):
+        """The search's live posts in its channel, newest first, with the listing facts they show."""
         _bounded_integer(limit, "limit", 1, POST_REMOVAL_SCAN_LIMIT)
-        if days not in POST_REMOVAL_DAYS:
-            raise ReviewValidation("Choose posts from the last 7, 30 or 90 days, or all posts")
+        removal_days(days)
 
         def select():
-            alert = self._review_alert(alert_id)
+            alert = self._review_alert(alert_id, guilds)
             version = self._review_current_version(alert)
-            subscribed = Notification.select(Notification.item)
-            queued = DeliveryJob.select(DeliveryJob.message_id).where(
-                DeliveryJob.kind == "delete", DeliveryJob.status == "pending", DeliveryJob.message_id.is_null(False))
-            query = (Message
-                     .select(Message.message_id, Item.item_id, Item.checker, Item.title, Item.price, Item.stock,
-                             Item.buyout_price, Item.image_url, Item.url,
-                             Case(None, [(Message.item.in_(subscribed), 1)], 0).alias("subscribed"),
-                             Case(None, [(Message.message_id.in_(queued), 1)], 0).alias("queued"))
-                     .join(Item)
-                     .where(Message.alert == alert, Message.channel_id == alert.channel_id, ~Message.deleted))
-            if days is not None:
-                query = query.where(Message.message_id >= first_discord_id_at(utcnow() - timedelta(days=days)))
-            if message_ids is not None:
-                query = query.where(Message.message_id.in_(message_ids))
+            query = live_posts(alert.channel_id, alert, days, message_ids)
             rows = list(query.order_by(Message.message_id.desc()).limit(limit).dicts())
-            posts = [{
-                "message_id": row["message_id"], "posted_at": _timestamp(discord_time(row["message_id"])),
-                "subscribed": bool(row["subscribed"]), "queued": bool(row["queued"]),
-                "listing": {"id": row["item_id"], "source": row["checker"], "title": row["title"],
-                            "price": row["price"], "stock": row["stock"], "buyout_price": row["buyout_price"],
-                            "image_url": row["image_url"], "url": row["url"]},
-            } for row in rows]
-            return {"posts": posts, "total": query.count() if len(rows) >= limit else len(rows),
+            return {"posts": [post_json(row) for row in rows],
+                    "total": query.count() if len(rows) >= limit else len(rows),
                     "channel_id": str(alert.channel_id),
                     "guild_id": str(alert.guild_id) if alert.guild_id is not None else None,
                     "active_version": _version_json(version) if version else None}
         return await self._call("review_removable_posts", select)
 
-    async def queue_post_removals(self, alert_id, version_id, message_ids):
+    async def queue_post_removals(self, alert_id, version_id, message_ids, guilds=None):
         """Queue the deletion of posts that the published version filters, for the delivery worker.
 
         Returns how many were queued. Posts that are gone, got a 🔔 subscriber or are already
-        queued are skipped. Queued posts of the same listings are cancelled, so they do not
-        come back. All jobs of one run share their creation time, which identifies the run.
+        queued are skipped.
         """
         def queue():
             with database.atomic("IMMEDIATE"):
-                alert = self._review_alert(alert_id)
+                alert = self._review_alert(alert_id, guilds)
                 current = self._review_current_version(alert)
                 if current is None or current.id != version_id:
                     raise ReviewConflict("The published rules changed. Check the posts again.")
                 if not message_ids:
                     return 0
-                queued = DeliveryJob.select(DeliveryJob.message_id).where(
-                    DeliveryJob.kind == "delete", DeliveryJob.status == "pending", DeliveryJob.message_id.is_null(False))
-                rows = list(Message.select(Message.message_id, Message.item).where(
-                    Message.message_id.in_(message_ids), Message.alert == alert,
-                    Message.channel_id == alert.channel_id, ~Message.deleted,
-                    Message.item.not_in(Notification.select(Notification.item)),
-                    Message.message_id.not_in(queued)).tuples())
-                now = utcnow()
-                payload = json.dumps({"version_id": str(version_id)})
-                for batch in chunked(rows, 100):
-                    DeliveryJob.insert_many([
-                        {"item": item_id, "alert": alert.id, "kind": "delete", "destination_id": alert.channel_id,
-                         "message_id": message_id, "payload": payload, "created_at": now, "next_attempt_at": now}
-                        for message_id, item_id in batch]).execute()
-                for batch in chunked(sorted({item_id for _, item_id in rows}), 500):
-                    DeliveryJob.update(status="cancelled").where(
-                        DeliveryJob.item.in_(batch), DeliveryJob.alert == alert, DeliveryJob.kind == "channel",
-                        DeliveryJob.destination_id == alert.channel_id,
-                        DeliveryJob.status.in_(("pending", "failed"))).execute()
-                return len(rows)
+                rows = list(live_posts(alert.channel_id, alert, message_ids=message_ids)
+                            .select(Message.message_id, Message.item)
+                            .where(Message.item.not_in(Notification.select(Notification.item)),
+                                   Message.message_id.not_in(queued_removals())).tuples())
+                return queue_removals(alert.channel_id, rows, {"version_id": str(version_id)}, alert.id)
         return await self._call("review_queue_post_removals", queue)
 
-    async def post_removal_status(self, alert_id):
+    async def post_removal_status(self, alert_id, guilds=None):
         """Progress of the search's newest removal run."""
         def select():
-            alert = self._review_alert(alert_id)
-            removals = DeliveryJob.select().where(DeliveryJob.alert == alert, DeliveryJob.kind == "delete")
-            latest = removals.select(fn.MAX(DeliveryJob.created_at)).scalar()
-            if latest is None:
-                return {"run": None}
-            counts = dict(removals.select(DeliveryJob.status, fn.COUNT(DeliveryJob.id))
-                          .where(DeliveryJob.created_at == latest).group_by(DeliveryJob.status).tuples())
-            return {"run": {"queued_at": _timestamp(latest), "total": sum(counts.values()),
-                            "pending": counts.get("pending", 0), "removed": counts.get("sent", 0),
-                            "failed": counts.get("failed", 0), "cancelled": counts.get("cancelled", 0)}}
+            alert = self._review_alert(alert_id, guilds)
+            return removal_run(DeliveryJob.select().where(DeliveryJob.alert == alert, DeliveryJob.kind == "delete"))
         return await self._call("review_post_removal_status", select)

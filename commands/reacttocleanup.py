@@ -2,32 +2,13 @@ import logging
 
 import hikari
 import lightbulb
+from channel_maintenance import HISTORY_SCAN_LIMIT, add_cleanup_reactions
 from commands.base import (
-    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, HISTORY_SCAN_LIMIT,
-    is_bot_post, log_change, management_hooks, respond,
+    ADMIN_PERMISSION, CommandServices, GUILD_CONTEXTS, GUILD_INSTALLS, log_change, management_hooks, respond,
 )
 
 
 logger = logging.getLogger(__name__)
-
-
-async def add_reaction_to_bot_messages(services, channel_id):
-    bot_user = services.bot.get_me()
-    if bot_user is None:
-        return 0
-    added = 0
-    async for message in services.bot.rest.fetch_messages(channel_id).limit(HISTORY_SCAN_LIMIT):
-        if not is_bot_post(message, bot_user.id):
-            continue
-        if await services.repository.lookup_message(channel_id, message.id) is None:
-            continue
-        try:
-            await services.bot.rest.add_reaction(channel_id, message.id, "🗑️")
-        except hikari.NotFoundError:
-            await services.repository.mark_message_deleted(channel_id, message.id)
-            continue
-        added += 1
-    return added
 
 
 class ReactToCleanupCommand(
@@ -38,8 +19,12 @@ class ReactToCleanupCommand(
 ):
     @lightbulb.invoke
     async def invoke(self, ctx: lightbulb.Context, services: CommandServices):
+        bot_user = services.bot.get_me()
+        if bot_user is None:
+            await respond(ctx, "The bot is not connected yet. Try again shortly.", ephemeral=True)
+            return
         try:
-            added = await add_reaction_to_bot_messages(services, ctx.channel_id)
+            added = await add_cleanup_reactions(services.bot.rest, services.repository, bot_user.id, ctx.channel_id)
         except hikari.ForbiddenError:
             logger.warning("cleanup_reactions_forbidden", exc_info=True,
                            extra={"fields": {"channel_id": int(ctx.channel_id)}})

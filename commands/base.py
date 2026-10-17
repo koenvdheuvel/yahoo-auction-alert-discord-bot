@@ -11,7 +11,9 @@ import lightbulb
 ADMIN_PERMISSION = hikari.Permissions.MANAGE_CHANNELS
 GUILD_CONTEXTS = [hikari.ApplicationContextType.GUILD]
 GUILD_INSTALLS = [hikari.ApplicationIntegrationType.GUILD_INSTALL]
-HISTORY_SCAN_LIMIT = 1000
+# The longest search query /register takes. Discord enforces it on the option; the dashboard
+# checks it with clean_search_query.
+SEARCH_QUERY_MAX_LENGTH = 100
 PAGINATION_TIMEOUT = 120
 NO_MENTIONS = {"mentions_everyone": False, "user_mentions": False, "role_mentions": False}
 logger = logging.getLogger(__name__)
@@ -45,14 +47,15 @@ def read_hooks():
     return [guild_only, defer_public]
 
 
-def is_bot_post(message, bot_id):
-    """Exclude command responses from channel maintenance on current Hikari."""
-    return (
-        message.author.id == bot_id
-        and getattr(message, "type", hikari.MessageType.DEFAULT)
-        not in (hikari.MessageType.CHAT_INPUT, hikari.MessageType.CONTEXT_MENU_COMMAND)
-        and not getattr(message, "interaction_metadata", None)
-    )
+def clean_search_query(value):
+    """A new search query as /register takes it: 1 to SEARCH_QUERY_MAX_LENGTH characters, then
+    without surrounding spaces, and not empty. Raises ValueError with what to fix."""
+    if not isinstance(value, str) or not 1 <= len(value) <= SEARCH_QUERY_MAX_LENGTH:
+        raise ValueError(f"Enter a search query of 1 to {SEARCH_QUERY_MAX_LENGTH} characters.")
+    value = value.strip()
+    if not value:
+        raise ValueError("Enter a non-empty search query.")
+    return value
 
 
 async def respond(ctx, content, *, ephemeral=False, **kwargs):

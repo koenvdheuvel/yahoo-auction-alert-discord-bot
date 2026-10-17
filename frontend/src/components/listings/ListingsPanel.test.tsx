@@ -30,7 +30,7 @@ async function showListings() {
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(Response.json(PAGE))));
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <ListingsPanel alertId="5" filters={{ search: "", source: "", verdict: "", latest: true }}
+      <ListingsPanel alertId="5" guildId={null} filters={{ search: "", source: "", verdict: "", latest: true }}
         onFilters={() => undefined} onTestTitle={() => undefined} />
     </QueryClientProvider>,
   );

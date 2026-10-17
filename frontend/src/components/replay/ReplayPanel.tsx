@@ -24,7 +24,7 @@ import { formatCount, formatDateTime, formatPrice, formatRelative, plural, safeU
 import type { Draft } from "../../lib/useDraft";
 import { CHANGES, VERDICTS, sourceName } from "../../lib/vocabulary";
 import { figures } from "../../theme";
-import type { StoredReplay } from "../Workspace";
+import type { StoredReplay } from "../views/SearchView";
 import { DecisionButton } from "../common/Decision";
 import { EmptyState } from "../common/Feedback";
 import { ListingImage } from "../common/ListingImage";

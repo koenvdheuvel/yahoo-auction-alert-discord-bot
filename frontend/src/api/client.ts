@@ -1,5 +1,17 @@
 import type {
+  AlertDetail,
+  AlertSummary,
   AlertsResponse,
+  ChannelList,
+  ChannelPosts,
+  CleanupPreview,
+  GuildStatus,
+  GuildSummary,
+  HiddenListings,
+  HiddenSubscription,
+  HistoryScan,
+  ScanAction,
+  Subscription,
   CandidatePage,
   Decision,
   ImportResult,
@@ -16,7 +28,7 @@ import type {
   Verdict,
 } from "./types";
 
-/** An error response from review.py, or a network failure (status 0). */
+/** An error response from dashboard.py, or a network failure (status 0). */
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -32,16 +44,16 @@ export class ApiError extends Error {
   }
 }
 
-const sessionEndedListeners = new Set<() => void>();
+const sessionEndedListeners = new Set<(error: ApiError) => void>();
 
-/** Runs when any request finds the session gone, so the app can ask for the key again. */
-export function onSessionEnded(listener: () => void): () => void {
+/** Runs when any request finds the session gone, so the app can ask the person to sign in again. */
+export function onSessionEnded(listener: (error: ApiError) => void): () => void {
   sessionEndedListeners.add(listener);
   return () => sessionEndedListeners.delete(listener);
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   signal?: AbortSignal;
 }
@@ -58,20 +70,23 @@ export async function request<T>(path: string, { method = "GET", body, signal }:
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    throw new ApiError("Filter Lab can't be reached. Check that the bot is running, then try again.", 0, "network_error");
+    throw new ApiError("The dashboard can't be reached. Check that the bot is running, then try again.", 0, "network_error");
   }
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok) {
     const message = typeof data.message === "string" ? data.message : `The request failed with status ${response.status}.`;
     const code = typeof data.error === "string" ? data.error : "http_error";
-    if (response.status === 401 && path !== "/api/login") sessionEndedListeners.forEach((listener) => listener());
-    throw new ApiError(message, response.status, code, typeof data.field === "string" ? data.field : undefined);
+    const error = new ApiError(message, response.status, code, typeof data.field === "string" ? data.field : undefined);
+    if (response.status === 401 && path !== "/api/login") sessionEndedListeners.forEach((listener) => listener(error));
+    throw error;
   }
   return data as T;
 }
 
 export interface CandidateQuery {
   alertId: string | null;
+  /** All listings of one Discord server, when no alert is selected. */
+  guildId: string | null;
   search: string;
   source: Source | "";
   verdict: Verdict | "";
@@ -88,6 +103,7 @@ export const api = {
   candidates(query: CandidateQuery, cursor: string | null, limit: number, signal?: AbortSignal) {
     const params = new URLSearchParams({ limit: String(limit), latest: query.latest ? "1" : "0" });
     if (query.alertId) params.set("alert_id", query.alertId);
+    else if (query.guildId) params.set("guild_id", query.guildId);
     if (query.search) params.set("search", query.search);
     if (query.source) params.set("source", query.source);
     if (query.verdict) params.set("verdict", query.verdict);
@@ -127,4 +143,56 @@ export const api = {
     }),
   removalStatus: (alertId: string, signal?: AbortSignal) =>
     request<RemovalStatus>(`/api/alerts/${encodeURIComponent(alertId)}/posts/removal`, { signal }),
+
+  guilds: (signal?: AbortSignal) => request<{ guilds: GuildSummary[] }>("/api/guilds", { signal }),
+  channels: (guildId: string, signal?: AbortSignal) =>
+    request<ChannelList>(`/api/guilds/${encodeURIComponent(guildId)}/channels`, { signal }),
+  status: (guildId: string, signal?: AbortSignal) =>
+    request<GuildStatus>(`/api/guilds/${encodeURIComponent(guildId)}/status`, { signal }),
+  /** /register in a channel. The server works out the channel's server with Discord. */
+  register: (channelId: string, searchQuery: string) =>
+    request<AlertSummary>("/api/alerts", { method: "POST", body: { channel_id: channelId, search_query: searchQuery } }),
+  alert: (alertId: string, signal?: AbortSignal) =>
+    request<AlertDetail>(`/api/alerts/${encodeURIComponent(alertId)}`, { signal }),
+  unregister: (alertId: string) =>
+    request<{ unregistered: boolean }>(`/api/alerts/${encodeURIComponent(alertId)}`, { method: "DELETE", body: {} }),
+  deleteLegacyFilter: (alertId: string, filterId: number) =>
+    request<{ deleted: boolean }>(`/api/alerts/${encodeURIComponent(alertId)}/legacy-filters/${filterId}`,
+      { method: "DELETE", body: {} }),
+  posts: (channelId: string, alertId: string | null, before: string | null, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    if (alertId) params.set("alert_id", alertId);
+    if (before) params.set("before", before);
+    const query = params.toString();
+    return request<ChannelPosts>(`/api/channels/${encodeURIComponent(channelId)}/posts${query ? `?${query}` : ""}`, { signal });
+  },
+  hidden: (channelId: string, signal?: AbortSignal) =>
+    request<HiddenListings>(`/api/channels/${encodeURIComponent(channelId)}/hidden`, { signal }),
+  hide: (channelId: string, itemId: string) =>
+    request<{ hidden: boolean; posts_queued: number; bot_running: boolean }>(
+      `/api/channels/${encodeURIComponent(channelId)}/hidden/${encodeURIComponent(itemId)}`, { method: "PUT", body: {} }),
+  unhide: (channelId: string, itemId: string) =>
+    request<{ hidden: boolean }>(`/api/channels/${encodeURIComponent(channelId)}/hidden/${encodeURIComponent(itemId)}`,
+      { method: "DELETE", body: {} }),
+  cleanupPreview: (channelId: string, days: RemovalDays, alertId: string | null, signal?: AbortSignal) =>
+    request<CleanupPreview>(`/api/channels/${encodeURIComponent(channelId)}/posts/removal-preview`, {
+      method: "POST", body: alertId ? { days, alert_id: alertId } : { days }, signal }),
+  cleanup: (channelId: string, messageIds: string[]) =>
+    request<RemovalResult>(`/api/channels/${encodeURIComponent(channelId)}/posts/removal`, {
+      method: "POST", body: { message_ids: messageIds } }),
+  cleanupStatus: (channelId: string, signal?: AbortSignal) =>
+    request<RemovalStatus>(`/api/channels/${encodeURIComponent(channelId)}/posts/removal`, { signal }),
+  startScan: (channelId: string, action: ScanAction, count?: number) =>
+    request<{ scan: HistoryScan }>(`/api/channels/${encodeURIComponent(channelId)}/history-scan`, {
+      method: "POST", body: count === undefined ? { action } : { action, count } }),
+  scanStatus: (channelId: string, signal?: AbortSignal) =>
+    request<{ scan: HistoryScan | null; available: boolean }>(
+      `/api/channels/${encodeURIComponent(channelId)}/history-scan`, { signal }),
+  notifications: (signal?: AbortSignal) =>
+    request<{ items: (Subscription | HiddenSubscription)[] }>("/api/me/notifications", { signal }),
+  subscribe: (itemId: string) =>
+    request<{ subscribed: boolean; created: boolean }>(`/api/me/notifications/${encodeURIComponent(itemId)}`,
+      { method: "PUT", body: {} }),
+  unsubscribe: (itemId: string) =>
+    request<{ subscribed: boolean }>(`/api/me/notifications/${encodeURIComponent(itemId)}`, { method: "DELETE", body: {} }),
 };

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class Runtime:
     def __init__(self, bot, settings, repository, http, ingestion, delivery, providers, metrics,
-                 review_server=None):
+                 dashboard_server=None):
         self.bot, self.settings = bot, settings
         self.repository, self.http = repository, http
         self.ingestion, self.delivery = ingestion, delivery
@@ -27,7 +27,12 @@ class Runtime:
         self.health = Health(settings.health_max_poll_age,
                              max_stats_age=max(30, 3 * settings.metrics_stats_interval))
         self.monitoring = MonitoringServer(settings, metrics, self.health)
-        self.review = review_server
+        self.dashboard = dashboard_server
+        # The newest finished check of each alert and source, for the dashboard's status page.
+        # Kept in memory only: after a restart a search has no result until it is checked again.
+        self.check_results = {}
+        # Source to the wall-clock time of its last cycle without failed checks.
+        self.source_success = {}
         self._history_pruned_at = None
         self._history_prune_backlog = False
         self.tasks = self.health.tasks
@@ -57,8 +62,8 @@ class Runtime:
             await self.repository.start()
             await self.http.start()
             await self.monitoring.start()
-            if self.review is not None:
-                await self.review.start()
+            if self.dashboard is not None:
+                await self.dashboard.start()
         except Exception:
             await self.close()
             raise
@@ -137,7 +142,7 @@ class Runtime:
         if self.tasks:
             await asyncio.gather(*self.tasks.values(), return_exceptions=True)
         # Close each resource even if another resource reports an error.
-        for name, resource in (("review", self.review), ("monitoring", self.monitoring), ("http", self.http),
+        for name, resource in (("dashboard", self.dashboard), ("monitoring", self.monitoring), ("http", self.http),
                                ("repository", self.repository)):
             if resource is None:
                 continue
@@ -172,6 +177,8 @@ class Runtime:
             alerts = await self.repository.list_alerts()
             self.metrics.alerts.set(len(alerts))
             self.metrics.update_alert_metadata(alerts)
+            current = {alert["id"] for alert in alerts}
+            self.check_results = {key: value for key, value in self.check_results.items() if key[0] in current}
             jobs = iter((source, provider, alert) for alert in alerts
                         for source, provider in self.providers.items())
 
@@ -196,6 +203,7 @@ class Runtime:
             for source, (checked, failed) in results.items():
                 if checked and not failed:
                     self.metrics.source_last_success.labels(source).set(now)
+                    self.source_success[source] = now
             if outcome == "success":
                 self.metrics.last_success.set(now)
                 self.health.last_success = time.monotonic()
@@ -227,6 +235,7 @@ class Runtime:
         context = log_context.set({**log_context.get(), "source": source, "alert_id": alert["id"]})
         started = time.monotonic()
         outcome = "cancelled"
+        error_name = None
         identity = (alert["search_query"], str(alert["channel_id"]))
         self.metrics.begin_check(alert["id"], source, identity)
         self.metrics.active_checks.inc()
@@ -239,12 +248,18 @@ class Runtime:
             logger.warning("check_timed_out", extra={"fields": {"timeout_seconds": self.settings.check_timeout}})
         except asyncio.CancelledError:
             raise
-        except Exception:
-            outcome = "error"
+        except Exception as error:
+            outcome, error_name = "error", type(error).__name__
             logger.exception("check_failed")
         finally:
+            duration = time.monotonic() - started
             self.metrics.active_checks.dec()
-            self.metrics.observe_check(alert["id"], source, outcome, time.monotonic() - started, identity)
+            self.metrics.observe_check(alert["id"], source, outcome, duration, identity)
+            if outcome != "cancelled":
+                # Only the error's type: its message can hold a marketplace URL or response text.
+                self.check_results[(alert["id"], source)] = {
+                    "source": source, "outcome": outcome, "finished_at": time.time(),
+                    "duration_seconds": round(duration, 3), "error": error_name}
             log_context.reset(context)
         return outcome
 
@@ -275,3 +290,20 @@ class Runtime:
                 self.health.repository_available = False
                 logger.exception("database_stats_failed")
             await asyncio.sleep(self.settings.metrics_stats_interval)
+
+    def status(self):
+        """What the dashboard's status page shows about the running bot, from memory only."""
+        ready, health = self.health.status()
+
+        def wall(moment):
+            # Health keeps monotonic times; the page wants clock times.
+            return None if moment is None else time.time() - (time.monotonic() - moment)
+        checks = {}
+        for (alert_id, _), result in sorted(self.check_results.items()):
+            checks.setdefault(alert_id, []).append(dict(result))
+        return {"ready": ready, "discord_connected": health["discord_connected"],
+                "database_available": health["database_available"], "failed_worker": health["failed_worker"],
+                "last_poll_at": wall(self.health.last_poll), "last_success_at": wall(self.health.last_success),
+                "started_at": wall(self.health.started), "interval_seconds": self.settings.interval,
+                "sources": {source: self.source_success.get(source) for source in self.providers},
+                "checks": checks}

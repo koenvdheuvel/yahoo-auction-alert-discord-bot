@@ -12,10 +12,10 @@ flowchart LR
     Ingestion --> Changes["domain.py: listing facts + change rules"]
     Ingestion --> Repo["repositories.py: dedicated database thread"]
     Repo --> DB[("models.py: versioned SQLite")]
-    Runtime --> Review["review.py: operator HTTP + UI"]
-    Review --> Replay["review_service.py: bounded replay worker"]
+    Runtime --> Dashboard["dashboard.py: operator HTTP + UI"]
+    Dashboard --> Replay["review_service.py: bounded replay worker"]
     Replay --> Policy
-    Review --> Repo
+    Dashboard --> Repo
     DB --> Outbox["durable delivery jobs"]
     Runtime --> Delivery["delivery.py: Discord outbound adapter"]
     Delivery --> Outbox
@@ -41,8 +41,14 @@ flowchart LR
 | `repositories.py` | Async persistence API over a single database thread; no Peewee objects escape to callers |
 | `review_repository.py` | Candidate snapshots, immutable rule versions, atomic activation, post removal requests and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
-| `review.py` | Authenticated same-origin operator API that also serves the built UI; separate listener from monitoring |
-| `frontend/` | Filter Lab's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
+| `dashboard.py` | The dashboard's web server: sign-in, sessions, the rules and listings API, and the built UI; separate listener from monitoring |
+| `dashboard_auth.py` | Discord sign-in: the OAuth2 code grant for `identify`, and the bot's own check of a person's servers and whether they manage each one |
+| `dashboard_manage.py` | The dashboard's server management routes: searches, a channel's posts and hidden listings, cleanup, your notifications and status |
+| `dashboard_limits.py` | Who a request comes from behind trusted proxies, and the bounded counting of failed sign-ins |
+| `discord_directory.py` | Channels, threads and the bot's permissions per channel, from the gateway cache or REST, in Discord's sidebar order |
+| `channel_maintenance.py` | The history scans that `/cleanup`, `/reacttocleanup` and the dashboard share |
+| `devtools/` | A fake Discord for tests and a harness for trying Discord sign-in in a browser; never used by the bot |
+| `frontend/` | The dashboard's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
 | `delivery.py` | Formats embeds and sends durable channel/DM jobs with independent retries |
 | `observability.py` | Bounded-label Prometheus collectors, JSON correlation/redaction, health endpoints |
 | `commands/*` | Thin Discord command adapters using repository methods and guild/channel checks |
@@ -103,7 +109,7 @@ Existing notification thresholds are preserved deliberately: price decreases str
 
 Enabled title filters actually participate in ingestion. Blacklist matches veto a listing; if any whitelist rules exist, at least one must match. Text matching remains case-sensitive. Regex is compiled once per check, validated on creation, and limited to 256 characters. Matching runs off the event loop with a 50-millisecond deadline per pattern; an evaluation timeout logs the rule version, counts the failure, and archives the item for review without stopping valid siblings. The saved decision identifies the legacy filter or new rule group involved. This uses the [regex engine's timeout support](https://pypi.org/project/regex/2024.11.6/). Alerts allow at most 50 filters. Match counters are aggregated and persisted once per check. A filtered listing does not advance its baseline or queue delivery.
 
-Filter Lab adds versioned grouped rules on top of this compatibility path. The
+The dashboard adds versioned grouped rules on top of this compatibility path. The
 same pure evaluator runs during ingestion, title preview, and replay. Required
 groups combine with AND, with any/all matching inside each group; exclusion
 groups veto matches and review groups suppress ambiguous listings. Rules can
@@ -131,11 +137,11 @@ recently seen listings, and a 10-second processing budget; incomplete listing
 snapshots stay in review. It compares title/source/price eligibility while
 retaining recorded channel blacklist vetoes. It does not reconstruct delivery,
 changing blacklist state, subscriptions or stock-change behavior. See
-[filter-lab.md](filter-lab.md).
+[dashboard.md](dashboard.md).
 
 ## Durable delivery and recovery
 
-Each channel post and subscriber DM is a separate `DeliveryJob`. Filter Lab can also queue the deletion of posts that published rules filter (`kind="delete"`). The worker takes those only when no post or DM is due: posts under 14 days old go in one bulk request per channel, up to 100 at a time, and older posts go one request each, five per round. Bulk delete needs the Manage Messages permission; where Discord refuses it, the posts go one at a time and bulk is tried there again an hour later. Discord failures do not roll back the observed marketplace state or block later jobs. Transient failures use bounded exponential delays; permission, missing-resource, malformed-payload failures, and exhausted attempts become `failed` jobs visible in metrics and operational commands.
+Each channel post and subscriber DM is a separate `DeliveryJob`. The dashboard can also queue the deletion of posts that published rules filter (`kind="delete"`). The worker takes those only when no post or DM is due: posts under 14 days old go in one bulk request per channel, up to 100 at a time, and older posts go one request each, five per round. Bulk delete needs the Manage Messages permission; where Discord refuses it, the posts go one at a time and bulk is tried there again an hour later. Discord failures do not roll back the observed marketplace state or block later jobs. Transient failures use bounded exponential delays; permission, missing-resource, malformed-payload failures, and exhausted attempts become `failed` jobs visible in metrics and operational commands.
 
 A channel message's ID and historical mapping are saved immediately after creation and before adding reactions. If a reaction fails, the next attempt reuses that message. A failed DM cannot prevent the channel job from completing. Blacklisting, unsubscribing, and unregistering cancel matching pending jobs. An already in-flight Discord request cannot be guaranteed to stop when configuration changes.
 
@@ -162,7 +168,7 @@ listing, baseline or delivery data. The v3 migration adds `last_seen_at`, indexe
 candidates by alert and listing, and folds the repeated copies earlier polls
 saved into one row per decision. On the dev database this removed 38,896 of
 50,000 rows in about a second. It also drops the `candidate_feedback` table,
-which held the listing labels that Filter Lab no longer uses, and logs how many
+which held the listing labels that the dashboard no longer uses, and logs how many
 labels it removed.
 
 Known checker class names map to stable marketplace keys. IDs, mute state, subscriptions, blacklists, and the latest available message mapping are preserved. Duplicate subscriptions/blacklists are collapsed. Orphaned child rows are counted in the migration log and remain in the backup. Listings with unknown sources are retained under their legacy source and reported for manual mapping.
@@ -179,6 +185,6 @@ See [monitoring.md](monitoring.md) for metric names, health semantics, Prometheu
 
 Per-alert check metrics carry `alert_id`. The `auction_bot_alert_info` metadata series maps it to the query and channel so Grafana can join in friendly names without repeating query text on every counter and histogram. Metadata refreshes between polls; removed alerts retire their live collectors. Global metrics retain their original label sets.
 
-Tests use temporary databases, fake Discord REST, and temporary local HTTP servers. They cover migrations/backups, identity and alert isolation, filters, delivery failure windows, HTTP retries/pagination, command permissions, reactions, bounded scheduling, cancellation, metrics, readiness, and token redaction. GitHub Actions runs Ruff, pytest and the UI's lint, type check, tests and build before building or deploying.
+Tests use temporary databases, fake Discord REST, and temporary local HTTP servers. Discord sign-in tests run hikari's REST client and the OAuth2 calls against `devtools/fake_discord.py`. They cover migrations/backups, identity and alert isolation, filters, delivery failure windows, HTTP retries/pagination, command permissions, reactions, bounded scheduling, cancellation, metrics, readiness, and token redaction. GitHub Actions runs Ruff, pytest and the UI's lint, type check, tests and build before building or deploying.
 
 The runtime dependency list now includes only directly used libraries, and Docker caches dependency installation before copying source. A Node stage builds the UI, and the runtime image receives only the built files. A `.dockerignore` excludes credentials, databases, backups, virtual environments, and caches. The deployment mounts the entire database directory so migration backups survive container replacement, uses an explicit database path, and configures restart behavior and a container readiness probe.

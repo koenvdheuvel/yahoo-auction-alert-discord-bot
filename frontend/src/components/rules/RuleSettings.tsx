@@ -1,13 +1,23 @@
+import DeleteOutlined from "@mui/icons-material/DeleteOutlined";
 import Box from "@mui/material/Box";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import FormGroup from "@mui/material/FormGroup";
+import IconButton from "@mui/material/IconButton";
 import InputAdornment from "@mui/material/InputAdornment";
 import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import type { ReactNode } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
+
+import { api } from "../../api/client";
+import { keys } from "../../api/hooks";
+import { errorMessage } from "../../lib/errors";
+import { ConfirmDialog } from "../common/Feedback";
+import { useNotify } from "../common/notify";
 
 import type { DiscordFilter, Normalization, Ruleset, Source } from "../../api/types";
 import { formatCount } from "../../lib/format";
@@ -31,11 +41,49 @@ function Section({ title, children, hint }: { title: string; hint?: string; chil
   );
 }
 
+const METHOD_NAMES: Record<string, string> = { regex: "regex", text: "text", legacy: "unknown-type" };
+
 function describeFilter(filter: DiscordFilter): string {
-  const kind = `${filter.policy === "blacklist" ? "Blocks" : "Allows"} ${filter.method === "regex" ? "regex" : "text"} matches`;
+  const kind = `${filter.policy === "blacklist" ? "Blocks" : "Allows"} ${METHOD_NAMES[filter.method] ?? filter.method} matches`;
   const matched = `matched ${formatCount(filter.matches)} ${filter.matches === 1 ? "time" : "times"}`;
-  if (!filter.enabled) return `${kind}, ${matched}. Disabled: the old database lost its match type, so recreate it in Discord.`;
+  if (!filter.enabled) {
+    return `${kind}, ${matched}. Disabled: the old database lost whether it was text or a regex. To keep it, ` +
+      "add the term to a group above, then delete this filter.";
+  }
   return `${kind}, ${matched}.`;
+}
+
+/** /filters delete, after asking. */
+function DeleteFilter({ alertId, filter, canChange }: { alertId: string; filter: DiscordFilter; canChange: boolean }) {
+  const client = useQueryClient();
+  const notify = useNotify();
+  const [confirming, setConfirming] = useState(false);
+  const remove = useMutation({
+    mutationFn: () => api.deleteLegacyFilter(alertId, filter.id),
+    onSuccess: () => {
+      setConfirming(false);
+      notify(`Deleted filter ${filter.id}.`, "success");
+      void client.invalidateQueries({ queryKey: keys.rules(alertId) });
+    },
+    onError: (error) => notify(errorMessage(error), "error"),
+  });
+  return (
+    <>
+      <Tooltip title={canChange ? "Delete, like /filters delete" : "You need Manage Channels in this search's channel"}>
+        <span>
+          <IconButton size="small" aria-label={`Delete filter ${filter.value}`} disabled={!canChange}
+            onClick={() => setConfirming(true)}><DeleteOutlined fontSize="small" /></IconButton>
+        </span>
+      </Tooltip>
+      <ConfirmDialog open={confirming} title="Delete this Discord filter?" confirm="Delete" busy={remove.isPending} danger
+        onClose={() => setConfirming(false)} onConfirm={() => remove.mutate()}>
+        <Typography variant="body2">
+          “{filter.value}” stops applying to this search, as with /filters delete {filter.id}. Published rule versions
+          do not change.
+        </Typography>
+      </ConfirmDialog>
+    </>
+  );
 }
 
 function parseBound(value: string): number | null | undefined {
@@ -48,10 +96,13 @@ interface Props {
   ruleset: Ruleset;
   onChange: (ruleset: Ruleset) => void;
   filters: DiscordFilter[] | null;
+  /** The search the filters belong to, for deleting them. */
+  alertId?: string | null;
+  canChange?: boolean;
   priceError: string | null;
 }
 
-export function RuleSettings({ ruleset, onChange, filters, priceError }: Props) {
+export function RuleSettings({ ruleset, onChange, filters, alertId = null, canChange = false, priceError }: Props) {
   const set = (changes: Partial<Ruleset>) => onChange({ ...ruleset, ...changes });
   const toggleSource = (source: Source, on: boolean) =>
     set({ sources: on ? [...ruleset.sources, source] : ruleset.sources.filter((value) => value !== source) });
@@ -104,11 +155,16 @@ export function RuleSettings({ ruleset, onChange, filters, priceError }: Props) 
         ) : (
           <Box component="ul" sx={{ listStyle: "none", p: 0, m: 0, mt: 1, display: "grid", gap: 1 }}>
             {filters.map((filter) => (
-              <Box component="li" key={filter.id} sx={{ opacity: filter.enabled && ruleset.include_legacy ? 1 : 0.65 }}>
-                <Typography variant="body2" sx={{ fontFamily: filter.method === "regex" ? mono : undefined, overflowWrap: "anywhere" }}>
-                  {filter.value}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={figures}>{describeFilter(filter)}</Typography>
+              <Box component="li" key={filter.id} sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+                <Box sx={{ flex: 1, minWidth: 0, opacity: filter.enabled && ruleset.include_legacy ? 1 : 0.65 }}>
+                  <Typography variant="body2" sx={{ fontFamily: filter.method === "regex" ? mono : undefined, overflowWrap: "anywhere" }}>
+                    {filter.value}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={figures}>
+                    Filter {filter.id}: {describeFilter(filter)}
+                  </Typography>
+                </Box>
+                {alertId && <DeleteFilter alertId={alertId} filter={filter} canChange={canChange} />}
               </Box>
             ))}
           </Box>

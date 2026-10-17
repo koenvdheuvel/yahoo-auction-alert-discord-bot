@@ -395,6 +395,24 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         run = (await self.repository.post_removal_status(self.alert["id"]))["run"]
         self.assertEqual((run["total"], run["pending"], run["removed"], run["failed"]), (1, 1, 0, 0))
 
+    async def test_post_removal_is_limited_to_the_servers_given(self):
+        live = snowflake(datetime.now(timezone.utc) - timedelta(hours=1))
+        await self.add_posts((live, "live", self.alert["id"], {}))
+        version = int((await self.repository.publish_review_rules(self.alert["id"], default_ruleset(), None))["id"])
+        other_server = frozenset({self.guild + 1})
+        # Another server's search answers exactly like a missing one, and nothing is queued.
+        for call in (lambda: self.repository.removable_posts(self.alert["id"], 30, guilds=other_server),
+                     lambda: self.repository.queue_post_removals(self.alert["id"], version, [live], guilds=other_server),
+                     lambda: self.repository.post_removal_status(self.alert["id"], guilds=other_server)):
+            with self.assertRaisesRegex(ReviewNotFound, "Alert no longer exists"):
+                await call()
+        self.assertEqual([job for job in await self.rows(DeliveryJob) if job["kind"] == "delete"], [])
+        own = frozenset({self.guild})
+        self.assertEqual([post["message_id"] for post in
+                          (await self.repository.removable_posts(self.alert["id"], 30, guilds=own))["posts"]], [live])
+        self.assertEqual(await self.repository.queue_post_removals(self.alert["id"], version, [live], guilds=own), 1)
+        self.assertEqual((await self.repository.post_removal_status(self.alert["id"], guilds=own))["run"]["total"], 1)
+
     async def test_bounded_json_and_title_metadata_are_explicit(self):
         huge_title = facts(title="x" * 140000)
         await self.repository.archive_candidate(self.alert, huge_title, decision())
@@ -525,7 +543,9 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "archived_count", "listing_count", "accepted_count", "filtered_count", "review_count")},
             {"archived_count": 3, "listing_count": 2, "accepted_count": 0, "filtered_count": 1, "review_count": 1})
         self.assertTrue(summary["last_seen_at"].endswith("Z"))
-        self.assertEqual(result["totals"], {"archived_count": 4, "unassigned_count": 1})
+        # The detached row's alert had no server, so it counts in the totals but in no server.
+        self.assertEqual(result["totals"], {"archived_count": 4, "unassigned_count": 1, "guilds": {
+            str(self.guild): {"archived_count": 3, "unassigned_count": 0}}})
         await self.repository.register_alert(self.channel, "empty")
         empty = next(row for row in (await self.repository.review_alerts())["alerts"] if row["search_query"] == "empty")
         self.assertEqual((empty["archived_count"], empty["listing_count"], empty["last_seen_at"]), (0, 0, None))
