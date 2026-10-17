@@ -676,7 +676,7 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
         with self.assertLogs("models", "WARNING") as logs:
             create_tables()
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], SCHEMA_VERSION)
             self.assertEqual(self.table(connection), [
                 (2, "x", "accepted", "2026-10-16 07:00:00", "2026-10-16 07:30:00"),
                 (4, "x", "filtered", "2026-10-16 08:00:00", "2026-10-16 08:30:00"),
@@ -706,7 +706,7 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_observation").fetchone()[0], 12)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 4)
         migrated = next(record for record in logs.records if record.getMessage() == "database_migrated")
-        self.assertEqual(migrated.fields, {"schema_version": 4, "previous_version": 3, "backup": str(backups[0]),
+        self.assertEqual(migrated.fields, {"schema_version": SCHEMA_VERSION, "previous_version": 3, "backup": str(backups[0]),
                                            "labels_removed": 4, "repeated_snapshots_removed": 4})
         create_tables()
         self.assertEqual(list(self.path.parent.glob("*.bak")), backups)
@@ -722,3 +722,82 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_observation").fetchone()[0], 12)
             # The labels were dropped before the fold failed, so this shows the drop was undone too.
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 4)
+
+
+class LabelRemovalMigrationTests(unittest.TestCase):
+    """Schema v4 kept listing labels in candidate_feedback; v5 drops them after a backup."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / "v4.sqlite"
+        configure_database(str(self.path))
+        database.connect()
+        database.create_tables(TABLES)
+        alert = Alert.create(channel_id=123, guild_id=456, search_query="poster")
+        SchemaVersion.create(id=1, version=4)
+        for external_id in ("x", "y"):
+            database.execute_sql(
+                'INSERT INTO "candidate_observation" ("alert_id", "alert_snapshot_id", "channel_id", "search_query", '
+                '"source", "external_id", "title", "normalized_title", "payload", "decision", "verdict", '
+                '"observation_kind", "origin", "incomplete", "observed_at", "last_seen_at") '
+                "VALUES (?, ?, 123, 'poster', 'mercari', ?, 'title', 'title', '{}', ?, 'accepted', 'listing', 'live', 0, "
+                "'2026-10-16 07:00:00', '2026-10-16 07:30:00')",
+                (alert.id, alert.id, external_id, json.dumps(decision("accepted"))))
+        database.close()
+        self.path.chmod(0o600)
+
+    def tearDown(self):
+        database.close()
+        self.directory.cleanup()
+
+    def add_labels(self):
+        """The label table as schema v4 made it, with a label on each listing."""
+        with sqlite3.connect(self.path) as connection:
+            connection.execute('CREATE TABLE "candidate_feedback" ("candidate_id" INTEGER NOT NULL PRIMARY KEY, '
+                               '"label" VARCHAR(255) NOT NULL, "updated_at" DATETIME NOT NULL, '
+                               'FOREIGN KEY ("candidate_id") REFERENCES "candidate_observation" ("id") ON DELETE CASCADE)')
+            connection.execute('CREATE INDEX "candidatefeedback_label" ON "candidate_feedback" ("label")')
+            connection.execute('INSERT INTO "candidate_feedback" ("candidate_id", "label", "updated_at") VALUES '
+                               "(1, 'relevant', '2026-10-16 07:10:00'), (2, 'bundle', '2026-10-16 07:20:00')")
+
+    def migrate(self):
+        with self.assertLogs("models", "WARNING") as logs:
+            create_tables()
+        return next(record for record in logs.records if record.getMessage() == "database_migrated").fields
+
+    def test_upgrade_drops_the_labels_after_a_backup_and_keeps_the_listings(self):
+        self.add_labels()
+        fields = self.migrate()
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], SCHEMA_VERSION)
+            self.assertEqual(connection.execute(
+                "SELECT name FROM sqlite_master WHERE tbl_name = 'candidate_feedback'").fetchall(), [])
+            self.assertEqual(connection.execute(
+                'SELECT "external_id", "last_seen_at" FROM "candidate_observation" ORDER BY "id"').fetchall(),
+                [("x", "2026-10-16 07:30:00"), ("y", "2026-10-16 07:30:00")])
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+        backups = list(self.path.parent.glob(f"v4.sqlite.pre-v{SCHEMA_VERSION}.*.bak"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o600)
+        with sqlite3.connect(backups[0]) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 2)
+        self.assertEqual(fields, {"schema_version": SCHEMA_VERSION, "previous_version": 4,
+                                  "backup": str(backups[0]), "labels_removed": 2})
+        create_tables()
+        self.assertEqual(list(self.path.parent.glob("*.bak")), backups)
+
+    def test_a_v4_database_that_never_had_labels_upgrades_too(self):
+        fields = self.migrate()
+        self.assertEqual(fields["labels_removed"], 0)
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], SCHEMA_VERSION)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_observation").fetchone()[0], 2)
+
+    def test_failed_upgrade_keeps_the_labels(self):
+        self.add_labels()
+        with patch.object(SchemaVersion, "update", side_effect=RuntimeError("simulated version failure")):
+            with self.assertRaisesRegex(RuntimeError, "version failure"):
+                create_tables()
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 2)

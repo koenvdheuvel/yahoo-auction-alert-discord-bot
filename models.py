@@ -12,7 +12,7 @@ from peewee import (BigIntegerField, BooleanField, CharField, DateTimeField,
 from playhouse.sqlite_ext import AutoIncrementField
 
 logger = logging.getLogger(__name__)
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 database = SqliteDatabase(None)
 
 
@@ -318,6 +318,16 @@ def _fold_repeated_snapshots():
     return len(removed)
 
 
+def _drop_labels():
+    """Drop the listing labels that schemas 3 and 4 kept, and return how many there were. The
+    dashboard no longer has labels; the backup keeps them. Some schema 4 databases never had the table."""
+    if "candidate_feedback" not in database.get_tables():
+        return 0
+    labels = database.execute_sql('SELECT COUNT(*) FROM "candidate_feedback"').fetchone()[0]
+    database.execute_sql('DROP TABLE "candidate_feedback"')
+    return labels
+
+
 def _upgrade(previous):
     """Bring a versioned database to SCHEMA_VERSION in one transaction, after a backup."""
     backup = _backup()
@@ -327,6 +337,8 @@ def _upgrade(previous):
             # Rule version and archive tables did not exist yet, so they are created in their current shape.
             database.create_tables(REVIEW_TABLES)
         else:
+            details["labels_removed"] = _drop_labels()
+        if previous == 3:
             # SQLite needs a constant default to add a NOT NULL column. Every row is set next.
             database.execute_sql('ALTER TABLE "candidate_observation" ADD COLUMN "last_seen_at" '
                                  "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'")
@@ -334,11 +346,7 @@ def _upgrade(previous):
             # Nothing queried (source, external_id). Repeat sightings are matched per alert now.
             database.execute_sql('DROP INDEX IF EXISTS "candidateobservation_source_external_id"')
             CandidateObservation._schema.create_indexes(safe=True)
-            # Filter Lab no longer has listing labels. The backup keeps them.
-            labels = database.execute_sql('SELECT COUNT(*) FROM "candidate_feedback"').fetchone()[0]
-            database.execute_sql('DROP TABLE IF EXISTS "candidate_feedback"')
-            removed = _fold_repeated_snapshots()
-            details.update(labels_removed=labels, repeated_snapshots_removed=removed)
+            details["repeated_snapshots_removed"] = _fold_repeated_snapshots()
         SchemaVersion.update(version=SCHEMA_VERSION).where(SchemaVersion.id == 1).execute()
         if database.execute_sql("PRAGMA foreign_key_check").fetchall():
             raise RuntimeError("Foreign key validation failed; migration rolled back")
@@ -354,7 +362,7 @@ def create_tables():
         existing = set(database.get_tables())
         if "schema_version" in existing:
             version = SchemaVersion.get_by_id(1).version
-            if version in {2, 3}:
+            if version in {2, 3, 4}:
                 _upgrade(version)
             elif version != SCHEMA_VERSION:
                 raise RuntimeError(f"Unsupported database schema version {version}")

@@ -496,8 +496,9 @@ matches the listing's latest row, that row gets the latest facts and its
 last-seen time instead of a new copy. A different decision adds a row, and the
 previous one stays as an earlier decision. Schema version 4 introduced this.
 Its migration backs up the database, then folds the repeated rows of older
-archives the same way. It also deletes the listing labels that earlier versions
-saved, because the dashboard no longer uses them.
+archives the same way. Schema version 5 deletes the listing labels that earlier
+versions saved, because the dashboard no longer uses them; its migration backs
+up the database first too.
 
 The **Import saved history** action explicitly imports up to 1,000 recent
 available delivery/listing snapshots. Stable import keys prevent duplicate

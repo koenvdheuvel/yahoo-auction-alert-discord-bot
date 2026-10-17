@@ -37,7 +37,7 @@ flowchart LR
 | `normalization.py` | Versioned Unicode title normalization; original titles remain intact |
 | `filtering.py` | Validated grouped rules, legacy compatibility, bounded regex evaluation and explainable decisions |
 | `storechecker.py` | Applies eligibility rules, archives candidates and coordinates observations; malformed items do not prevent valid siblings from being stored |
-| `models.py` | Schema v4, explicit database binding and transactional migrations with backups |
+| `models.py` | Schema v5, explicit database binding and transactional migrations with backups |
 | `repositories.py` | Async persistence API over a single database thread; no Peewee objects escape to callers |
 | `review_repository.py` | Candidate snapshots, immutable rule versions, atomic activation, post removal requests and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
@@ -158,18 +158,18 @@ Retries preserve acknowledged message IDs. The CLI never migrates or creates a m
 
 ## Migration and compatibility
 
-Startup migrates the original five-table schema to schema v4. The original
-conversion and the migrations from schema v2 and v3 create an online SQLite
-backup named `alerts.db.pre-v4.<UTC timestamp>.bak`, with the database file's
+Startup migrates the original five-table schema to schema v5. The original
+conversion and the migrations from schema v2, v3 and v4 create an online SQLite
+backup named `alerts.db.pre-v5.<UTC timestamp>.bak`, with the database file's
 own permissions, before changing tables. Schema changes and data conversion
 are transactional, foreign keys are validated, and startup refuses unknown
 versioned schemas. The v2 migration adds review tables without changing existing
 listing, baseline or delivery data. The v3 migration adds `last_seen_at`, indexes
 candidates by alert and listing, and folds the repeated copies earlier polls
 saved into one row per decision. On the dev database this removed 38,896 of
-50,000 rows in about a second. It also drops the `candidate_feedback` table,
-which held the listing labels that the dashboard no longer uses, and logs how many
-labels it removed.
+50,000 rows in about a second. The v3 and v4 migrations also drop the
+`candidate_feedback` table, which held the listing labels that the dashboard no
+longer uses, and log how many labels they removed.
 
 Known checker class names map to stable marketplace keys. IDs, mute state, subscriptions, blacklists, and the latest available message mapping are preserved. Duplicate subscriptions/blacklists are collapsed. Orphaned child rows are counted in the migration log and remain in the backup. Listings with unknown sources are retained under their legacy source and reported for manual mapping.
 
