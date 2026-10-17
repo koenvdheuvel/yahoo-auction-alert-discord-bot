@@ -42,12 +42,11 @@ cd frontend && npm ci && npm run build
 ```
 
 Filter Lab shows what each search found as a photo grid or as rows, with the
-bot's decision and its reasons. You label wrong products, accessories and
-bundles from the keyboard, one listing or a selection at a time, edit grouped
-rules, and compare drafts against saved history before publishing. Each required group
-must match; aliases within a group can match any term. Exclusion groups veto a
-listing, while review groups hold ambiguous listings for inspection. Published
-versions can be restored as a new version.
+bot's decision and its reasons. You edit grouped rules and compare drafts
+against saved history before publishing. Each required group must match;
+aliases within a group can match any term. Exclusion groups veto a listing,
+while review groups hold ambiguous listings for inspection. Published versions
+can be restored as a new version.
 
 New rules use Unicode NFKC, case folding, and whitespace normalization by
 default, with optional kana folding. Original titles and listing identities stay

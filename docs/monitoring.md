@@ -94,7 +94,7 @@ Filter Lab request labels use fixed API operation names and outcomes. Candidate
 IDs, rule text, access keys and search queries do not become metric labels.
 Ingestion item outcomes now also include `filtered`, `review`, `blacklisted`,
 `invalid` and `filter_timeout`. Database operation timing
-covers candidate writes, feedback, publication and history retention through
+covers candidate writes, publication, post removals and history retention through
 the existing repository boundary. Standalone review mode does not expose a
 Prometheus listener; the embedded bot mode uses the normal monitoring registry.
 

@@ -39,7 +39,7 @@ flowchart LR
 | `storechecker.py` | Applies eligibility rules, archives candidates and coordinates observations; malformed items do not prevent valid siblings from being stored |
 | `models.py` | Schema v4, explicit database binding and transactional migrations with backups |
 | `repositories.py` | Async persistence API over a single database thread; no Peewee objects escape to callers |
-| `review_repository.py` | Candidate snapshots, feedback, immutable rule versions, atomic activation and retention on the same database executor |
+| `review_repository.py` | Candidate snapshots, immutable rule versions, atomic activation, post removal requests and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
 | `review.py` | Authenticated same-origin operator API that also serves the built UI; separate listener from monitoring |
 | `frontend/` | Filter Lab's React, MUI and TypeScript UI; the Docker image ships only its build in `frontend/dist` |
@@ -82,7 +82,6 @@ erDiagram
     ITEM ||--o{ NOTIFICATION : watched_by_user
     ALERT ||--o{ FILTER : selects
     ALERT |o--o{ CANDIDATE_OBSERVATION : archives
-    CANDIDATE_OBSERVATION ||--o| CANDIDATE_FEEDBACK : labeled_as
     ALERT |o--o{ REVIEW_RULE_VERSION : configures
     REVIEW_RULE_VERSION |o--o{ CANDIDATE_OBSERVATION : evaluated_with
     ALERT ||--o| ACTIVE_REVIEW_RULES : activates
@@ -119,7 +118,7 @@ commit together. Rejected candidates create only archive records. Snapshots
 retain original titles, normalized titles, decision reasons, normalization
 version, rule-version ID and alert/channel identity. A listing seen again with
 the same decision refreshes its row and last-seen time instead of adding a copy;
-a new decision adds a row and keeps the listing's label. Unregistering an alert
+a new decision adds a row. Unregistering an alert
 detaches its history instead of deleting it; reusing a SQLite ID does not attach
 old history to a different alert.
 
@@ -128,12 +127,11 @@ the active version; restoring copies the selected version into a new version.
 Checks capture the active profile at their start, so a publication takes effect
 on subsequent checks. Preview and replay have no ingestion or delivery side
 effects. Replay uses one separate worker, the latest decision of at most 500
-recently seen listings plus up to 1,000 labeled ones, and a 10-second
-processing budget; incomplete listing snapshots stay in review. It
-compares title/source/price eligibility while retaining recorded channel
-blacklist vetoes. It does not reconstruct delivery, changing blacklist state,
-subscriptions or stock-change behavior. Feedback supports relevant, wrong
-product, accessory, bundle and unsure labels. See [filter-lab.md](filter-lab.md).
+recently seen listings, and a 10-second processing budget; incomplete listing
+snapshots stay in review. It compares title/source/price eligibility while
+retaining recorded channel blacklist vetoes. It does not reconstruct delivery,
+changing blacklist state, subscriptions or stock-change behavior. See
+[filter-lab.md](filter-lab.md).
 
 ## Durable delivery and recovery
 
@@ -162,9 +160,10 @@ are transactional, foreign keys are validated, and startup refuses unknown
 versioned schemas. The v2 migration adds review tables without changing existing
 listing, baseline or delivery data. The v3 migration adds `last_seen_at`, indexes
 candidates by alert and listing, and folds the repeated copies earlier polls
-saved into one row per decision; each kept row takes the newest label of the
-rows it replaces. On the dev database this removed 38,896 of 50,000 rows in
-about a second.
+saved into one row per decision. On the dev database this removed 38,896 of
+50,000 rows in about a second. It also drops the `candidate_feedback` table,
+which held the listing labels that Filter Lab no longer uses, and logs how many
+labels it removed.
 
 Known checker class names map to stable marketplace keys. IDs, mute state, subscriptions, blacklists, and the latest available message mapping are preserved. Duplicate subscriptions/blacklists are collapsed. Orphaned child rows are counted in the migration log and remain in the backup. Listings with unknown sources are retained under their legacy source and reported for manual mapping.
 

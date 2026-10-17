@@ -1,8 +1,9 @@
 # Filter Lab
 
-Filter Lab is the bot's operator UI for labeling the listings each search finds
-and testing rules against saved marketplace facts. Open http://127.0.0.1:9101
-while the bot is running. The listener is separate from Prometheus on port 9100.
+Filter Lab is the bot's operator UI for seeing what each search finds and what
+the bot decided, and for testing rules against saved marketplace facts. Open
+http://127.0.0.1:9101 while the bot is running. The listener is separate from
+Prometheus on port 9100.
 
 ## Sign in and run
 
@@ -90,7 +91,7 @@ syntax is preserved, including uppercase character-class escapes such as
 `\D`; patterns use case-insensitive matching when the normalized profile
 calls for it. Regex execution has per-pattern and total-evaluation deadlines.
 
-## Browse and label
+## Browse listings
 
 The side panel lists each search under its Discord channel; **All listings**
 shows every search together. A search has four tabs: Listings, Rules, Replay
@@ -98,35 +99,21 @@ and Versions. The address keeps the search and the tab, so a reload or a shared
 link opens the same place.
 
 Listings shows each listing's latest decision, as a photo grid or as rows.
-Filter by title or listing ID, marketplace, decision and label; the filters
-show how many listings each choice leaves. **Earlier decisions** also lists
-decisions that a later check replaced. Selecting a decision shows why the bot
-decided so. Selecting a photo opens the listing's details: original and
-compared titles, price, when it was first and last seen, and a link to the
-marketplace.
+Filter by title or listing ID, marketplace and decision; the filters show how
+many listings each choice leaves. **Earlier decisions** also lists decisions
+that a later check replaced. Selecting a decision shows why the bot decided so.
+Selecting a photo opens the listing's details: original and compared titles,
+price, when it was first and last seen, and a link to the marketplace.
 
-Label listings as relevant, wrong product, accessory, bundle or unsure. Labels
-measure draft quality; they do not change the live rules. A label belongs to the
-listing: when a later check decides differently, the label moves to the new
-decision.
-
-The keyboard covers the whole triage loop. Press `?` in the UI for this list.
+Keys move through the listings. Press `?` in the UI for this list.
 
 | Keys | Action |
 | --- | --- |
 | `j` / `k`, or the arrow keys | Next or previous listing |
-| `1` to `5` | Label relevant, wrong product, accessory, bundle or unsure; the same key again removes the label |
-| `0` or Backspace | Remove the label |
-| `x` or Space | Select the listing; with Shift, select a range |
-| Ctrl A or ⌘ A | Select every loaded listing |
-| Esc | Deselect all |
 | Enter | Show details |
 | `o` | Open the listing on its marketplace |
 | `t` | Test the listing's title with the draft |
 | `/` | Search |
-
-While listings are selected, the label keys and the bar at the bottom label all
-of them at once.
 
 ## Drafts, replay and publishing
 
@@ -137,15 +124,13 @@ version: keep it on top of the new version, or discard it.
 
 Use **Test a title** (`t`) for a specific example. Run replay to compare the
 published rules with your draft on saved listings. Each row shows the recorded
-original decision, the published rules' result and the draft result. Summary
-counts include newly allowed/blocked listings, unwanted examples still allowed,
-and relevant examples blocked. These counts measure the saved sample, not all
-marketplace traffic.
+original decision, the published rules' result and the draft result. The
+summary counts the listings the draft newly allows or newly blocks. These
+counts cover the saved sample, not all marketplace traffic.
 
-Replay uses each listing's latest decision. It takes the `REVIEW_REPLAY_LIMIT`
-most recently seen listings (default and maximum 500), plus up to 1,000 labeled
-listings outside them, so older labels keep counting. Processing has a
-10-second budget, and the result says when it is partial. Replay does not poll
+Replay uses the latest decision of the `REVIEW_REPLAY_LIMIT` most recently seen
+listings (default and maximum 500). Processing has a 10-second budget, and the
+result says when it is partial. Replay does not poll
 marketplaces, change listing baselines, queue notifications or simulate old
 delivery timelines. Recorded channel-blacklist vetoes remain blocked in both
 comparisons; changing blacklist state, subscriptions and stock changes are
@@ -201,7 +186,7 @@ nothing comes back. A removed listing is not blocked the way 🗑️ blocks it: 
 later rules allow it again, the bot does not post it again as new, and only a
 later price or stock change would post an update. When Filter Lab runs without
 the bot (`review.py`), removals wait in the queue until the bot runs. Removed
-posts cannot be brought back; the listings and labels in Filter Lab stay.
+posts cannot be brought back; the listings in Filter Lab stay.
 
 ## History and storage
 
@@ -216,7 +201,8 @@ matches the listing's latest row, that row gets the latest facts and its
 last-seen time instead of a new copy. A different decision adds a row, and the
 previous one stays as an earlier decision. Schema version 4 introduced this.
 Its migration backs up the database, then folds the repeated rows of older
-archives the same way, keeping every labeled row.
+archives the same way. It also deletes the listing labels that earlier versions
+of Filter Lab saved, because Filter Lab no longer uses them.
 
 The **Import saved history** action explicitly imports up to 1,000 recent
 available delivery/listing snapshots. Stable import keys prevent duplicate
@@ -227,11 +213,10 @@ recovered. Import does not send notifications.
 
 Defaults retain 90 days of candidates with a target maximum of 50,000 rows.
 Age counts from when a listing was last seen, so listings still in the search
-results are kept, and the least recently seen rows go first. Labeled rows are
-never removed by retention. The bot's statistics worker prunes at most 1,000
-rows per pass, once per minute when caught up, or on successive statistics
-ticks while a backlog remains. The limit is a retention target; catch-up is
-bounded and can lag sustained heavy capture. Standalone UI mode does not run
+results are kept, and the least recently seen rows go first. The bot's
+statistics worker prunes at most 1,000 rows per pass, once per minute when
+caught up, or on successive statistics ticks while a backlog remains. The limit
+is a retention target; catch-up is bounded and can lag sustained heavy capture. Standalone UI mode does not run
 this background pruning. Rule-version history is retained independently.
 Existing delivery and reaction history retains its previous behavior.
 
@@ -253,11 +238,9 @@ check and to mark the session cookie Secure.
 The UI uses the same JSON API that scripts can call with the session cookie.
 `GET /api/candidates` returns newest-first pages of up to 100 rows. Pass the
 `next_cursor` of one page as `cursor` to get the next; this neither skips nor
-repeats rows when labels or new checks change the list between pages.
-`latest=1` keeps each listing's latest decision, and `facets=1` adds the counts
-for the filters. `POST /api/candidates/feedback` labels up to 200 listings at
-once and reports the ones retention removed meanwhile. `POST /api/rules/validate`
-checks a ruleset without saving it. `POST /api/alerts/{id}/posts/removal-preview`
+repeats rows when new checks change the list between pages. `latest=1` keeps
+each listing's latest decision, and `facets=1` adds the counts for the filters.
+`POST /api/rules/validate` checks a ruleset without saving it. `POST /api/alerts/{id}/posts/removal-preview`
 shows which posts a ruleset, or else the published one, filters.
 `POST /api/alerts/{id}/posts/removal` queues up to 1,000 chosen posts for removal
 under the published version, and `GET` on the same path reports the latest run.
