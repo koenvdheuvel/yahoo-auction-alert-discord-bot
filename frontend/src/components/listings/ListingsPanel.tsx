@@ -13,7 +13,7 @@ import { errorMessage } from "../../lib/errors";
 import { formatCount, plural, safeUrl } from "../../lib/format";
 import { isTyping, useDebounced } from "../../lib/hooks";
 import { listingTitle } from "../../lib/listing";
-import { LABEL_ORDER, LABELS } from "../../lib/vocabulary";
+import { LABEL_ORDER, LABELS, SOURCES } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { TitleSeed } from "../TitleTestDialog";
 import type { ListingFilters } from "../views/SearchView";
@@ -29,7 +29,7 @@ const VIEW_KEY = "dashboard:view";
 const GRID_COLUMNS = "repeat(auto-fill, minmax(min(196px, calc(50% - 6px)), 1fr))";
 
 function seedFrom(candidate: Candidate): TitleSeed {
-  const source = ["yahooauction", "mercari", "surugaya"].includes(candidate.source) ? candidate.source as Source : undefined;
+  const source = candidate.source in SOURCES ? candidate.source as Source : undefined;
   return { title: candidate.title, source, price: candidate.payload.price ?? null };
 }
 

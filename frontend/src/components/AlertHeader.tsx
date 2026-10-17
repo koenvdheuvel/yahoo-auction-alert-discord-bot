@@ -4,10 +4,11 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 
+import { useSession } from "../api/hooks";
 import type { AlertSummary, ArchiveTotals } from "../api/types";
 import { formatCount, formatDateTime, formatRelative } from "../lib/format";
 import type { Draft } from "../lib/useDraft";
-import { channelName } from "../lib/vocabulary";
+import { channelName, sourceName } from "../lib/vocabulary";
 import { figures } from "../theme";
 
 function Fact({ value, children, tone }: { value: ReactNode; children: ReactNode; tone?: string }) {
@@ -30,6 +31,8 @@ interface Props {
 }
 
 export function AlertHeader({ alert, totals, guildName, draft, actions }: Props) {
+  const enabled = useSession().data?.enabled_sources;
+  const searched = alert ? alert.sources.filter((source) => !enabled || enabled.includes(source)).map(sourceName) : [];
   return (
     <Box component="header" sx={{ px: { xs: 2, md: 3 }, pt: 3, pb: 2 }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ justifyContent: "space-between", alignItems: { sm: "flex-start" } }}>
@@ -55,6 +58,7 @@ export function AlertHeader({ alert, totals, guildName, draft, actions }: Props)
         {alert ? (
           <>
             <Fact value={channelName(alert)}>channel</Fact>
+            <Fact value={searched.length ? searched.join(", ") : "Nothing"} tone={searched.length ? undefined : "warning.main"}>searched</Fact>
             <Fact value={formatCount(alert.listing_count)}>{alert.listing_count === 1 ? "listing" : "listings"}</Fact>
             <Fact value={formatCount(alert.review_count)} tone={alert.review_count ? "warning.main" : undefined}>need review</Fact>
             <Fact value={formatCount(alert.labeled_count)}>labeled</Fact>

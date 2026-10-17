@@ -1,4 +1,5 @@
 import type { Policy, RuleGroup, Ruleset, Source, Term, TermMethod } from "../api/types";
+import { SOURCES } from "./vocabulary";
 
 // The same limits filtering.py enforces; the server stays the authority.
 export const LIMITS = { groups: 20, termsPerGroup: 20, terms: 100, regexTerms: 20, label: 100 } as const;
@@ -92,7 +93,7 @@ export function fieldLocation(field: string | undefined): { group?: number; term
   return { section: "groups", group, term };
 }
 
-const SOURCE_NAMES: Source[] = ["mercari", "surugaya", "yahooauction"];
+const SOURCE_NAMES = (Object.keys(SOURCES) as Source[]).sort();
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

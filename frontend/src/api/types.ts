@@ -1,6 +1,6 @@
 // Shapes returned by dashboard.py. IDs are strings because Discord snowflakes exceed 2^53.
 
-export type Source = "yahooauction" | "mercari" | "surugaya";
+export type Source = "yahooauction" | "mercari" | "surugaya" | "rakuma";
 export type Verdict = "accepted" | "filtered" | "review";
 export type Label = "relevant" | "wrong_product" | "accessory" | "bundle" | "unsure";
 export type LabelFilter = Label | "unlabeled";
@@ -52,6 +52,8 @@ export interface Session {
   /** The servers this person may see; null with the access key, which sees every server. */
   guilds?: Guild[] | null;
   features?: { notifications: boolean; discord_data: boolean };
+  /** The marketplaces the bot searches at all (the operator's ENABLE_* settings). A search's own choice only has effect for these. */
+  enabled_sources?: Source[];
 }
 
 /** A server in the server list. Its name is null when only its ID is known. The counts are only there
@@ -280,6 +282,15 @@ export interface AlertSummary {
   labeled_count: number;
   last_seen_at: string | null;
   active_version_id: string | null;
+  /** The marketplaces this search checks, in display order. */
+  sources: Source[];
+}
+
+/** What turning marketplaces on or off for a search changed. */
+export interface SourcesChange {
+  sources: Source[];
+  turned_on: Source[];
+  turned_off: Source[];
 }
 
 export interface ArchiveTotals {

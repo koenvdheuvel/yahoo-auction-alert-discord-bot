@@ -2,6 +2,7 @@ import CollectionsOutlined from "@mui/icons-material/CollectionsOutlined";
 import DeleteOutlined from "@mui/icons-material/DeleteOutlined";
 import MonitorHeartOutlined from "@mui/icons-material/MonitorHeartOutlined";
 import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
+import StorefrontOutlined from "@mui/icons-material/StorefrontOutlined";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
 import Alert from "@mui/material/Alert";
@@ -25,6 +26,7 @@ import { ShortcutsDialog } from "../ShortcutsDialog";
 import { LoadError } from "../common/Feedback";
 import { TitleTestDialog, type TitleSeed, type TitleTest } from "../TitleTestDialog";
 import { AddSearchDialog } from "../searches/AddSearchDialog";
+import { MarketplacesDialog } from "../searches/MarketplacesDialog";
 import { UnregisterDialog } from "../searches/UnregisterDialog";
 import { ChannelView } from "../views/ChannelView";
 import { NotificationsView } from "../views/NotificationsView";
@@ -55,6 +57,7 @@ export function Shell() {
   const [titleTest, setTitleTest] = useState<TitleTest | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [adding, setAdding] = useState<{ channelId: string | null } | null>(null);
+  const [marketplaces, setMarketplaces] = useState<AlertSummary | null>(null);
   const [unregistering, setUnregistering] = useState<AlertSummary | null>(null);
   const [replays, setReplays] = useState<Record<string, StoredReplay>>({});
   // "Replay draft" in the Rules tab opens Replay and starts it in one step.
@@ -152,7 +155,9 @@ export function Shell() {
         canChange={accessKey || canChangeSearch(channels.data, alert)}
         actions={
           <Tooltip title={accessKey || canChangeSearch(channels.data, alert) ? "" : "You need Manage Channels in its channel"}>
-            <span>
+            <span style={{ display: "inline-flex", gap: 8 }}>
+              <Button size="small" variant="outlined" startIcon={<StorefrontOutlined />}
+                disabled={!accessKey && !canChangeSearch(channels.data, alert)} onClick={() => setMarketplaces(alert)}>Marketplaces</Button>
               <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlined />}
                 disabled={!accessKey && !canChangeSearch(channels.data, alert)} onClick={() => setUnregistering(alert)}>Unregister</Button>
             </span>
@@ -225,6 +230,7 @@ export function Shell() {
       </Box>
       <AddSearchDialog open={adding !== null} channels={channels.data} channelId={adding?.channelId ?? null}
         onClose={() => setAdding(null)} onCreated={(created) => { setAdding(null); go({ alertId: created.id }); }} />
+      <MarketplacesDialog alert={marketplaces} onClose={() => setMarketplaces(null)} />
       <UnregisterDialog alert={unregistering} onClose={() => setUnregistering(null)}
         onDone={() => {
           const gone = unregistering;
