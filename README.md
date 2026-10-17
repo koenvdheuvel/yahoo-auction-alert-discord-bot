@@ -1,6 +1,6 @@
-# Yahoo Auction, Mercari, Surugaya Discord Bot
+# Yahoo Auction, Mercari, Surugaya, Rakuma Discord Bot
 
-A Discord bot that searches Yahoo Auction, Mercari, and Surugaya through FromJapan, posts new listings and qualifying changes, and sends subscribed users update DMs.
+A Discord bot that searches Yahoo Auction, Mercari, Surugaya, and Rakuma through FromJapan, posts new listings and qualifying changes, and sends subscribed users update DMs.
 
 The implementation separates marketplace adapters, notification policy, SQLite persistence, durable Discord delivery, and runtime supervision. See the [architecture reference](docs/architecture.md) and [monitoring guide](docs/monitoring.md).
 
@@ -17,9 +17,11 @@ cp .env.example .env
 python main.py
 ```
 
-Configuration is validated before startup. `.env.example` lists the polling, concurrency, timeout, retry, and monitoring settings. `DATABASE_URL` is a SQLite filename, not a connection URL. The default interval is 1,800 seconds and up to four checks run concurrently.
+Configuration is validated before startup. `.env.example` lists the polling, concurrency, timeout, retry, and monitoring settings. `DATABASE_URL` is a SQLite filename, not a connection URL. The default interval is 1,800 seconds and up to four checks run concurrently. `ENABLE_YAHOO_AUCTION`, `ENABLE_MERCARI`, `ENABLE_SURUGAYA` and `ENABLE_RAKUMA` (default `true`) turn a marketplace off for the whole bot.
 
-Slash commands register and remove channel-scoped queries, manage title filters, list alerts, and clean up bot messages. Mutating commands require Manage Channels. Trash reactions blacklist a listing in that channel; bell reactions subscribe the user to listing changes, and removing the bell unsubscribes. Historical tracked messages remain valid reaction targets.
+Slash commands register and remove channel-scoped queries, choose the marketplaces each query checks, manage title filters, list alerts, and clean up bot messages. Mutating commands require Manage Channels. Trash reactions blacklist a listing in that channel; bell reactions subscribe the user to listing changes, and removing the bell unsubscribes. Historical tracked messages remain valid reaction targets.
+
+A new search checks every marketplace the bot searches, and its first check posts everything it finds. `/marketplaces list` shows what each search in the channel checks; `/marketplaces on` and `/marketplaces off` change one marketplace for one search, as the dashboard's **Marketplaces** button does. A marketplace turned on for an existing search starts quietly: its first complete check saves the listings there without posting them, and after that only new listings are posted. Rakuma starts this way on every search that existed before it was added. FromJapan's Rakuma results for the same query alternate between slightly different sets of listings, so a listing the quiet check missed can still be posted as new later: expect a few older Rakuma listings in the first checks, and occasionally afterwards.
 
 Discord integration uses Hikari 2.6.0 and Lightbulb 3.2.6. Hikari owns the gateway;
 Lightbulb owns slash commands, typed options, dependency injection, and execution
@@ -48,9 +50,10 @@ cd frontend && npm ci && npm run build
 
 The dashboard looks like Discord: a server list, each server's channels in
 Discord's order with their searches under them, and pages for what the slash
-commands and reactions do. Managers add and remove searches, see a channel's
-posts, hide listings as 🗑️ does, clean up channels, and see each search's last
-checks and waiting posts. Everyone sees and stops their own 🔔 follows.
+commands and reactions do. Managers add and remove searches, choose the
+marketplaces each one checks, see a channel's posts, hide listings as 🗑️ does,
+clean up channels, and see each search's last checks and waiting posts. Everyone
+sees and stops their own 🔔 follows.
 
 It also shows what each search found as a photo grid or as rows, with the
 bot's decision and its reasons. You label wrong products, accessories and

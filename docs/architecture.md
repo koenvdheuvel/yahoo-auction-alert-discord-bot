@@ -32,12 +32,13 @@ flowchart LR
 | `main.py` | Loads dotenv before database initialization, explicitly registers commands, owns Discord lifecycle listeners |
 | `runtime.py` | Retains and supervises polling, delivery, event-loop monitoring, and database-stat tasks |
 | `providers.py` | HTTP session lifetime, safe query parameters, transient retries, pagination and marketplace normalization |
+| `marketplaces.py` | The marketplace registry: source key, display name, embed colour and `ENABLE_*` setting; every source list derives from it |
 | `yahoo.py`, `mercari.py`, `surugaya.py` | Compatibility exports for provider classes; no Discord or database dependencies |
 | `domain.py` | Immutable listing facts, change rules, and compatibility matching for existing Discord filters |
 | `normalization.py` | Versioned Unicode title normalization; original titles remain intact |
 | `filtering.py` | Validated grouped rules, legacy compatibility, bounded regex evaluation and explainable decisions |
 | `storechecker.py` | Applies eligibility rules, archives candidates and coordinates observations; malformed items do not prevent valid siblings from being stored |
-| `models.py` | Schema v4, explicit database binding and transactional migrations with backups |
+| `models.py` | Schema v5, explicit database binding and transactional migrations with backups |
 | `repositories.py` | Async persistence API over a single database thread; no Peewee objects escape to callers |
 | `review_repository.py` | Candidate snapshots, feedback, immutable rule versions, atomic activation and retention on the same database executor |
 | `review_service.py` | Stateless previews and bounded historical replay on a separate CPU worker |
@@ -68,13 +69,15 @@ sync failure follows the same supervised startup failure path. Shutdown stops th
 command client and its pagination resources before closing the repository. The
 gateway subscribes only to guild and guild-reaction intents.
 
-Polling creates only `CHECK_CONCURRENCY` check-worker tasks and lazily assigns alert/source jobs. Each check has a deadline. All workers settle before the next cycle; errors are isolated and counted rather than allowing sibling tasks to survive into a later batch. Cycle duration still includes work, followed by `CHECK_INTERVAL` sleep.
+Polling creates only `CHECK_CONCURRENCY` check-worker tasks and lazily assigns alert/source jobs: one for each marketplace an alert checks that the bot searches. Each check has a deadline. All workers settle before the next cycle; errors are isolated and counted rather than allowing sibling tasks to survive into a later batch. Cycle duration still includes work, followed by `CHECK_INTERVAL` sleep.
 
 HTTP and Discord delivery have separate scheduling. Database work and its queue wait are measured outside the event-loop thread. Provider instances and their connection pool live for the runtime lifetime. Pagination yields a page at a time and explicitly reports searches exceeding `MAX_SEARCH_PAGES`, malformed responses, or incomplete pagination.
 
-Every search page refreshes the result `count` and page total, because listings end or appear during long scans. Yahoo and Surugaya report an exact `count`, so a scan fails as incomplete if it delivers fewer items than the latest one. FromJapan's Mercari `count` is only an estimate and its pages are short, so Mercari scans end at the first empty page. `MAX_SEARCH_PAGES` caps both.
+Every search page refreshes the result `count` and page total, because listings end or appear during long scans. Yahoo, Surugaya and Rakuma report an exact `count`, so a scan fails as incomplete if it delivers fewer items than the latest one. FromJapan's Mercari `count` is only an estimate and its pages are short, so Mercari scans end at the first empty page. `MAX_SEARCH_PAGES` caps both.
 
 Surugaya listings take their title and canonical product URL (`/product/detail/` or `/product/other/`) from the FromJapan search response, like the other marketplaces. suruga-ya.jp answers automated product-page requests with a Cloudflare challenge, so the bot never fetches product HTML.
+
+Rakuma listings use their 32-hex-character ID in the canonical URL `https://item.fril.jp/<id>`. FromJapan's Rakuma search alternates between slightly different result sets for the same query: eight back-to-back searches for one query returned 36 or 37 listings out of 41 distinct ones, another returned 79 to 81 of 81, and a third returned the same 89 every time. Prices, stock and sale state did not differ between the sets; only which listings were included. A listing that a search's quiet first Rakuma check did not see counts as new when it shows up, so a few older Rakuma listings can be posted after Rakuma is turned on for a search.
 
 ## Data model and notification semantics
 
@@ -87,6 +90,7 @@ erDiagram
     ITEM ||--o{ BLACKLIST : blocked_in_channel
     ITEM ||--o{ NOTIFICATION : watched_by_user
     ALERT ||--o{ FILTER : selects
+    ALERT ||--o{ ALERT_SOURCE : checks
     ALERT |o--o{ CANDIDATE_OBSERVATION : archives
     CANDIDATE_OBSERVATION ||--o| CANDIDATE_FEEDBACK : labeled_as
     ALERT |o--o{ REVIEW_RULE_VERSION : configures
@@ -97,6 +101,7 @@ erDiagram
 ```
 
 - Alerts are unique by `(channel_id, search_query)`. The same query can be used in multiple channels. Guild ownership is stored for new alerts and reconciled for legacy rows using known cached channel ownership.
+- `AlertSource` (`alert_source`) holds each alert's choice per marketplace: `enabled`, and `seeded` once a complete check has saved what the marketplace already lists. An alert without a row for a marketplace checks it, unseeded. Registering an alert adds seeded rows for the marketplaces the bot searches at that moment, so its first check posts everything, as before. Turning a marketplace on for an existing alert clears `seeded`: its next check saves listings and baselines without queuing channel posts, and a complete scan marks it seeded, after which checks post as usual. 🔔 subscribers still get listing-wide changes during that check. Turning a marketplace off stops its checks; saved listings, posts, hidden listings and follows stay. Marketplaces off for the whole bot (`ENABLE_*=false`) are not checked, whatever an alert chooses.
 - Listings are unique by `(checker/source, external item_id)`, preventing cross-marketplace collisions.
 - `AlertItem` records each matching alert's stock/price baseline. One query cannot consume another query's change notification.
 - `Message` retains every acknowledged channel message, including old updates, for reaction lookup. Deleting a message marks that record rather than deleting the listing.
@@ -160,9 +165,9 @@ Retries preserve acknowledged message IDs. The CLI never migrates or creates a m
 
 ## Migration and compatibility
 
-Startup migrates the original five-table schema to schema v4. The original
-conversion and the migrations from schema v2 and v3 create an online SQLite
-backup named `alerts.db.pre-v4.<UTC timestamp>.bak`, with the database file's
+Startup migrates the original five-table schema to schema v5. The original
+conversion and the migrations from schema v2, v3 and v4 create an online SQLite
+backup named `alerts.db.pre-v5.<UTC timestamp>.bak`, with the database file's
 own permissions, before changing tables. Schema changes and data conversion
 are transactional, foreign keys are validated, and startup refuses unknown
 versioned schemas. The v2 migration adds review tables without changing existing
@@ -171,6 +176,10 @@ candidates by alert and listing, and folds the repeated copies earlier polls
 saved into one row per decision; each kept row takes the newest label of the
 rows it replaces. On the dev database this removed 38,896 of 50,000 rows in
 about a second.
+The v5 step, which every older database goes through, adds `alert_source` and
+gives every existing alert Yahoo Auctions, Mercari and Surugaya as on and
+seeded, so they keep posting only new listings. Rakuma gets no row, so its first
+complete check for each existing alert saves its listings without posting them.
 
 Known checker class names map to stable marketplace keys. IDs, mute state, subscriptions, blacklists, and the latest available message mapping are preserved. Duplicate subscriptions/blacklists are collapsed. Orphaned child rows are counted in the migration log and remain in the backup. Listings with unknown sources are retained under their legacy source and reported for manual mapping.
 

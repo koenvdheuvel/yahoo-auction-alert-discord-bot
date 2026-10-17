@@ -88,6 +88,8 @@ Histogram names also expose `_bucket`, `_count` and `_sum`. Standard Python GC/p
 
 `last_poll_completed_timestamp_seconds` advances after a settled cycle even when some checks fail, or when a recoverable cycle read fails. `last_poll_success_timestamp_seconds` advances only when the cycle has no failed checks. Per-source success advances only when that source has at least one check and all its checks succeed in that cycle. No alerts is a successful empty cycle; it does not mark source checks as successful. Cancelled cycles do not count as completed cycles. Health freshness uses a monotonic clock; exported event timestamps use wall time.
 
+A source that no search checks, such as one that every search turned off, exports no `source_last_success_timestamp_seconds` series, so `AuctionBotSourceStale` cannot fire for it. When a search checks it again, its age counts from the start of that cycle.
+
 Provider counters count request attempts, including retries. Delivery counters count attempts rather than unique listings or messages. A successful ingestion check means listings were observed and delivery jobs were durably queued; delivery success is tracked independently. Queue gauges are periodic database snapshots. A zero queue gauge with a stale statistics timestamp is not evidence that delivery is healthy. Post removals that the dashboard queues count in `delivery_attempts_total{kind="delete"}` but not in the three outbox gauges: a long cleanup is expected to take a while and should not set off the backlog or failure alerts. The dashboard shows their progress, and `manage.py outbox-list` lists them with the other jobs.
 
 The dashboard request labels use fixed API operation names and outcomes. Candidate
@@ -101,7 +103,8 @@ metric labels. `dashboard_logins_total` counts sign-ins by method (`discord` or
 `error` (Discord did not answer). A rise in `error` means people are being
 refused while Discord is unreachable.
 Ingestion item outcomes now also include `filtered`, `review`, `blacklisted`,
-`invalid` and `filter_timeout`. Database operation timing
+`invalid`, `filter_timeout` and `seeded`: a listing saved without a post by a
+marketplace's first check for a search. Database operation timing
 covers candidate writes, feedback, publication and history retention through
 the existing repository boundary. The standalone dashboard does not expose a
 Prometheus listener; the embedded bot mode uses the normal monitoring registry.

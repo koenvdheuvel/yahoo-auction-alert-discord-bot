@@ -15,7 +15,7 @@
     "from": "now-24h",
     "to": "now"
   },
-  "description": "Yahoo/Mercari/Surugaya auction alert Discord bot (job auction-bot). Metrics: docs/monitoring.md.",
+  "description": "Yahoo/Mercari/Surugaya/Rakuma auction alert Discord bot (job auction-bot). Metrics: docs/monitoring.md.",
   "templating": {
     "list": [
       {
@@ -925,7 +925,7 @@
     {
       "type": "timeseries",
       "title": "Since last successful check, per source",
-      "description": "A source only counts as successful when all its checks in a cycle succeed.",
+      "description": "A source only counts as successful when all its checks in a cycle succeed. A source that no search checks has no line.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
