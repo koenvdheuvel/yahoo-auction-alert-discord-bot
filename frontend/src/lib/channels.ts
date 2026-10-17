@@ -1,5 +1,6 @@
 import type { AlertSummary, ChannelKind, ChannelList, ChannelRow, GuildSummary } from "../api/types";
 import { plural } from "./format";
+import type { ChannelTab } from "./hooks";
 
 export const KIND_NAMES: Record<ChannelKind, string> = {
   text: "Text channel",
@@ -70,4 +71,9 @@ export function canChangeSearch(channels: ChannelList | undefined, alert: AlertS
   const channel = findChannel(channels, alert.channel_id);
   if (channel) return channel.can_manage;
   return Boolean(channels?.unknown.some((item) => item.id === alert.channel_id && item.deleted));
+}
+
+/** A channel that is gone, or that Discord does not show the bot, has no posts to look at. */
+export function channelTabs(known: boolean): ChannelTab[] {
+  return known ? ["searches", "posts", "hidden", "cleanup"] : ["searches", "hidden"];
 }

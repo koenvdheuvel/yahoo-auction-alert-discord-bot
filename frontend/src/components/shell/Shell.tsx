@@ -1,26 +1,37 @@
+import CleaningServicesOutlined from "@mui/icons-material/CleaningServicesOutlined";
 import CollectionsOutlined from "@mui/icons-material/CollectionsOutlined";
 import DeleteOutlined from "@mui/icons-material/DeleteOutlined";
+import ForumOutlined from "@mui/icons-material/ForumOutlined";
+import GridViewOutlined from "@mui/icons-material/GridViewOutlined";
+import HistoryOutlined from "@mui/icons-material/HistoryOutlined";
 import MonitorHeartOutlined from "@mui/icons-material/MonitorHeartOutlined";
 import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
+import ReplayOutlined from "@mui/icons-material/ReplayOutlined";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
+import TuneOutlined from "@mui/icons-material/TuneOutlined";
+import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Drawer from "@mui/material/Drawer";
+import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
 import Skeleton from "@mui/material/Skeleton";
 import { useTheme } from "@mui/material/styles";
+import SwipeableDrawer from "@mui/material/SwipeableDrawer";
 import Tooltip from "@mui/material/Tooltip";
 import useMediaQuery from "@mui/material/useMediaQuery";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useAlerts, useChannels, useGuilds, useRules, useSession } from "../../api/hooks";
 import type { AlertSummary, ArchiveTotals } from "../../api/types";
-import { canChangeSearch, channelLabel, findChannel } from "../../lib/channels";
-import { isTyping, usePlace } from "../../lib/hooks";
+import { canChangeSearch, channelLabel, channelTabs, findChannel } from "../../lib/channels";
+import { ownsSidewaysTouch, useSwipe } from "../../lib/gestures";
+import { isTyping, usePlace, type ChannelTab, type Tab } from "../../lib/hooks";
 import { useDraft } from "../../lib/useDraft";
+import { CHANNEL_TABS, SEARCH_TABS } from "../../lib/vocabulary";
 import { RAIL_WIDTH, SIDEBAR_WIDTH } from "../../theme";
+import { AlertInfoSheet } from "../AlertHeader";
 import { ShortcutsDialog } from "../ShortcutsDialog";
 import { LoadError } from "../common/Feedback";
 import { TitleTestDialog, type TitleSeed, type TitleTest } from "../TitleTestDialog";
@@ -33,11 +44,21 @@ import { EverySearchView, SearchesView } from "../views/SearchesView";
 import { StatusView } from "../views/StatusView";
 import { ChannelIcon } from "./ChannelIcon";
 import { ChannelSidebar } from "./ChannelSidebar";
+import { SectionBar, type Section } from "./SectionBar";
 import { ServerRail } from "./ServerRail";
 import { TopBar } from "./TopBar";
 import { UserPanel } from "./UserPanel";
 
 const NO_TOTALS: ArchiveTotals = { archived_count: 0, unassigned_count: 0 };
+// iOS goes back on a swipe from the left edge, so there the lists only open from a swipe further in.
+const iOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+const SEARCH_ICONS: Record<Tab, ReactNode> = {
+  listings: <GridViewOutlined />, rules: <TuneOutlined />, replay: <ReplayOutlined />, versions: <HistoryOutlined />,
+};
+const CHANNEL_ICONS: Record<ChannelTab, ReactNode> = {
+  searches: <SearchOutlined />, posts: <ForumOutlined />, hidden: <VisibilityOffOutlined />, cleanup: <CleaningServicesOutlined />,
+};
 
 /** The dashboard after sign-in: servers on the left, the picked server's channels, and the page. */
 export function Shell() {
@@ -52,6 +73,8 @@ export function Shell() {
   const rules = useRules(place.alertId);
   const draft = useDraft(place.alertId, rules.data);
   const [navOpen, setNavOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const main = useRef<HTMLElement>(null);
   const [titleTest, setTitleTest] = useState<TitleTest | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [adding, setAdding] = useState<{ channelId: string | null } | null>(null);
@@ -85,10 +108,17 @@ export function Shell() {
 
   const openTitleTest = (seed: TitleSeed = {}) =>
     setTitleTest((current) => ({ id: (current?.id ?? 0) + 1, seed, open: true }));
+  // On a phone each page opens at its top, as it does in an app.
+  const toTop = () => {
+    if (!wide) main.current?.scrollTo({ top: 0 });
+  };
   const go = (next: Parameters<typeof navigate>[0]) => {
     navigate({ guildId, ...next });
     setNavOpen(false);
+    toTop();
   };
+  // Like Discord's app: a swipe to the right anywhere on the page opens the server and channel lists.
+  const swipe = useSwipe({ directions: ["right"], ignore: ownsSidewaysTouch, onSwipe: () => setNavOpen(true) });
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -132,6 +162,17 @@ export function Shell() {
     document.title = `${heading.title} | ${session?.title ?? "Dashboard"}`;
   }, [heading.title, session?.title]);
 
+  const changeable = alert !== null && (accessKey || canChangeSearch(channels.data, alert));
+  const unregister = alert && (
+    <Tooltip title={changeable ? "" : "You need Manage Channels in its channel"}>
+      <span>
+        <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlined />} disabled={!changeable}
+          onClick={() => { setInfoOpen(false); setUnregistering(alert); }}>Unregister</Button>
+      </span>
+    </Tooltip>
+  );
+  const listingTotals = guildId && alerts.data ? alerts.data.totals.guilds[guildId] ?? NO_TOTALS : undefined;
+
   const page = (() => {
     const openChannel = (next: string, channelId: string) => go({ guildId: next, channelId, alertId: null, me: false });
     if (view === "member") {
@@ -149,15 +190,7 @@ export function Shell() {
       return <SearchView place={place} navigate={navigate} alert={alert} rules={rules} draft={draft} filters={filters}
         onFilters={setFilters} replays={replays} onReplay={(stored) => setReplays((current) => ({ ...current, [stored.alertId]: stored }))}
         replayRequested={replayRequested} setReplayRequested={setReplayRequested} onTestTitle={openTitleTest}
-        canChange={accessKey || canChangeSearch(channels.data, alert)}
-        actions={
-          <Tooltip title={accessKey || canChangeSearch(channels.data, alert) ? "" : "You need Manage Channels in its channel"}>
-            <span>
-              <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlined />}
-                disabled={!accessKey && !canChangeSearch(channels.data, alert)} onClick={() => setUnregistering(alert)}>Unregister</Button>
-            </span>
-          </Tooltip>
-        } />;
+        canChange={changeable} actions={unregister} />;
     }
     if (view === "search") return null;
     if (guilds.isPending) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={120} /></Box>;
@@ -176,13 +209,33 @@ export function Shell() {
         onUnregister={setUnregistering} />;
     }
     if (view === "listings") {
-      const totals = alerts.data ? alerts.data.totals.guilds[guildId] ?? NO_TOTALS : undefined;
-      return <ServerListingsView guildId={guildId} guildName={guildName} totals={totals} draft={draft} filters={filters}
+      return <ServerListingsView guildId={guildId} guildName={guildName} totals={listingTotals} draft={draft} filters={filters}
         onFilters={setFilters} onTestTitle={openTitleTest} />;
     }
     return <StatusView guildId={guildId} onOpenSearch={(alertId) => go({ alertId })}
       onOpenChannel={(channelId) => go({ channelId, alertId: null })} />;
   })();
+
+  const unknownChannel = channels.data?.unknown.find((item) => item.id === place.channelId) ?? null;
+  const sections = (() => {
+    if (wide) return null;
+    if (view === "search" && alert) {
+      const tabs = (Object.keys(SEARCH_TABS) as Tab[]).map((tab): Section<Tab> => ({ value: tab, label: SEARCH_TABS[tab],
+        icon: SEARCH_ICONS[tab], note: tab === "rules" && draft.edited ? "unpublished changes" : undefined }));
+      return <SectionBar label="Search sections" sections={tabs} value={place.tab}
+        onChange={(tab) => { navigate({ tab }); toTop(); }} />;
+    }
+    if (view === "channel" && (channel || unknownChannel)) {
+      const available = channelTabs(channel !== null);
+      const tabs = available.map((tab): Section<ChannelTab> => ({ value: tab, label: CHANNEL_TABS[tab], icon: CHANNEL_ICONS[tab] }));
+      return <SectionBar label="Channel sections" sections={tabs}
+        value={available.includes(place.channelTab) ? place.channelTab : "searches"}
+        onChange={(channelTab) => { navigate({ channelTab }); toTop(); }} />;
+    }
+    return null;
+  })();
+  // On phones a search's or a server's counts open from the title, instead of a header over the page.
+  const info = !wide && ((view === "search" && alert) || view === "listings");
 
   const lists = (
     <Box sx={{ display: "flex", height: "100%", minHeight: 0 }}>
@@ -201,28 +254,43 @@ export function Shell() {
       <Link href="#main" sx={{ position: "absolute", left: 8, top: -48, zIndex: 2000, bgcolor: "background.paper", p: 1,
         "&:focus": { top: 8 } }}>Skip to content</Link>
       {wide ? lists : (
-        <Drawer open={navOpen} onClose={() => setNavOpen(false)}
-          slotProps={{ paper: { sx: { width: RAIL_WIDTH + SIDEBAR_WIDTH, bgcolor: "surface.sidebar", backgroundImage: "none" } } }}>
+        <SwipeableDrawer open={navOpen} onOpen={() => setNavOpen(true)} onClose={() => setNavOpen(false)}
+          disableSwipeToOpen={iOS} disableDiscovery={iOS} swipeAreaWidth={16}
+          slotProps={{ paper: { sx: { width: RAIL_WIDTH + SIDEBAR_WIDTH, maxWidth: "88vw", bgcolor: "surface.sidebar",
+            backgroundImage: "none", pt: "env(safe-area-inset-top, 0px)", pb: "env(safe-area-inset-bottom, 0px)",
+            pl: "env(safe-area-inset-left, 0px)" } } }}>
           {lists}
-        </Drawer>
+        </SwipeableDrawer>
       )}
-      <Box component="main" id="main" tabIndex={-1} sx={{ flex: 1, minWidth: 0, overflowY: "auto", outline: "none" }}>
-        <TopBar icon={heading.icon} title={heading.title} detail={heading.detail} showMenu={!wide} onMenu={() => setNavOpen(true)}
-          onHelp={() => setHelpOpen(true)}
-          actions={(view === "search" || view === "listings") && (
-            <Button size="small" startIcon={<ScienceOutlined />} onClick={() => openTitleTest()} color="inherit" aria-keyshortcuts="t"
-              sx={{ display: { xs: "none", sm: "inline-flex" } }}>
-              Test a title
-            </Button>
-          )} />
-        {missing && (
-          <Alert severity="warning" sx={{ m: 3, mb: 0 }}
-            action={<Link component="button" onClick={() => go({ alertId: null, view: "searches" })}>Show the searches</Link>}>
-            This search is no longer registered, or it is in a server you no longer manage.
-          </Alert>
-        )}
-        {page}
+      {/* The page scrolls between the bar at the top and the sections at the bottom. In landscape it keeps clear of the notch. */}
+      <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
+        pl: "env(safe-area-inset-left, 0px)", pr: "env(safe-area-inset-right, 0px)" }}>
+        <Box component="main" id="main" ref={main} tabIndex={-1} {...(wide ? {} : swipe)}
+          sx={{ flex: 1, minHeight: 0, overflowY: "auto", outline: "none" }}>
+          <TopBar icon={heading.icon} title={heading.title} detail={heading.detail} showMenu={!wide} onMenu={() => setNavOpen(true)}
+            onHelp={() => setHelpOpen(true)} onTitle={info ? () => setInfoOpen(true) : undefined}
+            actions={(view === "search" || view === "listings") && (wide ? (
+              <Button size="small" startIcon={<ScienceOutlined />} onClick={() => openTitleTest()} color="inherit" aria-keyshortcuts="t">
+                Test a title
+              </Button>
+            ) : (
+              <IconButton aria-label="Test a title" aria-keyshortcuts="t" onClick={() => openTitleTest()}><ScienceOutlined /></IconButton>
+            ))} />
+          {missing && (
+            <Alert severity="warning" sx={{ m: { xs: 2, md: 3 }, mb: 0 }}
+              action={<Link component="button" onClick={() => go({ alertId: null, view: "searches" })}>Show the searches</Link>}>
+              This search is no longer registered, or it is in a server you no longer manage.
+            </Alert>
+          )}
+          {page}
+        </Box>
+        {sections}
       </Box>
+      {info && (
+        <AlertInfoSheet open={infoOpen} onClose={() => setInfoOpen(false)} alert={view === "search" ? alert : null}
+          totals={view === "listings" ? listingTotals : undefined} guildName={guildName} draft={draft}
+          actions={view === "search" ? unregister : undefined} />
+      )}
       <AddSearchDialog open={adding !== null} channels={channels.data} channelId={adding?.channelId ?? null}
         onClose={() => setAdding(null)} onCreated={(created) => { setAdding(null); go({ alertId: created.id }); }} />
       <UnregisterDialog alert={unregistering} onClose={() => setUnregistering(null)}

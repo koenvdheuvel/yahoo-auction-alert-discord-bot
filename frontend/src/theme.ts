@@ -46,6 +46,11 @@ export const mono = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 export const RAIL_WIDTH = 72;
 export const SIDEBAR_WIDTH = 240;
 export const TOPBAR_HEIGHT = 48;
+/** The main area's color in each mode. index.html repeats it for the browser's bars before the app loads. */
+export const pageColor = { light: "#FFFFFF", dark: "#313338" } as const;
+
+// On touch screens controls get 44 pixels, the smallest target Apple and Google recommend for a finger.
+const touch = "@media (pointer: coarse)";
 
 export const theme = createTheme({
   cssVariables: { colorSchemeSelector: "data" },
@@ -53,13 +58,12 @@ export const theme = createTheme({
     dark: {
       palette: {
         primary: { main: blurple, contrastText: "#FFFFFF" },
-        // The operator's labels are drawn in red; Discord's red for danger is the same family.
         secondary: { main: "#F23F43", contrastText: "#FFFFFF" },
         success: { main: "#23A55A" },
         warning: { main: "#F0B232" },
         error: { main: "#F23F43" },
         info: { main: "#00A8FC" },
-        background: { default: "#313338", paper: "#2B2D31" },
+        background: { default: pageColor.dark, paper: "#2B2D31" },
         text: { primary: "#DBDEE1", secondary: "#B5BAC1", disabled: "#80848E" },
         divider: "#3F4147",
         surface: { rail: "#1E1F22", sidebar: "#2B2D31", panel: "#232428", hover: "#35373C", selected: "#404249",
@@ -74,7 +78,7 @@ export const theme = createTheme({
         warning: { main: "#B56A00" },
         error: { main: "#DA373C" },
         info: { main: "#006CE7" },
-        background: { default: "#FFFFFF", paper: "#F2F3F5" },
+        background: { default: pageColor.light, paper: "#F2F3F5" },
         text: { primary: "#313338", secondary: "#4E5058", disabled: "#80848E" },
         divider: "#E1E2E4",
         surface: { rail: "#E3E5E8", sidebar: "#F2F3F5", panel: "#EBEDEF", hover: "#E0E1E5", selected: "#D4D7DC",
@@ -101,6 +105,8 @@ export const theme = createTheme({
     MuiCssBaseline: {
       styleOverrides: (theme) => ({
         body: { WebkitFontSmoothing: "antialiased" },
+        // A tap acts at once instead of waiting to see whether a second tap zooms in.
+        "a, button, input, label, select, textarea, [role='button']": { touchAction: "manipulation" },
         // Ripples are off, so keyboard focus gets a plain outline on every control.
         ".Mui-focusVisible, a:focus-visible": {
           outline: `2px solid ${theme.vars.palette.info.main}`,
@@ -112,20 +118,39 @@ export const theme = createTheme({
         },
       }),
     },
+    // The page is only drawn in the browser, so media queries can be read before the first paint.
+    MuiUseMediaQuery: { defaultProps: { noSsr: true } },
     MuiButtonBase: { defaultProps: { disableRipple: true } },
-    MuiButton: { defaultProps: { disableElevation: true }, styleOverrides: { root: { borderRadius: 3 } } },
-    MuiToggleButton: { styleOverrides: { root: { textTransform: "none" } } },
+    MuiButton: { defaultProps: { disableElevation: true }, styleOverrides: { root: { borderRadius: 3, [touch]: { minHeight: 44 } } } },
+    MuiIconButton: { styleOverrides: { root: { [touch]: { minWidth: 44, minHeight: 44 } } } },
+    MuiToggleButton: { styleOverrides: { root: { textTransform: "none", [touch]: { minHeight: 44 } } } },
+    MuiMenuItem: { styleOverrides: { root: { [touch]: { minHeight: 44 } } } },
+    MuiFormControlLabel: { styleOverrides: { root: { [touch]: { minHeight: 44 } } } },
+    // iOS zooms in on a field whose text is under 16 pixels.
+    MuiInputBase: { styleOverrides: { root: { [touch]: { fontSize: 16 } } } },
+    MuiOutlinedInput: {
+      styleOverrides: { input: { [touch]: { "&.MuiInputBase-inputSizeSmall": { paddingTop: 10.5, paddingBottom: 10.5 } } } },
+    },
+    MuiInputLabel: {
+      styleOverrides: {
+        root: { [touch]: { "&.MuiInputLabel-sizeSmall:not(.MuiInputLabel-shrink)": { transform: "translate(14px, 11px) scale(1)" } } },
+      },
+    },
     // Subtitles are emphasis, not headings; real headings pass `component` explicitly.
     MuiTypography: { defaultProps: { variantMapping: { subtitle1: "p", subtitle2: "p" } } },
     MuiPaper: { defaultProps: { elevation: 0 } },
     MuiAppBar: { defaultProps: { elevation: 0, color: "inherit" } },
-    MuiTooltip: { defaultProps: { enterDelay: 300, enterNextDelay: 150 } },
-    MuiChip: { defaultProps: { size: "small" }, styleOverrides: { root: { borderRadius: 4, fontWeight: 600 } } },
+    // A long press is a gesture of its own on touch screens, so it does not open tooltips.
+    MuiTooltip: { defaultProps: { enterDelay: 300, enterNextDelay: 150, disableTouchListener: true } },
+    MuiChip: {
+      defaultProps: { size: "small" },
+      styleOverrides: { root: { borderRadius: 4, fontWeight: 600, [touch]: { minHeight: 32, "& .MuiChip-deleteIcon": { fontSize: 20 } } } },
+    },
     MuiTextField: { defaultProps: { size: "small" } },
     MuiSelect: { defaultProps: { size: "small" } },
     MuiTab: {
       styleOverrides: {
-        root: { textTransform: "none", minHeight: 40, fontWeight: 600, fontSize: "0.875rem", paddingInline: 12 },
+        root: { textTransform: "none", minHeight: 40, fontWeight: 600, fontSize: "0.875rem", paddingInline: 12, [touch]: { minHeight: 44 } },
       },
     },
     MuiTabs: { styleOverrides: { root: { minHeight: 40 } } },
@@ -139,6 +164,6 @@ export const theme = createTheme({
     MuiPopover: { styleOverrides: { paper: { backgroundImage: "none" } } },
     MuiDrawer: { styleOverrides: { paper: { backgroundImage: "none" } } },
     MuiTableCell: { styleOverrides: { root: { paddingBlock: 6 } } },
-    MuiListItemButton: { styleOverrides: { root: { borderRadius: 4 } } },
+    MuiListItemButton: { styleOverrides: { root: { borderRadius: 4, [touch]: { minHeight: 44 } } } },
   },
 });

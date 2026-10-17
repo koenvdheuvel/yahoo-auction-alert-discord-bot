@@ -8,7 +8,9 @@ import type { CandidateQuery } from "../../api/client";
 import type { AlertSummary, ArchiveTotals, ReplayResult, RulesResponse } from "../../api/types";
 import { visuallyHidden } from "../../lib/a11y";
 import type { Place, Tab as TabName } from "../../lib/hooks";
+import { useCompact } from "../../lib/responsive";
 import type { Draft } from "../../lib/useDraft";
+import { SEARCH_TABS } from "../../lib/vocabulary";
 import { TOPBAR_HEIGHT } from "../../theme";
 import { AlertHeader } from "../AlertHeader";
 import type { TitleSeed } from "../TitleTestDialog";
@@ -26,8 +28,6 @@ export interface StoredReplay {
   ranAt: string;
   result: ReplayResult;
 }
-
-const TAB_LABELS: Record<TabName, string> = { listings: "Listings", rules: "Rules", replay: "Replay", versions: "Versions" };
 
 interface Props {
   place: Place;
@@ -51,6 +51,7 @@ interface Props {
 export function SearchView(props: Props) {
   const { place, navigate, alert, rules, draft, filters, onFilters, replays, onReplay, replayRequested,
     setReplayRequested, onTestTitle, canChange, actions } = props;
+  const compact = useCompact();
   const panel = (() => {
     switch (place.tab) {
       case "rules":
@@ -71,14 +72,22 @@ export function SearchView(props: Props) {
     }
   })();
 
+  // On phones the header opens from the title at the top, and the tabs sit in a bar at the bottom.
+  if (compact) {
+    return (
+      <Box id="search-panel" role="region" aria-label={SEARCH_TABS[place.tab]} sx={{ px: 2, py: 2 }}>
+        {panel}
+      </Box>
+    );
+  }
   return (
     <>
       <AlertHeader alert={alert} totals={undefined} guildName={null} draft={draft} actions={actions} />
-      <Box sx={{ px: { xs: 2, md: 3 }, borderBottom: 1, borderColor: "divider", position: "sticky", top: TOPBAR_HEIGHT,
+      <Box sx={{ px: 3, borderBottom: 1, borderColor: "divider", position: "sticky", top: TOPBAR_HEIGHT,
         bgcolor: "background.default", zIndex: 3 }}>
         <Tabs value={place.tab} onChange={(_, tab: TabName) => navigate({ tab })} aria-label="Search sections"
-          variant="scrollable" allowScrollButtonsMobile>
-          {(Object.keys(TAB_LABELS) as TabName[]).map((tab) => (
+          variant="scrollable">
+          {(Object.keys(SEARCH_TABS) as TabName[]).map((tab) => (
             <Tab key={tab} value={tab} id={`tab-${tab}`} aria-controls="search-panel"
               label={tab === "rules" && draft.edited ? (
                 <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
@@ -86,11 +95,11 @@ export function SearchView(props: Props) {
                   <Box component="span" sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: "text.primary" }} />
                   <Box component="span" sx={visuallyHidden}>(unpublished changes)</Box>
                 </Box>
-              ) : TAB_LABELS[tab]} />
+              ) : SEARCH_TABS[tab]} />
           ))}
         </Tabs>
       </Box>
-      <Box id="search-panel" role="tabpanel" aria-labelledby={`tab-${place.tab}`} sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
+      <Box id="search-panel" role="tabpanel" aria-labelledby={`tab-${place.tab}`} sx={{ px: 3, py: 2.5 }}>
         {panel}
       </Box>
     </>
@@ -109,10 +118,11 @@ interface ListingsProps {
 
 /** Every saved listing of the server's searches. */
 export function ServerListingsView({ guildId, guildName, totals, draft, filters, onFilters, onTestTitle }: ListingsProps) {
+  const compact = useCompact();
   return (
     <>
-      <AlertHeader alert={null} totals={totals} guildName={guildName} draft={draft} />
-      <Box sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
+      {!compact && <AlertHeader alert={null} totals={totals} guildName={guildName} draft={draft} />}
+      <Box sx={{ px: { xs: 2, md: 3 }, py: { xs: 2, md: 2.5 } }}>
         <ListingsPanel alertId={null} guildId={guildId} filters={filters} onFilters={onFilters} onTestTitle={onTestTitle} />
       </Box>
     </>

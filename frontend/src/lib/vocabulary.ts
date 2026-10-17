@@ -1,4 +1,5 @@
 import type { AlertSummary, Change, Policy, Source, TermMethod, Verdict } from "../api/types";
+import type { ChannelTab, Tab } from "./hooks";
 
 export const SOURCES: Record<Source, string> = {
   yahooauction: "Yahoo Auctions",
@@ -46,3 +47,9 @@ export const CHANGES: Record<Change, string> = {
 export function channelName(alert: Pick<AlertSummary, "channel_id" | "channel_name">): string {
   return alert.channel_name ? `#${alert.channel_name}` : `Channel …${alert.channel_id.slice(-6)}`;
 }
+
+/** A search's sections, in the order of its tabs. */
+export const SEARCH_TABS: Record<Tab, string> = { listings: "Listings", rules: "Rules", replay: "Replay", versions: "Versions" };
+
+/** A channel's sections, in the order of its tabs. */
+export const CHANNEL_TABS: Record<ChannelTab, string> = { searches: "Searches", posts: "Posts", hidden: "Hidden", cleanup: "Cleanup" };

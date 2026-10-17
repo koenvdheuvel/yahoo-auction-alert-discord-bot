@@ -9,16 +9,16 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 
 import type { AlertSummary, ChannelList } from "../../api/types";
-import { findChannel, postingProblem } from "../../lib/channels";
+import { channelTabs, findChannel, postingProblem } from "../../lib/channels";
 import type { ChannelTab, Place } from "../../lib/hooks";
+import { useCompact } from "../../lib/responsive";
+import { CHANNEL_TABS } from "../../lib/vocabulary";
 import { TOPBAR_HEIGHT } from "../../theme";
 import { EmptyState } from "../common/Feedback";
 import { CleanupPanel } from "../channel/CleanupPanel";
 import { HiddenPanel } from "../channel/HiddenPanel";
 import { PostsPanel } from "../channel/PostsPanel";
 import { SearchList } from "../searches/SearchList";
-
-const TABS: Record<ChannelTab, string> = { searches: "Searches", posts: "Posts", hidden: "Hidden", cleanup: "Cleanup" };
 
 interface Props {
   channelId: string;
@@ -33,6 +33,7 @@ interface Props {
 
 /** One channel: its searches, the bot's posts, hidden listings and cleanup. */
 export function ChannelView({ channelId, guildId, channels, searches, place, navigate, onAddSearch, onUnregister }: Props) {
+  const compact = useCompact();
   const channel = findChannel(channels, channelId);
   const unknown = channels?.unknown.find((item) => item.id === channelId) ?? null;
   if (!channels) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={120} /></Box>;
@@ -44,8 +45,7 @@ export function ChannelView({ channelId, guildId, channels, searches, place, nav
     );
   }
   const canManage = channel?.can_manage ?? false;
-  // A channel that is gone, or that Discord does not show the bot, has no posts to look at.
-  const tabs: ChannelTab[] = channel ? ["searches", "posts", "hidden", "cleanup"] : ["searches", "hidden"];
+  const tabs = channelTabs(channel !== null);
   const tab = tabs.includes(place.channelTab) ? place.channelTab : "searches";
   const problem = channel ? postingProblem(channel) : null;
   const name = channel?.name ?? channelId;
@@ -73,14 +73,18 @@ export function ChannelView({ channelId, guildId, channels, searches, place, nav
           </Alert>
         )}
       </Box>
-      <Box sx={{ px: { xs: 2, md: 3 }, borderBottom: 1, borderColor: "divider", position: "sticky", top: TOPBAR_HEIGHT,
-        bgcolor: "background.default", zIndex: 3 }}>
-        <Tabs value={tab} onChange={(_, next: ChannelTab) => navigate({ channelTab: next })} aria-label="Channel sections"
-          variant="scrollable" allowScrollButtonsMobile>
-          {tabs.map((value) => <Tab key={value} value={value} label={TABS[value]} id={`channel-tab-${value}`} aria-controls="channel-panel" />)}
-        </Tabs>
-      </Box>
-      <Box id="channel-panel" role="tabpanel" aria-labelledby={`channel-tab-${tab}`} sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
+      {/* On phones the tabs sit in a bar at the bottom of the screen. */}
+      {!compact && (
+        <Box sx={{ px: 3, borderBottom: 1, borderColor: "divider", position: "sticky", top: TOPBAR_HEIGHT,
+          bgcolor: "background.default", zIndex: 3 }}>
+          <Tabs value={tab} onChange={(_, next: ChannelTab) => navigate({ channelTab: next })} aria-label="Channel sections"
+            variant="scrollable">
+            {tabs.map((value) => <Tab key={value} value={value} label={CHANNEL_TABS[value]} id={`channel-tab-${value}`} aria-controls="channel-panel" />)}
+          </Tabs>
+        </Box>
+      )}
+      <Box id="channel-panel" {...(compact ? { role: "region", "aria-label": CHANNEL_TABS[tab] }
+        : { role: "tabpanel", "aria-labelledby": `channel-tab-${tab}` })} sx={{ px: { xs: 2, md: 3 }, py: { xs: 2, md: 2.5 } }}>
         {tab === "searches" && (
           <>
             <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1.5, flexWrap: "wrap" }}>

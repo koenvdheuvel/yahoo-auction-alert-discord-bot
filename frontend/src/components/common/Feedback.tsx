@@ -1,7 +1,6 @@
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
@@ -10,6 +9,7 @@ import type { ReactNode } from "react";
 
 import { ApiError } from "../../api/client";
 import { errorMessage } from "../../lib/errors";
+import { SheetDialog } from "./Sheet";
 
 /** A failed load, with what happened and a way to try again. */
 export function LoadError({ error, onRetry, what }: { error: unknown; onRetry?: () => void; what: string }) {
@@ -51,7 +51,7 @@ export function ConfirmDialog(props: ConfirmProps) {
   const { open, title, children, confirm, busy = false, confirmDisabled = false, maxWidth = "xs", danger = false, onConfirm,
     onClose } = props;
   return (
-    <Dialog open={open} onClose={busy ? undefined : onClose} maxWidth={maxWidth} fullWidth={maxWidth !== "xs"}
+    <SheetDialog open={open} onClose={busy ? undefined : onClose} maxWidth={maxWidth} fullWidth={maxWidth !== "xs"}
       aria-labelledby="confirm-title">
       <DialogTitle id="confirm-title">{title}</DialogTitle>
       <DialogContent>{children}</DialogContent>
@@ -60,6 +60,6 @@ export function ConfirmDialog(props: ConfirmProps) {
         <Button onClick={onConfirm} disabled={busy || confirmDisabled} variant="contained" color={danger ? "error" : "primary"}
           autoFocus>{busy ? "Working" : confirm}</Button>
       </DialogActions>
-    </Dialog>
+    </SheetDialog>
   );
 }
