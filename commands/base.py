@@ -115,6 +115,9 @@ class PageMenu(lightbulb.components.Menu):
 class CommandServices:
     bot: hikari.GatewayBot
     repository: Any
+    # The marketplaces the bot searches (ENABLE_*), whatever each search chooses. A new search
+    # posts everything its first check of these finds.
+    enabled_sources: tuple
     pagination_tasks: set = field(default_factory=set)
 
     async def respond_lines(self, ctx, lines, *, ephemeral=False):

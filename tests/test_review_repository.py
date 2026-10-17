@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from filtering import default_ruleset
-from models import (ActiveReviewRules, Alert, AlertItem, CandidateFeedback,
+from models import (ActiveReviewRules, Alert, AlertItem, AlertSource, CandidateFeedback,
                     CandidateObservation, DeliveryJob, Filter, Item, Message, Notification, REVIEW_TABLES,
                     ReviewRuleVersion, SCHEMA_VERSION, SchemaVersion, TABLES,
                     configure_database, create_tables, database, utcnow)
@@ -711,7 +711,7 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
         with self.assertLogs("models", "WARNING") as logs:
             create_tables()
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], SCHEMA_VERSION)
             self.assertEqual(self.table(connection), [
                 (2, "x", "accepted", "2026-10-16 07:00:00", "2026-10-16 07:30:00"),
                 (4, "x", "filtered", "2026-10-16 08:00:00", "2026-10-16 08:30:00"),
@@ -760,3 +760,42 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
             columns = {row[1] for row in connection.execute("PRAGMA table_info(candidate_observation)")}
             self.assertNotIn("last_seen_at", columns)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_observation").fetchone()[0], 12)
+
+
+class MarketplaceChoiceMigrationTests(unittest.TestCase):
+    """Schema v4 checked every marketplace for every search; v5 lets each search choose."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / "v4.sqlite"
+        configure_database(str(self.path))
+        database.connect()
+        database.create_tables([model for model in TABLES if model is not AlertSource])
+        for channel_id in (123, 124):
+            Alert.create(channel_id=channel_id, guild_id=456, search_query="poster")
+        SchemaVersion.create(id=1, version=4)
+        database.close()
+
+    def tearDown(self):
+        database.close()
+        self.directory.cleanup()
+
+    def test_searches_keep_posting_on_their_marketplaces_and_rakuma_starts_quietly(self):
+        with self.assertLogs("models", "WARNING") as logs:
+            create_tables()
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], SCHEMA_VERSION)
+            rows = connection.execute('SELECT "alert_id", "source", "enabled", "seeded" FROM "alert_source" '
+                                      'ORDER BY "alert_id", "source"').fetchall()
+        # No Rakuma row: on, and not seeded, so its first check posts nothing.
+        self.assertEqual(rows, [(alert, source, 1, 1) for alert in (1, 2)
+                                for source in ("mercari", "surugaya", "yahooauction")])
+        migrated = next(record for record in logs.records if record.getMessage() == "database_migrated")
+        self.assertEqual(migrated.fields["alert_sources_added"], 6)
+        backups = list(self.path.parent.glob(f"v4.sqlite.pre-v{SCHEMA_VERSION}.*.bak"))
+        self.assertEqual(len(backups), 1)
+        with sqlite3.connect(backups[0]) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+            self.assertIsNone(connection.execute("SELECT name FROM sqlite_master WHERE name='alert_source'").fetchone())
+        create_tables()
+        self.assertEqual(list(self.path.parent.glob("*.bak")), backups)

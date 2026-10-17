@@ -19,6 +19,7 @@ from channel_maintenance import (HISTORY_SCAN_LIMIT, MAX_DELETE_COUNT, Progress,
 from commands.base import clean_search_query
 from dashboard_auth import MANAGER, MEMBER, DiscordUnavailable, can_manage
 from discord_directory import Lookup, member_permissions, posting, sidebar
+from marketplaces import SOURCES
 from review_repository import POST_REMOVAL_LIMIT, ReviewNotFound, ReviewValidation, removal_days
 from review_service import identifier
 
@@ -60,6 +61,7 @@ class Management:
             web.post("/api/alerts", self.register, name="alert_register"),
             web.get("/api/alerts/{id}", self.alert, name="alert"),
             web.delete("/api/alerts/{id}", self.unregister, name="alert_unregister"),
+            web.put("/api/alerts/{id}/sources", self.set_sources, name="alert_sources"),
             web.delete("/api/alerts/{id}/legacy-filters/{filter}", self.delete_filter, name="legacy_filter_delete"),
             web.get("/api/channels/{channel}/posts", self.posts, name="channel_posts"),
             web.get("/api/channels/{channel}/hidden", self.hidden, name="hidden"),
@@ -282,7 +284,8 @@ class Management:
                                            if check["missing"] else [])
             raise ReviewValidation(f"The bot cannot post in #{lookup.channel.name}. " + " ".join(reasons))
         channel_id = lookup.channel.id
-        if not await self.repository.register_alert(channel_id, search_query, guild_id=guild_id):
+        if not await self.repository.register_alert(channel_id, search_query, guild_id=guild_id,
+                                                    searched=self.server.settings.enabled_sources):
             raise web.HTTPConflict(reason=f"A search for {search_query} already exists in #{lookup.channel.name}.")
         alert = next(row for row in await self.repository.list_alerts(channel_id=channel_id)
                      if row["search_query"] == search_query)
@@ -315,6 +318,25 @@ class Management:
             raise ReviewNotFound("Alert no longer exists")
         self.log("alert_unregistered", request, guild_id, alert["channel_id"], alert_id=alert["id"])
         return web.json_response({"unregistered": True})
+
+    async def set_sources(self, request):
+        """/marketplaces on and off: the body's sources are every marketplace the search should check."""
+        alert_id = identifier(request.match_info["id"], "alert_id")
+        alert = await self.repository.review_alert(alert_id, self.server.guilds(request))
+        guild_id, _ = await self.channel_in_scope(request, alert["channel_id"], change=True, gone_ok=True)
+        sources = (await self.server.body(request)).get("sources")
+        if not isinstance(sources, list) or not all(isinstance(source, str) and source in SOURCES
+                                                    for source in sources):
+            raise ReviewValidation("Choose marketplaces from " + ", ".join(sorted(SOURCES)))
+        result = await self.repository.set_alert_sources(
+            {"id": int(alert["id"]), "channel_id": int(alert["channel_id"]), "search_query": alert["search_query"]},
+            sources)
+        if result is None:
+            raise ReviewNotFound("Alert no longer exists")
+        if result["turned_on"] or result["turned_off"]:
+            self.log("alert_sources_changed", request, guild_id, alert["channel_id"], alert_id=alert["id"],
+                     turned_on=result["turned_on"], turned_off=result["turned_off"])
+        return web.json_response({key: result[key] for key in ("sources", "turned_on", "turned_off")})
 
     async def delete_filter(self, request):
         """/filters delete for one of the search's legacy filters."""

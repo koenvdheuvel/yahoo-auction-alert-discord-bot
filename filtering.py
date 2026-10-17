@@ -8,6 +8,7 @@ import time
 import regex
 
 from domain import FILTER_TIMEOUT_SECONDS, FilterPolicy, FilterRule, FilterTimeout, Listing
+from marketplaces import SOURCES
 from normalization import NORMALIZATION_VERSION, normalize_title, validate_options
 
 
@@ -17,7 +18,6 @@ MAX_TERMS = 100
 MAX_REGEX_TERMS = 20
 MAX_LEGACY_RULES = 50
 EVALUATION_BUDGET_SECONDS = 0.25
-SOURCES = frozenset({"yahooauction", "mercari", "surugaya"})
 
 
 class RulesetError(ValueError):

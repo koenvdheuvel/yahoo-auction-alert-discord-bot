@@ -62,10 +62,13 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             add_filter=AsyncMock(return_value=None),
             delete_filter=AsyncMock(return_value=False),
             mark_message_deleted=AsyncMock(), lookup_message=AsyncMock(return_value=None),
+            set_alert_source=AsyncMock(return_value=None), alert_sources=AsyncMock(return_value={}),
         )
         self.bot = hikari.GatewayBot("MTIzNDU2Nzg5MDEyMzQ1Njc4.test.test", logs=None, banner=None)
         self.client = lightbulb.client_from_app(self.bot, sync_commands=False)
-        self.services = register_commands(self.client, self.bot, self.repository)
+        # The bot searches every marketplace but Rakuma.
+        self.services = register_commands(self.client, self.bot, self.repository,
+                                          ("yahooauction", "mercari", "surugaya"))
         self.errors = []
 
         @self.client.error_handler
@@ -108,14 +111,17 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(builder.context_types, [hikari.ApplicationContextType.GUILD])
             self.assertEqual(builder.integration_types, [hikari.ApplicationIntegrationType.GUILD_INSTALL])
         self.assertEqual({builder.name for builder in built}, {
-            "alerts", "allalerts", "cleanup", "filters", "reacttocleanup", "register", "unregister",
+            "alerts", "allalerts", "cleanup", "filters", "marketplaces", "reacttocleanup", "register",
+            "unregister",
         })
         managed = {builder.name: builder for builder in built
-                   if builder.name not in ("alerts", "filters")}
+                   if builder.name not in ("alerts", "filters", "marketplaces")}
         for builder in managed.values():
             self.assertEqual(builder.default_member_permissions, hikari.Permissions.MANAGE_CHANNELS)
         group = next(builder for builder in built if builder.name == "filters")
         self.assertEqual({child.name for child in group.options}, {"list", "get", "add", "delete"})
+        marketplaces = next(builder for builder in built if builder.name == "marketplaces")
+        self.assertEqual({child.name for child in marketplaces.options}, {"list", "on", "off"})
         add = next(child for child in group.options if child.name == "add")
         self.assertEqual([opt.name for opt in add.options], ["search_query", "method", "value", "type"])
         self.assertEqual([opt.is_required for opt in add.options], [True, True, True, False])
@@ -127,6 +133,8 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             ("cleanup", {}), ("reacttocleanup", {}), ("allalerts", {}),
             ("filters add", {"search_query": "vinyl", "method": "text", "value": "limited"}),
             ("filters delete", {"id": 99}),
+            ("marketplaces on", {"search_query": "vinyl", "marketplace": "rakuma"}),
+            ("marketplaces off", {"search_query": "vinyl", "marketplace": "mercari"}),
         ]
         for name, values in operations:
             with self.subTest(command=name):
@@ -144,14 +152,17 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             "register", permissions=hikari.Permissions.ADMINISTRATOR, search_query="vinyl",
         )
         self.assertEqual(self.errors, [])
-        self.repository.register_alert.assert_awaited_once_with(10, "vinyl", guild_id=100)
+        # Only what the bot searches posts on the first check; Rakuma starts quietly if it is turned on.
+        self.repository.register_alert.assert_awaited_once_with(
+            10, "vinyl", guild_id=100, searched=("yahooauction", "mercari", "surugaya"))
         self.assertEqual(interaction.execute.await_count, 1)
 
     async def test_duplicate_registration_deferred_privately_and_returns_one_response(self):
         self.repository.register_alert.return_value = False
         interaction = await self.invoke("register", search_query="  vinyl  ")
         self.assertEqual(self.errors, [])
-        self.repository.register_alert.assert_awaited_once_with(10, "vinyl", guild_id=100)
+        self.repository.register_alert.assert_awaited_once_with(
+            10, "vinyl", guild_id=100, searched=("yahooauction", "mercari", "surugaya"))
         self.assertEqual(interaction.execute.await_count, 1)
         self.assertIn("already exists", interaction.execute.await_args.args[0])
         self.assertEqual(interaction.create_initial_response.await_args.args[0],
@@ -202,6 +213,39 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
         response = await self.invoke("filters delete", id=99)
         self.repository.delete_filter.assert_awaited_once_with(10, 99)
         self.assertIn("this channel", response.execute.await_args.args[0])
+
+    async def test_marketplaces_on_starts_quietly_and_says_when_the_bot_skips_the_marketplace(self):
+        self.repository.set_alert_source.return_value = {
+            "alert_id": 3, "sources": ["mercari", "rakuma"], "turned_on": ["rakuma"], "turned_off": []}
+        response = await self.invoke("marketplaces on", search_query="  vinyl ", marketplace="rakuma")
+        self.assertEqual(self.errors, [])
+        self.repository.set_alert_source.assert_awaited_once_with(10, "vinyl", "rakuma", True)
+        text = response.execute.await_args.args[0]
+        self.assertIn("without posting them", text)
+        self.assertIn("does not search Rakuma", text)
+        self.assertEqual(response.execute.await_args.kwargs["flags"], hikari.MessageFlag.EPHEMERAL)
+
+        self.repository.set_alert_source.return_value = {
+            "alert_id": 3, "sources": ["mercari", "rakuma"], "turned_on": [], "turned_off": []}
+        response = await self.invoke("marketplaces on", search_query="vinyl", marketplace="mercari")
+        self.assertIn("already checks Mercari", response.execute.await_args.args[0])
+
+        self.repository.set_alert_source.return_value = None
+        response = await self.invoke("marketplaces off", search_query="book", marketplace="mercari")
+        self.repository.set_alert_source.assert_awaited_with(10, "book", "mercari", False)
+        self.assertIn("does not exist in this channel", response.execute.await_args.args[0])
+
+    async def test_marketplaces_list_names_what_each_alert_checks(self):
+        self.repository.list_alerts.return_value = [
+            {"id": 1, "search_query": "vinyl"}, {"id": 2, "search_query": "book"}]
+        self.repository.alert_sources.return_value = {1: ["mercari", "rakuma"], 2: []}
+        response = await self.invoke("marketplaces list")
+        self.assertEqual(self.errors, [])
+        self.repository.list_alerts.assert_awaited_once_with(channel_id=10)
+        self.repository.alert_sources.assert_awaited_once_with([1, 2])
+        self.assertEqual(response.execute.await_args.args[0],
+                         "- vinyl - Mercari, Rakuma (off for the whole bot)\n"
+                         "- book - no marketplace, so it posts nothing")
 
     async def test_cleanup_skips_interaction_metadata_and_human_messages(self):
         extra_response = post(5)

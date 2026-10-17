@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -31,9 +32,15 @@ class Repository(Resource):
     def __init__(self, alerts=None):
         super().__init__()
         self.alerts = alerts or []
+        # Alert ID to {source: (on, seeded)}, as Repository.source_states returns it. A search
+        # without a choice for a marketplace checks it, and has not seeded it.
+        self.states = {}
 
     async def list_alerts(self):
         return self.alerts
+
+    async def source_states(self):
+        return self.states
 
     async def stats(self):
         return {"alerts": len(self.alerts), "pending": 0, "failed": 0,
@@ -56,12 +63,12 @@ class Delivery:
         await asyncio.Future()
 
 
-def build_runtime(check, alerts=None, settings=None, delivery=None):
+def build_runtime(check, alerts=None, settings=None, delivery=None, providers=None):
     settings = settings or replace(Settings(), monitoring_enabled=False, dashboard_enabled=False)
     bot = Bot()
     repo, http, metrics = Repository(alerts), Resource(), Metrics()
     runtime = Runtime(bot, settings, repo, http, SimpleNamespace(check=check),
-                      delivery or Delivery(), {"yahooauction": object()}, metrics)
+                      delivery or Delivery(), providers or {"yahooauction": object()}, metrics)
     bot.runtime = runtime
     return runtime
 
@@ -118,7 +125,7 @@ def test_factory_registers_commands_without_starting_network_or_workers(tmp_path
     names = {command.name if isinstance(command, lightbulb.Group) else command._command_data.name
              for command in bot.services.commands.registered_commands}
     assert names == {"alerts", "allalerts", "register", "unregister",
-                     "filters", "cleanup", "reacttocleanup"}
+                     "filters", "marketplaces", "cleanup", "reacttocleanup"}
     asyncio.run(bot.services.runtime.close())
 
 
@@ -319,7 +326,7 @@ def test_failed_check_waits_for_sibling_and_records_partial_cycle():
     async def scenario():
         held, release, completed = asyncio.Event(), asyncio.Event(), []
 
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             if item["id"] == 1:
                 raise RuntimeError("provider unavailable")
             if item["id"] == 2:
@@ -346,7 +353,7 @@ def test_failed_check_waits_for_sibling_and_records_partial_cycle():
 
 def test_the_status_page_gets_each_searchs_last_check_from_memory():
     async def scenario():
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             if item["id"] == 1:
                 raise RuntimeError("https://example.com/search?q=secret answered 500")
 
@@ -371,7 +378,7 @@ def test_worker_pool_is_bounded_and_never_skips_a_query():
     async def scenario():
         active, peak, seen, tasks = 0, 0, [], set()
 
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             nonlocal active, peak
             active += 1
             peak = max(peak, active)
@@ -393,11 +400,51 @@ def test_worker_pool_is_bounded_and_never_skips_a_query():
     asyncio.run(scenario())
 
 
+def test_each_search_checks_only_its_marketplaces_and_seeds_the_ones_it_turned_on():
+    async def scenario():
+        checks, failing = [], set()
+
+        async def check(provider, item, seeding=False):
+            checks.append((item["id"], provider, seeding))
+            if provider in failing:
+                raise RuntimeError("provider unavailable")
+
+        runtime = build_runtime(check, [alert(1), alert(2)],
+                                providers={"yahooauction": "yahooauction", "rakuma": "rakuma"})
+        # Search 1 turned Rakuma off. Search 2 just turned it on; a search with no choice saved
+        # for a marketplace checks it without posting first.
+        runtime.repository.states = {1: {"yahooauction": (True, True), "rakuma": (False, False)},
+                                     2: {"yahooauction": (True, True), "rakuma": (True, False)}}
+        await runtime.poll_cycle()
+        assert sorted(checks) == [(1, "yahooauction", False), (2, "rakuma", True), (2, "yahooauction", False)]
+        assert value(runtime, "source_last_success_timestamp_seconds", {"source": "rakuma"}) > 0
+
+        # With no search checking Rakuma, it has no success time that could go stale, and its last
+        # results leave the status page.
+        runtime.repository.states[2]["rakuma"] = (False, True)
+        checks.clear()
+        await runtime.poll_cycle()
+        assert sorted(checks) == [(1, "yahooauction", False), (2, "yahooauction", False)]
+        assert value(runtime, "source_last_success_timestamp_seconds", {"source": "rakuma"}) is None
+        assert [result["source"] for result in runtime.status()["checks"][2]] == ["yahooauction"]
+        await runtime.poll_cycle()
+
+        # Checked again, it goes stale from that cycle on, even when the check fails.
+        runtime.repository.states[1]["rakuma"] = (True, True)
+        failing.add("rakuma")
+        before = time.time()
+        await runtime.poll_cycle()
+        assert value(runtime, "source_last_success_timestamp_seconds", {"source": "rakuma"}) >= before
+        assert value(runtime, "checks_total", {"source": "rakuma", "outcome": "error"}) == 1
+
+    asyncio.run(scenario())
+
+
 def test_cycle_cancellation_settles_checks_and_releases_gauge():
     async def scenario():
         running, cleaned = asyncio.Event(), []
 
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             running.set()
             try:
                 await asyncio.Future()
@@ -423,7 +470,7 @@ def test_timeout_preserves_last_success_and_advances_completed_timestamp():
     async def scenario():
         fail = False
 
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             if fail:
                 await asyncio.Future()
 
@@ -449,7 +496,7 @@ def test_recoverable_database_cycle_error_is_retried():
     async def scenario():
         checked = asyncio.Event()
 
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             checked.set()
 
         runtime = build_runtime(check, [alert(1)], replace(Settings(), interval=.001, monitoring_enabled=False, dashboard_enabled=False))
@@ -481,7 +528,7 @@ def test_prepare_does_not_poll_before_started_and_start_is_idempotent():
     async def scenario():
         checked = asyncio.Event()
 
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             checked.set()
 
         runtime = build_runtime(check, [alert(1)])
@@ -510,7 +557,7 @@ def test_critical_worker_death_marks_unready_and_shuts_down():
             async def run(self):
                 raise RuntimeError("worker failed")
 
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             pass
 
         runtime = build_runtime(check, delivery=FailedDelivery())
@@ -528,7 +575,7 @@ def test_critical_worker_death_marks_unready_and_shuts_down():
 
 def test_readiness_requires_every_local_gateway_shard_and_database():
     async def scenario():
-        async def check(provider, item):
+        async def check(provider, item, seeding=False):
             pass
 
         runtime = build_runtime(check)

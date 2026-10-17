@@ -10,7 +10,7 @@ from domain import Listing
 from filtering import default_ruleset
 from models import Filter, Item, configure_database, create_tables, database
 from observability import Metrics
-from providers import ProviderError, SurugayaAdapter, YahooAuctionsAdapter
+from providers import ProviderError, RakumaAdapter, SurugayaAdapter, YahooAuctionsAdapter
 from repositories import Repository
 from storechecker import Ingestion, IngestionError
 
@@ -115,6 +115,48 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.item_counter("surugaya", "blacklisted"), 1)
         self.assertEqual(await self.repository.due_deliveries(), [])
         self.assertEqual(await self.repository._call("test_price", lambda: Item.get_by_id(item).price), 5000)
+
+    async def turn_on_again(self, source):
+        await self.repository.set_alert_source(1111, "figure", source, False)
+        await self.repository.set_alert_source(1111, "figure", source, True)
+
+    async def state(self, source):
+        return (await self.repository.source_states())[self.alert["id"]][source]
+
+    async def test_a_marketplace_turned_on_saves_what_it_has_then_posts_only_new_listings(self):
+        await self.turn_on_again("rakuma")
+        self.assertEqual(await self.state("rakuma"), (True, False))
+        provider = FixtureProvider([raw("old-a"), raw("old-b")], RakumaAdapter,
+                                   failure=ProviderError("rakuma", "search", "incomplete_pagination"))
+        # A check that does not read every page leaves it unseeded: the next check still posts nothing.
+        with self.assertRaises(ProviderError):
+            await self.ingestion.check(provider, self.alert, seeding=True)
+        self.assertEqual(await self.state("rakuma"), (True, False))
+        provider.failure = None
+        provider.rows.append(raw("old-c"))
+        await self.ingestion.check(provider, self.alert, seeding=True)
+        self.assertEqual(await self.repository.due_deliveries(), [])
+        self.assertEqual(self.item_counter("rakuma", "seeded"), 3)
+        self.assertEqual(await self.state("rakuma"), (True, True))
+        provider.rows.append(raw("fresh"))
+        await self.ingestion.check(provider, self.alert)
+        jobs = await self.repository.due_deliveries()
+        self.assertEqual([json.loads(job["payload"])["listing"]["id"] for job in jobs], ["fresh"])
+        self.assertEqual(json.loads(jobs[0]["payload"])["listing"]["url"], "https://item.fril.jp/fresh")
+
+    async def test_a_marketplace_turned_off_during_its_first_check_stays_off(self):
+        await self.turn_on_again("rakuma")
+        repository = self.repository
+
+        class TurnedOffMidway(FixtureProvider):
+            async def iter_items(self, query):
+                yield raw("a")
+                await repository.set_alert_source(1111, "figure", "rakuma", False)
+                yield raw("b")
+
+        await self.ingestion.check(TurnedOffMidway([], RakumaAdapter), self.alert, seeding=True)
+        self.assertEqual(await self.state("rakuma"), (False, True))
+        self.assertEqual(await self.repository.due_deliveries(), [])
 
 
 if __name__ == "__main__":

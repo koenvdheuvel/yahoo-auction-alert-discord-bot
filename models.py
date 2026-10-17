@@ -7,11 +7,11 @@ import sqlite3
 import stat
 
 from peewee import (BigIntegerField, BooleanField, CharField, DateTimeField,
-                    ForeignKeyField, IntegerField, Model, SqliteDatabase, TextField)
+                    ForeignKeyField, IntegerField, Model, SqliteDatabase, TextField, chunked)
 from playhouse.sqlite_ext import AutoIncrementField
 
 logger = logging.getLogger(__name__)
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 database = SqliteDatabase(None)
 
 
@@ -103,6 +103,21 @@ class Filter(BaseModel):
     value = TextField()
     enabled = BooleanField(default=True)
     matches = IntegerField(default=0)
+
+
+class AlertSource(BaseModel):
+    """A search's choice for one marketplace. Without a row the marketplace is on and not seeded."""
+    alert = ForeignKeyField(Alert, backref="marketplaces", on_delete="CASCADE")
+    source = CharField()
+    enabled = BooleanField(default=True)
+    # A check has saved every listing the marketplace had for the search, so checks post what is new.
+    # Until then a check saves listings without posting them, so a marketplace turned on later does
+    # not post everything it already has.
+    seeded = BooleanField(default=False)
+
+    class Meta:
+        table_name = "alert_source"
+        indexes = ((("alert", "source"), True),)
 
 
 class DeliveryJob(BaseModel):
@@ -201,10 +216,13 @@ class SchemaVersion(BaseModel):
 
 
 REVIEW_TABLES = [ReviewRuleVersion, ActiveReviewRules, CandidateObservation, CandidateFeedback]
-TABLES = [Alert, Item, AlertItem, Message, Blacklist, Notification, Filter,
+TABLES = [Alert, Item, AlertItem, Message, Blacklist, Notification, Filter, AlertSource,
           DeliveryJob, *REVIEW_TABLES, SchemaVersion]
 SOURCE_ALIASES = {"YahooAuctionsChecker": "yahooauction", "MercariChecker": "mercari",
                   "SurugayaChecker": "surugaya"}
+# Every search checked these before searches chose their marketplaces (schema version 5). They
+# keep posting what is new; a marketplace added later starts without posting what it already has.
+EARLIER_SOURCES = ("yahooauction", "mercari", "surugaya")
 
 
 def _backup():
@@ -229,6 +247,15 @@ def _rows(table, existing):
     cursor = database.execute_sql(f'SELECT * FROM "{table}"')
     names = [column[0] for column in cursor.description]
     return [dict(zip(names, row)) for row in cursor.fetchall()]
+
+
+def _seed_alert_sources():
+    """Searches saved before version 5 go on checking the marketplaces they did. Returns the rows added."""
+    rows = [{"alert": alert_id, "source": source, "enabled": True, "seeded": True}
+            for (alert_id,) in Alert.select(Alert.id).tuples() for source in EARLIER_SOURCES]
+    for batch in chunked(rows, 100):
+        AlertSource.insert_many(batch).execute()
+    return len(rows)
 
 
 def _migrate_legacy(existing):
@@ -290,6 +317,7 @@ def _migrate_legacy(existing):
                 disabled_filters += not enabled
                 Filter.create(id=row["id"], alert=row["alert_id"], method=method, type=policy,
                               value=row["value"], enabled=enabled, matches=row.get("matches", 0))
+            _seed_alert_sources()
             SchemaVersion.create(id=1, version=SCHEMA_VERSION)
             if database.execute_sql("PRAGMA foreign_key_check").fetchall():
                 raise RuntimeError("Foreign key validation failed; migration rolled back")
@@ -363,7 +391,7 @@ def _upgrade(previous):
         if previous == 2:
             # Rule version and archive tables did not exist yet, so they are created in their current shape.
             database.create_tables(REVIEW_TABLES)
-        else:
+        elif previous == 3:
             # SQLite needs a constant default to add a NOT NULL column. Every row is set next.
             database.execute_sql('ALTER TABLE "candidate_observation" ADD COLUMN "last_seen_at" '
                                  "DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'")
@@ -373,6 +401,9 @@ def _upgrade(previous):
             CandidateObservation._schema.create_indexes(safe=True)
             removed, relabeled = _fold_repeated_snapshots()
             details.update(repeated_snapshots_removed=removed, labels_moved_to_latest=relabeled)
+        # Version 5: each search chooses its marketplaces.
+        database.create_tables([AlertSource])
+        details["alert_sources_added"] = _seed_alert_sources()
         SchemaVersion.update(version=SCHEMA_VERSION).where(SchemaVersion.id == 1).execute()
         if database.execute_sql("PRAGMA foreign_key_check").fetchall():
             raise RuntimeError("Foreign key validation failed; migration rolled back")
@@ -388,7 +419,7 @@ def create_tables():
         existing = set(database.get_tables())
         if "schema_version" in existing:
             version = SchemaVersion.get_by_id(1).version
-            if version in {2, 3}:
+            if version in {2, 3, 4}:
                 _upgrade(version)
             elif version != SCHEMA_VERSION:
                 raise RuntimeError(f"Unsupported database schema version {version}")

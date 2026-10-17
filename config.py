@@ -5,6 +5,7 @@ import stat
 from urllib.parse import urlsplit
 
 from dashboard_limits import parse_proxies
+from marketplaces import MARKETPLACES
 
 
 def boolean(name, default=True):
@@ -93,7 +94,7 @@ class Settings:
     metrics_stats_interval: int = 10
     health_max_poll_age: int = 2460
     price_threshold: int = 500
-    enabled_sources: tuple = ("yahooauction", "mercari", "surugaya")
+    enabled_sources: tuple = tuple(marketplace.source for marketplace in MARKETPLACES)
     log_level: str = "INFO"
     dashboard_enabled: bool = True
     dashboard_host: str = "127.0.0.1"
@@ -143,11 +144,7 @@ class Settings:
                              "remove DASHBOARD_TOKEN and DASHBOARD_TOKEN_FILE")
         if client_secret and not token:
             raise ValueError("Discord sign-in checks server membership with the bot, so it needs BOT_TOKEN")
-        sources = tuple(source for source, flag in (
-            ("yahooauction", "ENABLE_YAHOO_AUCTION"),
-            ("mercari", "ENABLE_MERCARI"),
-            ("surugaya", "ENABLE_SURUGAYA"),
-        ) if boolean(flag))
+        sources = tuple(marketplace.source for marketplace in MARKETPLACES if boolean(marketplace.setting))
         return cls(
             token=token, database_path=database_path, interval=interval,
             concurrency=positive("CHECK_CONCURRENCY", 4, maximum=32),

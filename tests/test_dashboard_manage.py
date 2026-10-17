@@ -254,6 +254,7 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
             ("POST", f"/api/alerts/{staff}/rollback", {"version_id": version["id"], "expected_version_id": version["id"]}),
             ("POST", f"/api/alerts/{staff}/posts/removal", {"version_id": version["id"], "message_ids": ["10"]}),
             ("DELETE", f"/api/alerts/{staff}", {}),
+            ("PUT", f"/api/alerts/{staff}/sources", {"sources": []}),
             ("POST", "/api/alerts", {"channel_id": str(STAFF), "search_query": "staff"}),
             ("PUT", f"/api/channels/{STAFF}/hidden/{item}", {}),
             ("DELETE", f"/api/channels/{STAFF}/hidden/{item}", {}),
@@ -266,6 +267,8 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Manage Channels permission in #staff", (await response.json())["message"])
         # Nothing changed, and reading is fine: managing the server already needs Manage Channels in it.
         self.assertEqual((await self.repository.get_review_rules(staff))["versions_total"], 1)
+        self.assertEqual(await self.repository.alert_sources([staff]),
+                         {staff: ["yahooauction", "mercari", "surugaya", "rakuma"]})
         self.assertEqual((await self.client.get(f"/api/channels/{STAFF}/hidden")).status, 200)
         self.assertEqual((await self.client.get(f"/api/alerts/{staff}/rules")).status, 200)
         # A member overwrite of her own beats the role's.
@@ -277,6 +280,50 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
             self.sign_in(user_id, {GUILD_A: Member(roles)})
             response = await self.call("POST", "/api/alerts", channel_id=str(STAFF), search_query=f"by {user_id}")
             self.assertEqual(response.status, 201, user_id)
+
+    async def test_a_search_checks_the_marketplaces_chosen_for_it_and_new_ones_start_quietly(self):
+        self.sign_in(ALICE)
+        alert_id = self.alert_a["id"]
+        path = f"/api/alerts/{alert_id}/sources"
+        # The bot searches Mercari only, but a search may still choose the others for later.
+        self.dashboard.settings = replace(self.dashboard.settings, enabled_sources=("mercari",))
+        self.assertEqual((await (await self.client.get("/api/session")).json())["enabled_sources"], ["mercari"])
+        response = await self.call("PUT", path, sources=["rakuma", "mercari", "rakuma"])
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.json(), {"sources": ["mercari", "rakuma"], "turned_on": [],
+                                                 "turned_off": ["yahooauction", "surugaya"]})
+        entry = self.events("alert_sources_changed")[0]
+        self.assertEqual((entry["actor_id"], entry["alert_id"], entry["turned_off"]),
+                         (str(ALICE), str(alert_id), ["yahooauction", "surugaya"]))
+        listed = {alert["id"]: alert for alert in (await (await self.client.get("/api/alerts")).json())["alerts"]}
+        self.assertEqual(listed[str(alert_id)]["sources"], ["mercari", "rakuma"])
+        self.assertEqual(listed[str(self.gone["id"])]["sources"], ["yahooauction", "mercari", "surugaya", "rakuma"])
+
+        # Turned back on, Yahoo saves what it has before it posts again; Mercari keeps posting.
+        response = await self.call("PUT", path, sources=["yahooauction", "mercari", "rakuma"])
+        self.assertEqual((await response.json())["turned_on"], ["yahooauction"])
+        states = (await self.repository.source_states())[alert_id]
+        self.assertEqual((states["yahooauction"], states["mercari"], states["surugaya"]),
+                         ((True, False), (True, True), (False, True)))
+        detail = await (await self.client.get(f"/api/alerts/{alert_id}")).json()
+        self.assertEqual(detail["alert"]["sources"], ["yahooauction", "mercari", "rakuma"])
+
+        # Saving the same choice changes nothing; none at all is allowed, and it posts nothing.
+        response = await self.call("PUT", path, sources=["rakuma", "mercari", "yahooauction"])
+        self.assertEqual(await response.json(), {"sources": ["yahooauction", "mercari", "rakuma"],
+                                                 "turned_on": [], "turned_off": []})
+        self.assertEqual(len(self.events("alert_sources_changed")), 2)
+        self.assertEqual((await (await self.call("PUT", path, sources=[])).json())["sources"], [])
+        for body in ({"sources": ["ebay"]}, {"sources": "mercari"}, {"sources": [7]}, {}):
+            response = await self.client.put(path, json=body, headers=self.headers)
+            self.assertEqual(response.status, 400, body)
+        self.assertEqual(await self.repository.alert_sources([alert_id]), {alert_id: []})
+
+        # A search made now posts what Mercari has; the others start quietly once the bot searches them.
+        response = await self.call("POST", "/api/alerts", channel_id=str(POSTERS), search_query="vinyl")
+        new = await response.json()
+        self.assertEqual(new["sources"], ["yahooauction", "mercari", "surugaya", "rakuma"])
+        self.assertEqual((await self.repository.source_states())[int(new["id"])], {"mercari": (True, True)})
 
     async def test_unregistering_says_what_it_touches_and_works_for_deleted_channels(self):
         item = await self.item("posted")
