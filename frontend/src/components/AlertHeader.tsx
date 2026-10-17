@@ -48,7 +48,6 @@ export function AlertHeader({ alert, totals, draft }: Props) {
             <Fact value={channelName(alert)}>channel</Fact>
             <Fact value={formatCount(alert.listing_count)}>{alert.listing_count === 1 ? "listing" : "listings"}</Fact>
             <Fact value={formatCount(alert.review_count)} tone={alert.review_count ? "warning.main" : undefined}>need review</Fact>
-            <Fact value={formatCount(alert.labeled_count)}>labeled</Fact>
             {alert.last_seen_at && (
               <Tooltip title={formatDateTime(alert.last_seen_at)}>
                 <span><Fact value={formatRelative(alert.last_seen_at)}>last checked</Fact></span>

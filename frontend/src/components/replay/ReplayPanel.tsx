@@ -22,92 +22,55 @@ import type { AlertSummary, Ruleset, ReplayItem, ReplaySummary } from "../../api
 import { errorMessage } from "../../lib/errors";
 import { formatCount, formatDateTime, formatPrice, formatRelative, plural, safeUrl } from "../../lib/format";
 import type { Draft } from "../../lib/useDraft";
-import { CHANGES, LABELS, VERDICTS, sourceName } from "../../lib/vocabulary";
+import { CHANGES, VERDICTS, sourceName } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { StoredReplay } from "../Workspace";
 import { DecisionButton } from "../common/Decision";
 import { EmptyState } from "../common/Feedback";
 import { ListingImage } from "../common/ListingImage";
 
-type Show = "changes" | "newly_allowed" | "newly_blocked" | "problems" | "all";
-
-const UNWANTED = new Set(["wrong_product", "accessory", "bundle"]);
-
-/** A labeled listing the draft gets wrong: relevant but not posted, or unwanted but posted. */
-function isProblem(item: ReplayItem): boolean {
-  const label = item.candidate.feedback;
-  const verdict = item.draft_decision.verdict;
-  return (label === "relevant" && verdict !== "accepted") || (label !== null && UNWANTED.has(label) && verdict === "accepted");
-}
+type Show = "changes" | "newly_allowed" | "newly_blocked" | "all";
 
 const SHOWS: Record<Show, { name: string; test: (item: ReplayItem) => boolean }> = {
   changes: { name: "Changed", test: (item) => item.change !== "unchanged" },
   newly_allowed: { name: "Newly allowed", test: (item) => item.change === "newly_allowed" },
   newly_blocked: { name: "Newly filtered", test: (item) => item.change === "newly_blocked" },
-  problems: { name: "Label disagrees", test: isProblem },
   all: { name: "Everything checked", test: () => true },
 };
 
 function Tally({ value, children, tone, onClick, active }: {
-  value: number; children: ReactNode; tone?: string; onClick?: () => void; active?: boolean;
+  value: number; children: ReactNode; tone?: string; onClick: () => void; active: boolean;
 }) {
-  const body = (
-    <Box sx={{ textAlign: "left" }}>
-      <Typography component="span" sx={{ display: "block", fontSize: "1.25rem", fontWeight: 680, color: value ? tone : "text.secondary",
-        lineHeight: 1.2, ...figures }}>
-        {formatCount(value)}
-      </Typography>
-      <Typography component="span" variant="body2" color="text.secondary">{children}</Typography>
-    </Box>
-  );
-  if (!onClick) return <Box sx={{ px: 1.5, py: 1 }}>{body}</Box>;
   return (
     <ButtonBase onClick={onClick} aria-pressed={active} sx={{ px: 1.5, py: 1, borderRadius: 1, border: 1,
       borderColor: active ? "text.primary" : "transparent", "&:hover": { bgcolor: "action.hover" } }}>
-      {body}
+      <Box sx={{ textAlign: "left" }}>
+        <Typography component="span" sx={{ display: "block", fontSize: "1.25rem", fontWeight: 680, color: value ? tone : "text.secondary",
+          lineHeight: 1.2, ...figures }}>
+          {formatCount(value)}
+        </Typography>
+        <Typography component="span" variant="body2" color="text.secondary">{children}</Typography>
+      </Box>
     </ButtonBase>
   );
 }
 
 function Summary({ summary, show, onShow }: { summary: ReplaySummary; show: Show; onShow: (show: Show) => void }) {
-  const missed = summary.relevant_blocked + summary.relevant_review;
-  const leaked = summary.unwanted_allowed;
   return (
-    <Box sx={{ display: "grid", gap: 1.5 }}>
-      <Box>
-        <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>What the draft changes</Typography>
-        <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5 }}>
-          <Tally value={summary.newly_allowed} tone="success.main" active={show === "newly_allowed"} onClick={() => onShow("newly_allowed")}>
-            newly allowed
-          </Tally>
-          <Tally value={summary.newly_blocked} tone="text.primary" active={show === "newly_blocked"} onClick={() => onShow("newly_blocked")}>
-            newly filtered
-          </Tally>
-          <Tally value={summary.changed} tone="warning.main" active={show === "changes"} onClick={() => onShow("changes")}>
-            other changes, such as held for review
-          </Tally>
-          <Tally value={summary.unchanged} active={show === "all"} onClick={() => onShow("all")}>unchanged</Tally>
-        </Stack>
-      </Box>
-      <Box>
-        <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>Your labels</Typography>
-        {summary.labeled ? (
-          <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5 }}>
-            <Tally value={missed} tone="secondary.main" active={show === "problems"} onClick={() => onShow("problems")}>
-              relevant {missed === 1 ? "listing" : "listings"} not posted
-            </Tally>
-            <Tally value={leaked} tone="secondary.main" active={show === "problems"} onClick={() => onShow("problems")}>
-              unwanted {leaked === 1 ? "listing" : "listings"} still posted
-            </Tally>
-            <Tally value={summary.labeled - missed - leaked}>agree with your labels</Tally>
-          </Stack>
-        ) : (
-          <Typography variant="body2" color="text.secondary">
-            None of the checked listings has a label. Label listings as relevant, wrong product, accessory or bundle to see here
-            whether the draft gets them right.
-          </Typography>
-        )}
-      </Box>
+    <Box>
+      <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>What the draft changes</Typography>
+      <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5 }}>
+        <Tally value={summary.newly_allowed} tone="success.main" active={show === "newly_allowed"} onClick={() => onShow("newly_allowed")}>
+          newly allowed
+        </Tally>
+        <Tally value={summary.newly_blocked} tone="text.primary" active={show === "newly_blocked"} onClick={() => onShow("newly_blocked")}>
+          newly filtered
+        </Tally>
+        <Tally value={summary.changed} tone="warning.main" active={show === "changes"} onClick={() => onShow("changes")}>
+          other changes, such as held for review
+        </Tally>
+        <Tally value={summary.unchanged} active={show === "all"} onClick={() => onShow("all")}>unchanged</Tally>
+      </Stack>
     </Box>
   );
 }
@@ -130,11 +93,6 @@ function Row({ item }: { item: ReplayItem }) {
             </Typography>
           </Box>
         </Stack>
-      </TableCell>
-      <TableCell>
-        <Typography variant="body2" sx={{ color: "secondary.main", fontWeight: 650, whiteSpace: "nowrap" }}>
-          {candidate.feedback ? LABELS[candidate.feedback].name : ""}
-        </Typography>
       </TableCell>
       <TableCell><DecisionButton decision={item.original_decision} label={`Recorded ${formatDateTime(candidate.observed_at)}`} /></TableCell>
       <TableCell><DecisionButton decision={item.active_decision} label="Published rules" /></TableCell>
@@ -170,7 +128,7 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
     onSuccess: (result, serialized) => {
       onResult({ alertId: alert!.id, serialized, ranAt: new Date().toISOString(), result });
       setPage(0);
-      setShow(result.summary.labeled && result.items.some(isProblem) ? "problems" : "changes");
+      setShow("changes");
     },
   });
   const items = useMemo(() => stored?.result.items.filter(SHOWS[show].test) ?? [], [stored, show]);
@@ -204,8 +162,8 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
         <Box sx={{ maxWidth: 720 }}>
           <Typography variant="h2" component="h2">Compare the draft with the published rules</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            Checks the latest decision of the {formatCount(limit)} most recently seen listings, plus every listing you
-            labeled, with both rule sets. Nothing is saved or posted.
+            Checks the latest decision of the {formatCount(limit)} most recently seen listings with both rule sets.
+            Nothing is saved or posted.
           </Typography>
         </Box>
         <Button variant="contained" onClick={() => mutate(draft.serialized)} disabled={run.isPending || !draft.ready}
@@ -236,8 +194,7 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
             </Alert>
           )}
           <Typography variant="caption" color="text.secondary" sx={figures}>
-            Replayed {formatRelative(stored.ranAt)}: {plural(summary.total, "listing")} checked
-            {summary.labeled_extra ? `, ${formatCount(summary.labeled_extra)} of them labeled listings seen earlier` : ""}.
+            Replayed {formatRelative(stored.ranAt)}: {plural(summary.total, "listing")} checked.
             {summary.truncated && !summary.budget_exceeded && summary.available > summary.recent
               ? ` This search has ${formatCount(summary.available)} listings; only the most recently seen were checked.` : ""}
           </Typography>
@@ -255,16 +212,13 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
               ))}
             </Stack>
             {items.length === 0 ? (
-              <EmptyState title={show === "problems" ? "The draft agrees with every label" : "Nothing here"}>
-                {show === "problems" ? "No labeled listing is posted against its label." : "No checked listing falls in this group."}
-              </EmptyState>
+              <EmptyState title="Nothing here">No checked listing falls in this group.</EmptyState>
             ) : (
               <TableContainer sx={{ border: 1, borderColor: "divider", borderRadius: 1, bgcolor: "background.paper" }}>
                 <Table size="small" aria-label="Replay results">
                   <TableHead>
                     <TableRow>
                       <TableCell>Listing</TableCell>
-                      <TableCell>Your label</TableCell>
                       <TableCell>Recorded then</TableCell>
                       <TableCell>Published rules</TableCell>
                       <TableCell>Your draft</TableCell>

@@ -27,8 +27,8 @@ export function ImportHistoryDialog({ open, onClose }: { open: boolean; onClose:
     <ConfirmDialog open={open} title="Import saved history" confirm="Import" busy={importing.isPending}
       onConfirm={() => importing.mutate()} onClose={onClose}>
       <Typography variant="body2" sx={{ mb: 1.5 }}>
-        Adds up to 1,000 recent listings the bot posted or tracked before candidate history existed, so you can
-        label them. Running it again skips listings that are already here.
+        Adds up to 1,000 recent listings the bot posted or tracked before candidate history existed. Running it
+        again skips listings that are already here.
       </Typography>
       <Typography variant="body2" color="text.secondary">
         Their original decisions were not saved, so they come in as needing review. Listings that earlier filters

@@ -63,7 +63,7 @@ describe("request", () => {
 });
 
 describe("api.candidates", () => {
-  const query: CandidateQuery = { alertId: "5", search: "B1 ポスター", source: "mercari", verdict: "", feedback: "unlabeled", latest: true };
+  const query: CandidateQuery = { alertId: "5", search: "B1 ポスター", source: "mercari", verdict: "review", latest: true };
 
   it("asks for facet counts on the first page only", async () => {
     const fetch = respond(200, { items: [] });
@@ -73,7 +73,7 @@ describe("api.candidates", () => {
     const first = new URL(calls[0][0], "http://filter.lab");
     const next = new URL(calls[1][0], "http://filter.lab");
     expect(Object.fromEntries(first.searchParams)).toEqual({
-      limit: "48", latest: "1", alert_id: "5", search: "B1 ポスター", source: "mercari", feedback: "unlabeled", facets: "1",
+      limit: "48", latest: "1", alert_id: "5", search: "B1 ポスター", source: "mercari", verdict: "review", facets: "1",
     });
     expect(next.searchParams.get("cursor")).toBe("MjAyNi0xMC0xNlQwMDowMDowMFp8MTA");
     expect(next.searchParams.get("latest")).toBe("0");

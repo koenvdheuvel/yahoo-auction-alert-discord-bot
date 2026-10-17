@@ -46,7 +46,7 @@ export function Login({ sessionEnded, unreachable, onSignedIn }: Props) {
           <Typography variant="h1" component="h1">Filter Lab</Typography>
         </Stack>
         <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-          Label what your searches find, and tune the rules that decide what gets posted to Discord.
+          See what your searches find, and tune the rules that decide what gets posted to Discord.
         </Typography>
         <Stack component="form" spacing={2} onSubmit={submit} noValidate>
           {sessionEnded && !login.isError && (

@@ -2,8 +2,6 @@
 
 export type Source = "yahooauction" | "mercari" | "surugaya";
 export type Verdict = "accepted" | "filtered" | "review";
-export type Label = "relevant" | "wrong_product" | "accessory" | "bundle" | "unsure";
-export type LabelFilter = Label | "unlabeled";
 export type Policy = "require" | "exclude" | "review";
 export type TermMethod = "contains" | "exact" | "regex";
 
@@ -24,7 +22,6 @@ export interface AlertSummary {
   accepted_count: number;
   filtered_count: number;
   review_count: number;
-  labeled_count: number;
   last_seen_at: string | null;
   active_version_id: string | null;
 }
@@ -82,13 +79,10 @@ export interface Candidate {
   incomplete: boolean;
   observed_at: string;
   last_seen_at: string | null;
-  feedback: Label | null;
-  feedback_updated_at: string | null;
 }
 
 export interface Facets {
   verdict: Record<Verdict, number>;
-  feedback: Record<LabelFilter, number>;
 }
 
 export interface CandidatePage {
@@ -167,7 +161,6 @@ export interface ReplayCandidate {
   incomplete: boolean;
   observed_at: string;
   last_seen_at: string | null;
-  feedback: Label | null;
   price: number | null;
   url: string | null;
   image_url: string | null;
@@ -192,16 +185,8 @@ export interface ReplaySummary {
   newly_blocked: number;
   changed: number;
   unchanged: number;
-  labeled: number;
-  relevant_allowed: number;
-  relevant_blocked: number;
-  relevant_review: number;
-  unwanted_allowed: number;
-  unwanted_blocked: number;
-  unwanted_review: number;
   available: number;
   recent: number;
-  labeled_extra: number;
   truncated: boolean;
   budget_exceeded: boolean;
 }

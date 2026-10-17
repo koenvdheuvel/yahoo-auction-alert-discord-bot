@@ -14,9 +14,9 @@ import Tooltip from "@mui/material/Tooltip";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import type { RefObject } from "react";
 
-import type { Facets, LabelFilter, Source, Verdict } from "../../api/types";
+import type { Facets, Source, Verdict } from "../../api/types";
 import { formatCount } from "../../lib/format";
-import { LABEL_ORDER, LABELS, SOURCES, VERDICTS } from "../../lib/vocabulary";
+import { SOURCES, VERDICTS } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { ListingFilters } from "../Workspace";
 
@@ -29,7 +29,7 @@ interface Props {
   searchRef: RefObject<HTMLInputElement | null>;
 }
 
-// Show "All marketplaces" and "Any label" in the field instead of an empty box under a floating label.
+// Show "All marketplaces" and "Any decision" in the field instead of an empty box under a floating label.
 const selectSlots = { inputLabel: { shrink: true }, select: { displayEmpty: true } } as const;
 // On phones the selects share each row evenly.
 const selectFlex = { xs: "1 1 160px", sm: "0 1 auto" } as const;
@@ -40,7 +40,7 @@ function counted(name: string, value: number | undefined) {
 
 export function FilterBar({ filters, onFilters, facets, searchRef }: Props) {
   const theme = useTheme();
-  // Four buttons with counts do not fit a phone, so phones get a select like the other filters.
+  // Four buttons with counts do not fit a phone, so phones get a select like the marketplace filter.
   const narrow = useMediaQuery(theme.breakpoints.down("sm"));
   const set = (changes: Partial<ListingFilters>) => onFilters({ ...filters, ...changes });
   return (
@@ -81,14 +81,6 @@ export function FilterBar({ filters, onFilters, facets, searchRef }: Props) {
           ))}
         </ToggleButtonGroup>
       )}
-      <TextField select label="Your label" value={filters.feedback} sx={{ minWidth: 176, flex: selectFlex }} slotProps={selectSlots}
-        onChange={(event) => set({ feedback: event.target.value as LabelFilter | "" })}>
-        <MenuItem value="">Any label</MenuItem>
-        <MenuItem value="unlabeled">{counted("Not labeled", facets?.feedback.unlabeled)}</MenuItem>
-        {LABEL_ORDER.map((label) => (
-          <MenuItem key={label} value={label}>{counted(LABELS[label].name, facets?.feedback[label])}</MenuItem>
-        ))}
-      </TextField>
     </Box>
   );
 }

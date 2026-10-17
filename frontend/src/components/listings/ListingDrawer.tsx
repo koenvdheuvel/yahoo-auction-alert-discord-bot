@@ -14,16 +14,14 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { KeyboardEvent, ReactNode } from "react";
 
-import type { Candidate, Label } from "../../api/types";
+import type { Candidate } from "../../api/types";
 import { formatDateTime, formatPrice, safeUrl } from "../../lib/format";
 import { isTyping } from "../../lib/hooks";
 import { listingTitle } from "../../lib/listing";
-import { LABEL_ORDER, LABELS, sourceName } from "../../lib/vocabulary";
+import { sourceName } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import { ReasonList, VerdictText } from "../common/Decision";
 import { ListingImage } from "../common/ListingImage";
-import { LabelMark } from "../common/Marks";
-import { LabelButtons } from "./LabelButtons";
 
 interface Props {
   candidate: Candidate | null;
@@ -33,7 +31,6 @@ interface Props {
   onPrevious: () => void;
   onNext: () => void;
   onClose: () => void;
-  onLabel: (candidate: Candidate, label: Label | null) => void;
   onTestTitle: (candidate: Candidate) => void;
 }
 
@@ -52,16 +49,13 @@ const ORIGINS: Record<Candidate["origin"], string> = {
   item_import: "Imported from tracked listings",
 };
 
-/** One listing in full, with the same label keys as the grid. */
+/** One listing in full. j and k move through the list, like in the grid. */
 export function ListingDrawer(props: Props) {
-  const { candidate, position, hasPrevious, hasNext, onPrevious, onNext, onClose, onLabel, onTestTitle } = props;
+  const { candidate, position, hasPrevious, hasNext, onPrevious, onNext, onClose, onTestTitle } = props;
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (!candidate || isTyping(event) || event.metaKey || event.ctrlKey || event.altKey) return;
-    const label = LABEL_ORDER.find((name) => LABELS[name].key === event.key);
-    if (label) onLabel(candidate, candidate.feedback === label ? null : label);
-    else if (event.key === "0") onLabel(candidate, null);
-    else if ((event.key === "j" || event.key === "ArrowRight") && hasNext) onNext();
+    if ((event.key === "j" || event.key === "ArrowRight") && hasNext) onNext();
     else if ((event.key === "k" || event.key === "ArrowLeft") && hasPrevious) onPrevious();
     else return;
     event.preventDefault();
@@ -84,12 +78,7 @@ export function ListingDrawer(props: Props) {
             <Typography variant="caption" color="text.secondary" sx={{ flex: 1, ...figures }}>{position}</Typography>
             <IconButton onClick={onClose} aria-label="Close details"><Close /></IconButton>
           </Stack>
-          <Box sx={{ position: "relative" }}>
-            <ListingImage src={candidate.payload.image_url} ratio="4 / 3" />
-            {candidate.feedback && (
-              <Box sx={{ position: "absolute", top: 8, right: 8 }}><LabelMark label={candidate.feedback} size={64} /></Box>
-            )}
-          </Box>
+          <ListingImage src={candidate.payload.image_url} ratio="4 / 3" />
           <Box sx={{ p: 2.5, display: "grid", gap: 2 }}>
             <Box>
               <Typography variant="h2" component="h2" sx={{ fontStretch: "100%", overflowWrap: "anywhere" }}>{title}</Typography>
@@ -99,12 +88,6 @@ export function ListingDrawer(props: Props) {
                 </Typography>
               )}
             </Box>
-            <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
-              <LabelButtons value={candidate.feedback} onChange={(label) => onLabel(candidate, label)} subject={title} />
-              <Typography variant="body2" sx={{ color: candidate.feedback ? "secondary.main" : "text.secondary", fontWeight: 650 }}>
-                {candidate.feedback ? LABELS[candidate.feedback].name : "Not labeled"}
-              </Typography>
-            </Stack>
             <Box>
               <VerdictText verdict={candidate.verdict} />
               <Box sx={{ mt: 1 }}><ReasonList reasons={candidate.decision.reasons} /></Box>

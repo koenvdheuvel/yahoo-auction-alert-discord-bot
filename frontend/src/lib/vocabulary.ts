@@ -1,4 +1,4 @@
-import type { AlertSummary, Change, Label, Policy, Source, TermMethod, Verdict } from "../api/types";
+import type { AlertSummary, Change, Policy, Source, TermMethod, Verdict } from "../api/types";
 
 export const SOURCES: Record<Source, string> = {
   yahooauction: "Yahoo Auctions",
@@ -22,27 +22,6 @@ export const VERDICT_COLOR: Record<Verdict, string> = {
   review: "warning.main",
   filtered: "text.secondary",
 };
-
-/** Which mark the label draws on the listing photo. */
-export type MarkShape = "circle" | "cross" | "question";
-
-export interface LabelInfo {
-  name: string;
-  key: string;
-  mark: MarkShape;
-  hint: string;
-}
-
-/** In keyboard order: 1 to 5. */
-export const LABELS: Record<Label, LabelInfo> = {
-  relevant: { name: "Relevant", key: "1", mark: "circle", hint: "The listing this search is for" },
-  wrong_product: { name: "Wrong product", key: "2", mark: "cross", hint: "Matches the words, but is another product" },
-  accessory: { name: "Accessory", key: "3", mark: "cross", hint: "A part or extra, such as a frame or a case only" },
-  bundle: { name: "Bundle", key: "4", mark: "cross", hint: "Sold together with other items" },
-  unsure: { name: "Unsure", key: "5", mark: "question", hint: "Not sure yet; replay does not count it" },
-};
-
-export const LABEL_ORDER = Object.keys(LABELS) as Label[];
 
 export const POLICIES: Record<Policy, { name: string; description: string }> = {
   require: { name: "Must match", description: "Listings that match no term in this group are filtered." },

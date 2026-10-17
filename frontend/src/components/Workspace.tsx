@@ -51,8 +51,7 @@ export function Workspace() {
   const [replays, setReplays] = useState<Record<string, StoredReplay>>({});
   // "Replay draft" in the Rules tab opens Replay and starts it in one step.
   const [replayRequested, setReplayRequested] = useState(false);
-  const [filters, setFilters] = useState<ListingFilters>(
-    { search: "", source: "", verdict: "", feedback: "", latest: true });
+  const [filters, setFilters] = useState<ListingFilters>({ search: "", source: "", verdict: "", latest: true });
 
   const openTitleTest = (seed: TitleSeed = {}) =>
     setTitleTest((current) => ({ id: (current?.id ?? 0) + 1, seed, open: true }));

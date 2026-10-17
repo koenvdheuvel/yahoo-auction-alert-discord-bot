@@ -26,7 +26,7 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
         open={current !== undefined}
         autoHideDuration={current?.severity === "error" ? 9000 : 4000}
         onClose={(_, reason) => reason !== "clickaway" && close()}
-        // Bottom left sits over the list of searches, clear of the draft bar and bulk labels.
+        // Bottom left sits over the list of searches, clear of the draft bar.
         anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
       >
         {current && (

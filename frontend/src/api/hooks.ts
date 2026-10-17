@@ -1,16 +1,8 @@
-import {
-  keepPreviousData,
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type InfiniteData,
-  type QueryClient,
-} from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { canonical } from "../lib/ruleset";
 import { ApiError, api, type CandidateQuery } from "./client";
-import type { Candidate, CandidatePage, Label, RemovalDays, Ruleset } from "./types";
+import type { RemovalDays, Ruleset } from "./types";
 
 export const PAGE_SIZE = 48;
 
@@ -74,82 +66,6 @@ export function useCandidates(query: CandidateQuery) {
     // instead of flashing placeholders; another search starts empty.
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1].alertId === query.alertId ? previous : undefined,
-  });
-}
-
-type Pages = InfiniteData<CandidatePage, string | null>;
-
-/** Sets labels in every loaded list without moving rows, and keeps the label counts right. */
-function applyLabels(client: QueryClient, labels: Map<string, Label | null>) {
-  client.setQueriesData<Pages>({ queryKey: keys.allCandidates }, (data) => {
-    if (!data) return data;
-    let facets = data.pages[0]?.facets;
-    const pages = data.pages.map((page) => ({
-      ...page,
-      items: page.items.map((item) => {
-        if (!labels.has(item.id)) return item;
-        const next = labels.get(item.id) ?? null;
-        if (item.feedback === next) return item;
-        if (facets) {
-          const before = item.feedback ?? "unlabeled";
-          const after = next ?? "unlabeled";
-          facets = { ...facets, feedback: { ...facets.feedback, [before]: facets.feedback[before] - 1, [after]: facets.feedback[after] + 1 } };
-        }
-        return { ...item, feedback: next };
-      }),
-    }));
-    if (pages[0] && facets) pages[0] = { ...pages[0], facets };
-    return { ...data, pages };
-  });
-}
-
-function currentLabels(client: QueryClient, ids: string[]): Map<string, Label | null> {
-  const wanted = new Set(ids);
-  const found = new Map<string, Label | null>();
-  for (const [, data] of client.getQueriesData<Pages>({ queryKey: keys.allCandidates })) {
-    for (const item of data?.pages.flatMap((page) => page.items) ?? []) {
-      if (wanted.has(item.id) && !found.has(item.id)) found.set(item.id, item.feedback);
-    }
-  }
-  return found;
-}
-
-export interface LabelChange {
-  ids: string[];
-  label: Label | null;
-}
-
-/** review.py accepts at most this many listings per bulk label request. */
-export const LABEL_BATCH = 200;
-
-export function useLabelMutation() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ ids, label }: LabelChange) => {
-      if (ids.length === 1) return { items: [await api.label(ids[0]!, label)], missing: [] as string[] };
-      const result = { items: [] as Candidate[], missing: [] as string[] };
-      for (let start = 0; start < ids.length; start += LABEL_BATCH) {
-        const part = await api.labelMany(ids.slice(start, start + LABEL_BATCH), label);
-        result.items.push(...part.items);
-        result.missing.push(...part.missing);
-      }
-      return result;
-    },
-    onMutate: async ({ ids, label }) => {
-      await client.cancelQueries({ queryKey: keys.allCandidates });
-      const previous = currentLabels(client, ids);
-      applyLabels(client, new Map(ids.map((id) => [id, label])));
-      return { previous };
-    },
-    onError: (_error, _change, context) => {
-      if (context) applyLabels(client, context.previous);
-      // Batches before the failed one were saved, so reload what the server has.
-      void client.invalidateQueries({ queryKey: keys.allCandidates });
-    },
-    onSuccess: ({ items }) => {
-      applyLabels(client, new Map(items.map((item: Candidate) => [item.id, item.feedback])));
-    },
-    onSettled: () => client.invalidateQueries({ queryKey: keys.alerts }),
   });
 }
 

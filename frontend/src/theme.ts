@@ -1,7 +1,7 @@
 import { createTheme } from "@mui/material/styles";
 
-// Contact sheet and china marker: the bot's decisions are printed in quiet inks, the
-// operator's labels are drawn in marker red (palette.secondary). Nothing else uses red.
+// Contact sheet and china marker: the bot's decisions are printed in quiet inks.
+// Marker red (palette.secondary) is only used for the loop in the logo.
 const ink = "#1C2128";
 const graphite = "#59616E";
 

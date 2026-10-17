@@ -138,7 +138,7 @@ export function PostRemovalPreview({ removal }: { removal: PostRemoval }) {
       )}
       {preview.data && !preview.isFetching && <Result data={preview.data} removal={removal} />}
       <Typography variant="caption" color="text.secondary" component="p">
-        Removed posts cannot be brought back. Posts with 🔔 subscribers stay. The listings and labels in Filter Lab stay too.
+        Removed posts cannot be brought back. Posts with 🔔 subscribers stay. The listings in Filter Lab stay too.
       </Typography>
     </Box>
   );

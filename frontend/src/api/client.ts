@@ -1,11 +1,8 @@
 import type {
   AlertsResponse,
-  Candidate,
   CandidatePage,
   Decision,
   ImportResult,
-  Label,
-  LabelFilter,
   RemovalDays,
   RemovalPreview,
   RemovalResult,
@@ -78,7 +75,6 @@ export interface CandidateQuery {
   search: string;
   source: Source | "";
   verdict: Verdict | "";
-  feedback: LabelFilter | "";
   latest: boolean;
 }
 
@@ -95,16 +91,11 @@ export const api = {
     if (query.search) params.set("search", query.search);
     if (query.source) params.set("source", query.source);
     if (query.verdict) params.set("verdict", query.verdict);
-    if (query.feedback) params.set("feedback", query.feedback);
     // Facet counts only change with the filters, so only the first page asks for them.
     if (cursor) params.set("cursor", cursor);
     else params.set("facets", "1");
     return request<CandidatePage>(`/api/candidates?${params.toString()}`, { signal });
   },
-  label: (candidateId: string, label: Label | null) =>
-    request<Candidate>(`/api/candidates/${encodeURIComponent(candidateId)}/feedback`, { method: "POST", body: { label } }),
-  labelMany: (ids: string[], label: Label | null) =>
-    request<{ items: Candidate[]; missing: string[] }>("/api/candidates/feedback", { method: "POST", body: { ids, label } }),
   validate: (ruleset: Ruleset, signal?: AbortSignal) =>
     request<{ ruleset: Ruleset }>("/api/rules/validate", { method: "POST", body: { ruleset }, signal }),
   preview: (body: { ruleset: Ruleset; title: string; source: Source; price: number; stock: number; alert_id?: string }) =>
