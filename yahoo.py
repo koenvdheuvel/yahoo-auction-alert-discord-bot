@@ -17,7 +17,7 @@ class YahooAuctionItem(AbstractItem):
 
     @property
     def url(self) -> str:
-        return f"https://buyee.jp/item/yahoo/auction/{self.id}"
+        return f"https://auctions.yahoo.co.jp/jp/auction/{self.id}"
 
 class YahooAuctionsChecker(AlertChecker):
     def get_embed_color(self) -> Color:
