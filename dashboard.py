@@ -22,6 +22,7 @@ from aiohttp import web
 
 from dashboard_auth import (CALLBACK_PATH, LOGIN_PATH, MANAGER, DiscordGuilds, DiscordOAuth, DiscordRefused,
                             DiscordUnavailable)
+from dashboard_graphs import Graphs
 from dashboard_limits import (DISCORD_FAILURES_PER_MINUTE, VISITOR_FAILURES_PER_MINUTE, FailureLimiter,
                               client_address, forwarded_proto, visitor_key)
 from dashboard_manage import Management
@@ -222,6 +223,8 @@ class DashboardServer:
         self.bot_running = bot_running
         # The bot's Runtime, for the status page. main.py sets it; the standalone dashboard has none.
         self.runtime = None
+        # The Status page's graphs, read from Prometheus; None without PROMETHEUS_URL.
+        self.graphs = Graphs.from_settings(settings)
         self.management = Management(self, bot)
         self.assets = Path(assets)
         self.service = ReviewService(repository, settings.dashboard_replay_limit)
@@ -563,6 +566,8 @@ class DashboardServer:
             self.runner = None
         await self.management.close()
         await self.service.close()
+        if self.graphs is not None:
+            await self.graphs.close()
         if self.oauth is not None:
             await self.oauth.close()
         checks = [session.check for session in self.sessions.values() if session.check is not None]

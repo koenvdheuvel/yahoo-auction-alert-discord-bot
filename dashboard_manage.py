@@ -1,5 +1,5 @@
 """The dashboard's server management: searches, a channel's posts and hidden listings, cleanup,
-your own 🔔 notifications and the bot's status.
+your own 🔔 notifications and the bot's status and graphs.
 
 Each change does what the matching slash command or reaction does, with the same repository
 functions and the same checks. Every route only reaches the servers the person may see. A
@@ -18,6 +18,7 @@ from channel_maintenance import (HISTORY_SCAN_LIMIT, MAX_DELETE_COUNT, Progress,
                                  delete_recent_bot_posts)
 from commands.base import clean_search_query
 from dashboard_auth import MANAGER, MEMBER, DiscordUnavailable, can_manage
+from dashboard_graphs import DEFAULT_RANGE, RANGES, disabled
 from discord_directory import Lookup, member_permissions, posting, sidebar
 from review_repository import POST_REMOVAL_LIMIT, ReviewNotFound, ReviewValidation, removal_days
 from review_service import identifier
@@ -57,6 +58,7 @@ class Management:
             web.get("/api/guilds", self.guilds, name="guilds"),
             web.get("/api/guilds/{guild}/channels", self.channels, name="guild_channels"),
             web.get("/api/guilds/{guild}/status", self.status, name="guild_status"),
+            web.get("/api/guilds/{guild}/graphs", self.graphs, name="guild_graphs"),
             web.post("/api/alerts", self.register, name="alert_register"),
             web.get("/api/alerts/{id}", self.alert, name="alert"),
             web.delete("/api/alerts/{id}", self.unregister, name="alert_unregister"),
@@ -268,6 +270,18 @@ class Management:
             "totals": {"searches": len(searches),
                        "pending": sum(search["backlog"]["pending"] for search in searches),
                        "failed": sum(search["backlog"]["failed"] for search in searches)}})
+
+    async def graphs(self, request):
+        """The Grafana dashboard's main graphs, from Prometheus, limited to the server's searches."""
+        guild_id = self.guild_in_scope(request, request.match_info["guild"])
+        span = request.query.get("range", DEFAULT_RANGE)
+        if span not in RANGES:
+            raise ReviewValidation(f"range must be one of {', '.join(RANGES)}")
+        if self.server.graphs is None:
+            return web.json_response(disabled(span))
+        searches = {str(alert["id"]): {"search_query": alert["search_query"], "channel_id": str(alert["channel_id"])}
+                    for alert in await self.repository.list_alerts(guild_id=guild_id)}
+        return web.json_response(await self.server.graphs.for_server(span, searches))
 
     # Searches.
 

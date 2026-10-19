@@ -702,7 +702,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/api/guilds")
         tested.add("guilds")
         self.assertEqual([guild["id"] for guild in (await response.json())["guilds"]], [str(GUILD_A)])
-        for name, path in (("guild_channels", "channels"), ("guild_status", "status")):
+        for name, path in (("guild_channels", "channels"), ("guild_status", "status"), ("guild_graphs", "graphs")):
             await check(name, await self.client.get(f"/api/guilds/{GUILD_B}/{path}"), missing=missing_server)
             self.assertEqual((await self.client.get(f"/api/guilds/{GUILD_A}/{path}")).status, 200, name)
 
@@ -829,6 +829,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         await refused("post_removal_status", await get(f"/api/alerts/{a}/posts/removal"))
         await refused("guild_channels", await get(f"/api/guilds/{GUILD_A}/channels"), missing_server)
         await refused("guild_status", await get(f"/api/guilds/{GUILD_A}/status"), missing_server)
+        await refused("guild_graphs", await get(f"/api/guilds/{GUILD_A}/graphs"), missing_server)
         await refused("alert_register", await post("/api/alerts", json={"channel_id": "31", "search_query": "x"},
                                                    headers=h), missing_channel)
         self.assertEqual(missing_alert, {"error": "not_found", "message": "Not found"})

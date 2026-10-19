@@ -48,6 +48,8 @@ Readiness considers every shard hosted by this process. Before workers start, re
 | `REQUEST_TIMEOUT` | `30` | Individual marketplace HTTP attempt timeout |
 | `REQUEST_RETRIES` | `2` | Extra attempts for transient request errors |
 | `DELIVERY_MAX_ATTEMPTS` | `8` | Maximum attempts before a delivery job becomes terminal |
+| `PROMETHEUS_URL` | empty | The Prometheus that scrapes the bot, such as `http://prometheus:9090`, for the graphs on the dashboard's Status page; empty turns them off |
+| `PROMETHEUS_INSTANCE` | empty | This bot's `instance` label in that Prometheus, needed when more than one bot reports under the `auction-bot` job |
 
 `HEALTH_MAX_POLL_AGE` must cover the interval plus the normal duration of an entire cycle, which can exceed a single check timeout when there are many alerts. Use observed poll latency and alert count to choose it. The supplied alert rules read the configured thresholds from metrics rather than assuming a fixed polling interval.
 
@@ -150,6 +152,8 @@ promtool test rules monitoring/grafana.test.yml
 
 [monitoring/grafana-dashboard.json](../monitoring/grafana-dashboard.json) is a ready-made Grafana dashboard (uid `auction-bot`) for the `auction-bot` scrape job. It covers health, polling, per-search checks, marketplace requests, Discord delivery, runtime and Loki logs (by `container` label). Import it and choose the Prometheus and Loki data sources; the `instance` variable selects bot instances.
 
+Every panel has a description, shown by the ⓘ next to its title, that says in plain words what the graph shows and what to look for. A new or changed panel needs one too; a test checks that none is missing.
+
 Useful initial dashboard queries:
 
 ```promql
@@ -184,3 +188,11 @@ The retry operation resets the attempt count and retains an acknowledged `messag
 For legacy filter alerts, open the search in the dashboard: the Rules tab lists its Discord filters, including the disabled ones. Add each term you want to keep to a rule group, then delete the old filter there or with `/filters delete`. The old database never saved whether a filter was text or a regex, so migration cannot infer it safely.
 
 Tune concurrency after watching request/check latency, provider error rates, SQLite queue latency, event loop lag and outbox age together. Increasing ingestion parallelism can increase provider throttling and enqueue deliveries faster than Discord can accept them. Separate workers make that bottleneck visible and allow later changes to delivery concurrency without changing marketplace adapters.
+
+## The same graphs on the dashboard's Status page
+
+The dashboard's Status page (see [dashboard.md](dashboard.md#status)) shows the main panels of this Grafana dashboard, each with its description behind a **?**. They are not copied: at startup the dashboard reads each panel's title, description, unit, drawing style and PromQL from `monitoring/grafana-dashboard.json`, and it runs those queries against `PROMETHEUS_URL` with `$instance`, `$__rate_interval`, `$__interval` and `$__range` filled in the way Grafana fills them. Grafana's rows become the page's headings. To change a graph, change it in Grafana, export the dashboard as JSON into that file (keep the data sources as the dashboard's `prometheus` and `loki` variables), and restart. `PANELS` in `dashboard_graphs.py` lists the panels the Status page shows. Startup stops with a message when one of them is missing, is not a time series or a table, or uses another variable, so a dashboard change cannot quietly break the page.
+
+The browser only talks to the dashboard, and the dashboard asks Prometheus, so Prometheus needs no public address. The browser picks a range (1 hour, 6 hours, 24 hours or 7 days) and never sends PromQL. The answers are shared by everyone for 30 seconds. Most graphs count the whole bot. A panel whose query keeps `alert_id` is about single searches: each server only sees the series of its own searches, and only those whose search text and channel match the search as it is now, so a reused alert ID does not show a deleted search's history. When Prometheus has more than one bot under the `auction-bot` job and `PROMETHEUS_INSTANCE` is not set, the Status page says so and leaves the per-search graphs out, because an alert ID does not say which bot it belongs to.
+
+Embedding Grafana instead would not fit. An embedded panel needs `allow_embedding` and either anonymous access or a separate Grafana sign-in, and the dashboard's content security policy only allows frames and requests from the dashboard itself. Public dashboards take no variables, so they cannot be limited to one server, and anyone with the link sees every search. [Grafana Scenes](https://grafana.com/developers/scenes) only runs inside a Grafana app plugin, and the [Foundation SDK](https://github.com/grafana/grafana-foundation-sdk) writes dashboards as code but does not draw them. Reading the exported JSON keeps one definition of each graph for both.

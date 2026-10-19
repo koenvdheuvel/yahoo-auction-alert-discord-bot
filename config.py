@@ -1,6 +1,7 @@
 """Validated configuration; environment loading belongs to the entry point."""
 from dataclasses import dataclass, field
 import os
+import re
 import stat
 from urllib.parse import urlsplit
 
@@ -61,6 +62,27 @@ def public_url(value):
     return f"{parts.scheme}://{host}{port}"
 
 
+# An instance label: host:port, an IP address, or [IPv6]:port.
+INSTANCE = re.compile(r"[A-Za-z0-9._:%@/\[\]-]{1,255}")
+
+
+def prometheus_url(value):
+    """The Prometheus that scrapes the bot, for the graphs on the dashboard's Status page."""
+    value = value.strip()
+    if not value:
+        return ""
+    parts = urlsplit(value)
+    try:
+        parts.port
+    except ValueError:
+        raise ValueError("PROMETHEUS_URL has an invalid port") from None
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ValueError("PROMETHEUS_URL must start with http:// or https://, such as http://prometheus:9090")
+    if parts.query or parts.fragment or parts.username or parts.password:
+        raise ValueError("PROMETHEUS_URL must be the server's address, without a user name, password or query")
+    return f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}"
+
+
 # Settings that were renamed along with the dashboard. An old name stops startup, so a missed
 # rename does not go unnoticed. A missed REVIEW_DISCORD_CLIENT_SECRET, for example, would
 # otherwise turn Discord sign-in off and switch to the access key.
@@ -108,6 +130,10 @@ class Settings:
     dashboard_trusted_proxies: tuple = ()
     history_retention_days: int = 90
     history_max_rows: int = 50000
+    # The Status page's graphs: the Prometheus that scrapes the bot, and the bot's instance label
+    # there when more than one bot reports to it. Without the address there are no graphs.
+    prometheus_url: str = ""
+    prometheus_instance: str = ""
 
     @property
     def discord_sign_in(self):
@@ -143,6 +169,12 @@ class Settings:
                              "remove DASHBOARD_TOKEN and DASHBOARD_TOKEN_FILE")
         if client_secret and not token:
             raise ValueError("Discord sign-in checks server membership with the bot, so it needs BOT_TOKEN")
+        prometheus = prometheus_url(os.getenv("PROMETHEUS_URL", ""))
+        instance = os.getenv("PROMETHEUS_INSTANCE", "").strip()
+        if instance and not INSTANCE.fullmatch(instance):
+            raise ValueError("PROMETHEUS_INSTANCE must be an instance label, such as auction-bot:9100")
+        if instance and not prometheus:
+            raise ValueError("PROMETHEUS_INSTANCE is only used for the dashboard's graphs; also set PROMETHEUS_URL")
         sources = tuple(source for source, flag in (
             ("yahooauction", "ENABLE_YAHOO_AUCTION"),
             ("mercari", "ENABLE_MERCARI"),
@@ -171,4 +203,5 @@ class Settings:
             dashboard_trusted_proxies=parse_proxies(os.getenv("DASHBOARD_TRUSTED_PROXIES", "")),
             history_retention_days=positive("HISTORY_RETENTION_DAYS", 90, maximum=3650),
             history_max_rows=positive("HISTORY_MAX_ROWS", 50000, maximum=1000000),
+            prometheus_url=prometheus, prometheus_instance=instance,
         )

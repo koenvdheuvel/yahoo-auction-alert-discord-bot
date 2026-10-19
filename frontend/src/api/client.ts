@@ -6,6 +6,8 @@ import type {
   ChannelList,
   ChannelPosts,
   CleanupPreview,
+  GraphRange,
+  GuildGraphs,
   GuildStatus,
   GuildSummary,
   HiddenListings,
@@ -158,6 +160,8 @@ export const api = {
     request<ChannelList>(`/api/guilds/${encodeURIComponent(guildId)}/channels`, { signal }),
   status: (guildId: string, signal?: AbortSignal) =>
     request<GuildStatus>(`/api/guilds/${encodeURIComponent(guildId)}/status`, { signal }),
+  graphs: (guildId: string, range: GraphRange, signal?: AbortSignal) =>
+    request<GuildGraphs>(`/api/guilds/${encodeURIComponent(guildId)}/graphs?range=${range}`, { signal }),
   /** /register in a channel. The server works out the channel's server with Discord. */
   register: (channelId: string, searchQuery: string) =>
     request<AlertSummary>("/api/alerts", { method: "POST", body: { channel_id: channelId, search_query: searchQuery } }),

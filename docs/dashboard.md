@@ -329,6 +329,19 @@ checked since the bot started" until its next check. The standalone
 database. The server list puts a red dot on a server where a search failed its
 last check or a post or DM could not be sent.
 
+Each card and the Searches table have a **?** that explains them. Below them,
+**Graphs** shows the main graphs of the bot's Grafana dashboard for the last
+hour, 6 hours, 24 hours or 7 days: checks and how long ago each marketplace
+last worked, how long rounds take, each search's checks and check time,
+listings, marketplace requests, and Discord delivery and the outbox. Each
+graph's **?** gives the same explanation Grafana shows. Graphs marked **This
+server** only count this server's searches; **All servers** graphs count the
+whole bot. A search's name in a table opens its page. The graphs come from the
+Prometheus that scrapes the bot, so they need `PROMETHEUS_URL`, and
+`PROMETHEUS_INSTANCE` when more than one bot reports to it; see
+[monitoring.md](monitoring.md#the-same-graphs-on-the-dashboards-status-page).
+The standalone `dashboard.py` shows them too.
+
 ## Rules for wrong products, accessories and bundles
 
 Start with two required groups: one identifies the subject and another
@@ -609,6 +622,7 @@ The management routes:
 | `GET /api/guilds` | The server list, with counts and problems for the servers you manage |
 | `GET /api/guilds/{id}/channels` | The channel list in Discord's order, with each channel's searches, hidden listings and the bot's permissions |
 | `GET /api/guilds/{id}/status` | The bot's state and each search's last checks and waiting posts |
+| `GET /api/guilds/{id}/graphs` | The Status page's graphs; `range` is `1h`, `6h`, `24h` (the default) or `7d` |
 | `POST /api/alerts` | `/register`: `channel_id` and `search_query` |
 | `GET` and `DELETE /api/alerts/{id}` | A search with what unregistering touches; `/unregister` |
 | `DELETE /api/alerts/{id}/legacy-filters/{filter}` | `/filters delete` |
@@ -617,6 +631,11 @@ The management routes:
 | `POST .../posts/removal-preview`, `POST` and `GET .../posts/removal` | The channel's cleanup: which posts, queue them, progress |
 | `POST` and `GET /api/channels/{id}/history-scan` | `/cleanup` (`delete_bot_posts`, with `count`) or `/reacttocleanup` (`add_reactions`) |
 | `GET /api/me/notifications`, `PUT` and `DELETE .../{item}` | Your own follows; follow, as 🔔; stop |
+
+The graphs answer `enabled: false` without `PROMETHEUS_URL`. Otherwise
+`times` lists the Unix times that every series' `values` belong to, where
+`null` is a gap. A panel whose query failed has an `error` and no data, and
+`warning` explains a problem that affects every panel.
 
 Every route only reaches the servers you manage, except your own notifications.
 A search, channel or server elsewhere answers exactly like one that does not
