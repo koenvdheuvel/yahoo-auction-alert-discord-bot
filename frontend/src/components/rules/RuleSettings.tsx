@@ -21,6 +21,7 @@ import { useNotify } from "../common/notify";
 
 import type { DiscordFilter, Normalization, Ruleset, Source } from "../../api/types";
 import { formatCount } from "../../lib/format";
+import { useTouch } from "../../lib/responsive";
 import { SOURCES } from "../../lib/vocabulary";
 import { figures, mono } from "../../theme";
 
@@ -103,6 +104,7 @@ interface Props {
 }
 
 export function RuleSettings({ ruleset, onChange, filters, alertId = null, canChange = false, priceError }: Props) {
+  const touch = useTouch();
   const set = (changes: Partial<Ruleset>) => onChange({ ...ruleset, ...changes });
   const toggleSource = (source: Source, on: boolean) =>
     set({ sources: on ? [...ruleset.sources, source] : ruleset.sources.filter((value) => value !== source) });
@@ -153,21 +155,29 @@ export function RuleSettings({ ruleset, onChange, filters, alertId = null, canCh
         ) : filters.length === 0 ? (
           <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>This search has no Discord filters.</Typography>
         ) : (
-          <Box component="ul" sx={{ listStyle: "none", p: 0, m: 0, mt: 1, display: "grid", gap: 1 }}>
-            {filters.map((filter) => (
-              <Box component="li" key={filter.id} sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
-                <Box sx={{ flex: 1, minWidth: 0, opacity: filter.enabled && ruleset.include_legacy ? 1 : 0.65 }}>
-                  <Typography variant="body2" sx={{ fontFamily: filter.method === "regex" ? mono : undefined, overflowWrap: "anywhere" }}>
-                    {filter.value}
-                  </Typography>
-                  <Typography variant="caption" color="textSecondary" sx={figures}>
-                    Filter {filter.id}: {describeFilter(filter)}
-                  </Typography>
+          <>
+            <Box component="ul" sx={{ listStyle: "none", p: 0, m: 0, mt: 1, display: "grid", gap: 1 }}>
+              {filters.map((filter) => (
+                <Box component="li" key={filter.id} sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}>
+                  <Box sx={{ flex: 1, minWidth: 0, opacity: filter.enabled && ruleset.include_legacy ? 1 : 0.65 }}>
+                    <Typography variant="body2" sx={{ fontFamily: filter.method === "regex" ? mono : undefined, overflowWrap: "anywhere" }}>
+                      {filter.value}
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary" sx={figures}>
+                      Filter {filter.id}: {describeFilter(filter)}
+                    </Typography>
+                  </Box>
+                  {alertId && <DeleteFilter alertId={alertId} filter={filter} canChange={canChange} />}
                 </Box>
-                {alertId && <DeleteFilter alertId={alertId} filter={filter} canChange={canChange} />}
-              </Box>
-            ))}
-          </Box>
+              ))}
+            </Box>
+            {/* Tooltips do not open from a tap, so touch screens say here why deleting is off. */}
+            {alertId && !canChange && touch && (
+              <Typography variant="caption" color="textSecondary" component="p" sx={{ mt: 1 }}>
+                You need Manage Channels in this search's channel to delete filters.
+              </Typography>
+            )}
+          </>
         )}
       </Section>
     </Box>

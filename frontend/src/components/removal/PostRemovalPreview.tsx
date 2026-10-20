@@ -6,6 +6,7 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import FormGroup from "@mui/material/FormGroup";
 import LinearProgress from "@mui/material/LinearProgress";
 import Link from "@mui/material/Link";
+import ListItemButton from "@mui/material/ListItemButton";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -13,8 +14,10 @@ import Typography from "@mui/material/Typography";
 import { useState } from "react";
 
 import type { RemovablePost, RemovalDays, RemovalPreview } from "../../api/types";
+import { visuallyHidden } from "../../lib/a11y";
 import { formatCount, formatPrice, formatRelative, plural, safeUrl } from "../../lib/format";
 import { REMOVAL_RANGES, discordLink, reasonLabel } from "../../lib/removal";
+import { useCompact } from "../../lib/responsive";
 import type { PostRemoval } from "../../lib/usePostRemoval";
 import { sourceName } from "../../lib/vocabulary";
 import { figures } from "../../theme";
@@ -23,19 +26,44 @@ import { ListingImage } from "../common/ListingImage";
 
 const SAMPLE = 5;
 
-function PostRow({ post, preview }: { post: RemovablePost; preview: RemovalPreview }) {
+function PostRow({ post, preview, compact }: { post: RemovablePost; preview: RemovalPreview; compact: boolean }) {
   const discord = discordLink(preview.guild_id, preview.channel_id, post.message_id);
   const listing = safeUrl(post.url);
+  const text = (
+    <Box sx={{ minWidth: 0, flex: 1 }}>
+      <Typography variant="body2" noWrap title={post.title}>{post.title}</Typography>
+      <Typography variant="caption" color="textSecondary" component="p" sx={figures}>
+        {sourceName(post.source)}, {formatPrice(post.price)}, posted {formatRelative(post.posted_at)}
+      </Typography>
+    </Box>
+  );
+  if (compact) {
+    // The whole row opens the post in Discord, and the listing gets a button of its own, both big enough for a finger.
+    return (
+      <Box component="li" sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", columnGap: 0.5, alignItems: "center" }}>
+        {discord ? (
+          <ListItemButton component="a" href={discord} target="_blank" rel="noopener noreferrer"
+            sx={{ gap: 1.25, px: 1, ml: -1, py: 0.75, minWidth: 0 }}>
+            {/* The link is named by the title, so the photo stays out of what screen readers say. */}
+            <Box aria-hidden="true" sx={{ display: "flex" }}><ListingImage src={post.image_url} size={40} /></Box>
+            {text}
+            <Box component="span" sx={visuallyHidden}>, opens the post in Discord</Box>
+          </ListItemButton>
+        ) : (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, py: 0.75, minWidth: 0 }}>
+            <ListingImage src={post.image_url} size={40} />
+            {text}
+          </Box>
+        )}
+        {listing && <Button size="small" color="info" href={listing} target="_blank" rel="noopener noreferrer">Listing</Button>}
+      </Box>
+    );
+  }
   return (
     <Box component="li" sx={{ display: "grid", gridTemplateColumns: "40px minmax(0, 1fr) auto", columnGap: 1.25,
       alignItems: "center", py: 0.75 }}>
       <ListingImage src={post.image_url} size={40} />
-      <Box sx={{ minWidth: 0 }}>
-        <Typography variant="body2" noWrap title={post.title}>{post.title}</Typography>
-        <Typography variant="caption" color="textSecondary" component="p" sx={figures}>
-          {sourceName(post.source)}, {formatPrice(post.price)}, posted {formatRelative(post.posted_at)}
-        </Typography>
-      </Box>
+      {text}
       <Stack direction="row" spacing={1.25}>
         {discord && <Link href={discord} target="_blank" rel="noopener noreferrer" variant="caption">Discord</Link>}
         {listing && <Link href={listing} target="_blank" rel="noopener noreferrer" variant="caption">Listing</Link>}
@@ -45,6 +73,7 @@ function PostRow({ post, preview }: { post: RemovablePost; preview: RemovalPrevi
 }
 
 function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval }) {
+  const compact = useCompact();
   const [showAll, setShowAll] = useState(false);
   const posts = data.posts.filter((post) => !removal.kept.has(post.reason));
   const shown = showAll ? posts : posts.slice(0, SAMPLE);
@@ -90,10 +119,12 @@ function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval 
                 </Typography>} />
             ))}
           </FormGroup>
+          {/* Wide screens keep the list in a box of its own, so the notes under it stay in view. Narrow screens
+              let it grow, so the sheet scrolls as one instead of a scroll inside a scroll. */}
           {shown.length > 0 && (
-            <Box component="ul" aria-label="Posts to remove" sx={{ m: 0, p: 0, listStyle: "none", maxHeight: 280, overflowY: "auto",
-              borderTop: 1, borderBottom: 1, borderColor: "divider" }}>
-              {shown.map((post) => <PostRow key={post.message_id} post={post} preview={data} />)}
+            <Box component="ul" aria-label="Posts to remove" sx={{ m: 0, p: 0, listStyle: "none",
+              ...(compact ? {} : { maxHeight: 280, overflowY: "auto" }), borderTop: 1, borderBottom: 1, borderColor: "divider" }}>
+              {shown.map((post) => <PostRow key={post.message_id} post={post} preview={data} compact={compact} />)}
             </Box>
           )}
           {posts.length > SAMPLE && !showAll && (
@@ -120,7 +151,8 @@ function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval 
 export function PostRemovalPreview({ removal }: { removal: PostRemoval }) {
   const { preview, days } = removal;
   return (
-    <Box sx={{ display: "grid", gap: 1.25 }}>
+    // One column no wider than the dialog, so a long title shortens instead of widening everything.
+    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 1.25 }}>
       <TextField select size="small" label="Posts from" value={days === null ? "all" : String(days)} sx={{ maxWidth: 200 }}
         onChange={(event) => removal.setDays(event.target.value === "all" ? null : Number(event.target.value) as RemovalDays)}>
         {REMOVAL_RANGES.map((range) => (

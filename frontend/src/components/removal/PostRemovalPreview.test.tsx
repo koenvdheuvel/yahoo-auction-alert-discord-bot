@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RemovablePost, RemovalPreview } from "../../api/types";
 import { usePostRemoval } from "../../lib/usePostRemoval";
+import { setScreen } from "../../test/screen";
 import { PostRemovalPreview } from "./PostRemovalPreview";
 
 const EXTRAS = "excluded_group_match:extras";
@@ -67,5 +68,25 @@ describe("PostRemovalPreview", () => {
     await user.click(screen.getByRole("option", { name: "All time" }));
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({ days: null });
+  });
+
+  it("makes each post one link to Discord on narrow screens, and lets the list grow instead of scrolling", async () => {
+    setScreen(390);
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(Response.json(PREVIEW))));
+    render(<QueryClientProvider client={new QueryClient()}><Harness /></QueryClientProvider>);
+
+    const post = await screen.findByRole("link", { name: /^BABYMETAL towel 1290000000000000001 .*, opens the post in Discord$/ });
+    expect(post).toHaveAttribute("href", "https://discord.com/channels/10/20/1290000000000000001");
+    expect(post).toHaveTextContent("Mercari, ￥1,500, posted just now");
+    expect(screen.getAllByRole("link", { name: "Listing" })[0]).toHaveAttribute("href", "https://jp.mercari.com/item/m1");
+    expect(screen.queryByRole("link", { name: "Discord" })).not.toBeInTheDocument();
+    // The sheet scrolls as one; a list that scrolls inside it would trap the finger.
+    expect(screen.getByRole("list", { name: "Posts to remove" })).not.toHaveStyle({ overflowY: "auto" });
+  });
+
+  it("keeps the list in a box of its own on desktop", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(Response.json(PREVIEW))));
+    render(<QueryClientProvider client={new QueryClient()}><Harness /></QueryClientProvider>);
+    expect(await screen.findByRole("list", { name: "Posts to remove" })).toHaveStyle({ maxHeight: "280px", overflowY: "auto" });
   });
 });

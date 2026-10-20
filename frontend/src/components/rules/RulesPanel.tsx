@@ -1,16 +1,11 @@
 import Add from "@mui/icons-material/Add";
-import CheckCircleOutlined from "@mui/icons-material/CheckCircleOutlined";
-import ErrorOutlined from "@mui/icons-material/ErrorOutlined";
-import WarningAmberOutlined from "@mui/icons-material/WarningAmberOutlined";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
-import CircularProgress from "@mui/material/CircularProgress";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
-import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useState } from "react";
@@ -19,8 +14,9 @@ import { ApiError, api } from "../../api/client";
 import { keys, refreshAccess, useValidation } from "../../api/hooks";
 import type { AlertSummary, Policy, RemovalResult, RuleGroup, RulesResponse, Ruleset } from "../../api/types";
 import { errorMessage } from "../../lib/errors";
-import { formatRelative, plural } from "../../lib/format";
+import { plural } from "../../lib/format";
 import { useDebounced } from "../../lib/hooks";
+import { useCompact } from "../../lib/responsive";
 import { LIMITS, cannotAddTerm, fieldLocation, groupsFromSearch, newGroup } from "../../lib/ruleset";
 import type { Draft } from "../../lib/useDraft";
 import { usePostRemoval } from "../../lib/usePostRemoval";
@@ -28,6 +24,7 @@ import type { StoredReplay } from "../views/SearchView";
 import { ConfirmDialog, EmptyState, LoadError } from "../common/Feedback";
 import { useNotify } from "../common/notify";
 import { PostRemovalPreview } from "../removal/PostRemovalPreview";
+import { DraftBar } from "./DraftBar";
 import { GroupEditor } from "./GroupEditor";
 import { JsonEditor } from "./JsonEditor";
 import { RuleSettings } from "./RuleSettings";
@@ -48,6 +45,7 @@ interface Props {
 export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay, canChange = false }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
+  const compact = useCompact();
   const [confirming, setConfirming] = useState(false);
   const debounced = useDebounced(draft.serialized, 350);
   const validation = useValidation(draft.ready ? debounced : null);
@@ -125,17 +123,23 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
   const canPublish = alert !== null && draft.edited && validation.data?.state === "valid" && !checking && !draft.outdated;
   const nextVersion = (rules.data?.versions[0]?.version ?? 0) + 1;
 
+  const outdatedActions = (
+    <Stack direction="row" spacing={1}>
+      <Button color="inherit" size="small" onClick={draft.rebase}>Keep my draft</Button>
+      <Button color="inherit" size="small" onClick={draft.discard}>Discard it</Button>
+    </Stack>
+  );
+
   return (
-    <Box sx={{ display: "grid", gap: 2.5 }}>
+    // One column no wider than the page, so nothing long can push the page sideways.
+    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2.5 }}>
       {draft.outdated && (
-        <Alert severity="warning" action={
-          <Stack direction="row" spacing={1}>
-            <Button color="inherit" size="small" onClick={draft.rebase}>Keep my draft</Button>
-            <Button color="inherit" size="small" onClick={draft.discard}>Discard it</Button>
-          </Stack>}>
+        // Narrow screens put the buttons under the message, which otherwise gets squeezed into a thin column.
+        <Alert severity="warning" action={compact ? undefined : outdatedActions}>
           {draft.published
             ? `Version ${draft.published.version} was published after you started this draft. Check it under Versions, then keep your draft to publish over it, or discard your draft.`
             : "The rules you started from were replaced after you started this draft."}
+          {compact && <Box sx={{ mt: 1, ml: -0.75 }}>{outdatedActions}</Box>}
         </Alert>
       )}
       {!alert && (
@@ -200,58 +204,9 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
         </Box>
       </Box>
 
-      <Box role="region" aria-label="Draft" sx={{ position: "sticky", bottom: 0, zIndex: 3, mx: { xs: -2, md: -3 }, px: { xs: 2, md: 3 },
-        py: 1.5, bgcolor: "background.paper", borderTop: 1, borderColor: "divider",
-        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2 }}>
-        <Box sx={{ flex: "1 1 280px", minWidth: 0 }}>
-          <Typography variant="body2" sx={{ fontWeight: 650 }}>
-            {draft.edited
-              ? draft.published ? `Unpublished changes to version ${draft.published.version}` : "Unpublished rules"
-              : draft.published ? `Same as published version ${draft.published.version}` : "No rules published for this search"}
-          </Typography>
-          <Box aria-live="polite" sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 0.25, minHeight: 20 }}>
-            {draft.outdated ? (
-              <>
-                <WarningAmberOutlined color="warning" sx={{ fontSize: 15 }} />
-                <Typography variant="caption" color="warning">
-                  {draft.published ? `Version ${draft.published.version} was published after you started this draft.`
-                    : "The rules changed after you started this draft."}
-                </Typography>
-                <Button size="small" color="inherit" onClick={draft.rebase} sx={{ py: 0 }}>Keep my draft</Button>
-                <Button size="small" color="inherit" onClick={draft.discard} sx={{ py: 0 }}>Discard it</Button>
-              </>
-            ) : checking ? (
-              <><CircularProgress size={12} aria-hidden="true" /><Typography variant="caption" color="textSecondary">Checking the draft</Typography></>
-            ) : validation.isError ? (
-              <Typography variant="caption" color="error">The draft could not be checked: {errorMessage(validation.error)}</Typography>
-            ) : invalid ? (
-              <><ErrorOutlined color="error" sx={{ fontSize: 15 }} /><Typography variant="caption" color="error">{invalid.message}</Typography></>
-            ) : (
-              <><CheckCircleOutlined color="success" sx={{ fontSize: 15 }} />
-                <Typography variant="caption" color="textSecondary">
-                  {draft.edited && alert
-                    ? replayed ? `Valid. Replayed ${formatRelative(replay.ranAt)}.` : "Valid. Not replayed yet."
-                    : "Valid."}
-                </Typography></>
-            )}
-          </Box>
-        </Box>
-        <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1 }}>
-          {draft.edited && !draft.outdated && <Button color="inherit" onClick={draft.discard}>Discard changes</Button>}
-          <Button variant="outlined" color="inherit" onClick={onTestTitle}>Test a title</Button>
-          {alert && <Button variant="outlined" color="inherit" onClick={onReplay} disabled={Boolean(invalid)}>Replay draft</Button>}
-          {alert && (
-            <Tooltip title={canChange ? "" : "You need Manage Channels in this search's channel to publish"}>
-              <span>
-                <Button variant="contained" onClick={() => setConfirming(true)}
-                  disabled={!canPublish || publish.isPending || !canChange}>
-                  Publish
-                </Button>
-              </span>
-            </Tooltip>
-          )}
-        </Stack>
-      </Box>
+      <DraftBar draft={draft} alert={alert} checking={checking} checkFailed={validation.isError ? errorMessage(validation.error) : null}
+        invalid={invalid?.message ?? null} replayedAt={replayed ? replay.ranAt : null} canPublish={canPublish} canChange={canChange}
+        publishing={publish.isPending} onPublish={() => setConfirming(true)} onTestTitle={onTestTitle} onReplay={onReplay} />
 
       {alert && (
         <ConfirmDialog open={confirming} title={`Publish rules for “${alert.search_query}”?`} maxWidth={removeAlso ? "sm" : "xs"}
