@@ -146,6 +146,28 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await (await self.client.get("/api/session")).json())["authenticated"], False)
         self.assertEqual((await self.client.get("/api/alerts")).status, 401)
 
+    async def test_unread_counts_endpoint_requires_a_session_origin_and_valid_input(self):
+        path = "/api/alerts/unread"
+        key = str(self.alert["id"])
+        self.assertEqual((await self.post(path, {"read_through": {key: None}})).status, 401)
+        await self.login()
+        rows = (await self.seed())["items"]
+        newest = max(int(row["id"]) for row in rows)
+        response = await self.post(path, {"read_through": {key: None, "999999": None}})
+        self.assertEqual((response.status, await response.json()), (200, {"counts": {key: 4}}))
+        response = await self.post(path, {"read_through": {key: str(newest - 1)}})
+        self.assertEqual((await response.json())["counts"], {key: 1})
+        self.assertEqual((await (await self.post(path, {"read_through": {key: str(newest)}})).json())["counts"],
+                         {key: 0})
+        for bad in ({}, {"read_through": []}, {"read_through": {key: 0}}, {"read_through": {"x": None}},
+                    {"read_through": {str(number): None for number in range(1, 202)}}):
+            response = await self.post(path, bad)
+            self.assertEqual((response.status, (await response.json())["error"]), (400, "invalid_request"))
+        response = await self.client.post(path, json={"read_through": {key: None}})
+        self.assertEqual(response.status, 403)
+        response = await self.client.post(path, data="{}", headers={**self.headers, "Content-Type": "text/plain"})
+        self.assertEqual(response.status, 415)
+
     async def test_login_behind_tls_terminating_proxy(self):
         https_origin = self.origin.replace("http:", "https:")
         # From a peer that is not a trusted proxy the header is ignored, so the https page does not match.

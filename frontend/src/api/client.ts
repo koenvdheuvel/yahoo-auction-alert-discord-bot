@@ -28,6 +28,7 @@ import type {
   Ruleset,
   Session,
   Source,
+  UnreadCounts,
   Verdict,
 } from "./types";
 
@@ -86,6 +87,9 @@ export async function request<T>(path: string, { method = "GET", body, signal }:
   return data as T;
 }
 
+/** The most searches one count request may ask about. */
+export const UNREAD_BATCH = 200;
+
 export interface CandidateQuery {
   alertId: string | null;
   /** All listings of one Discord server, when no alert is selected. */
@@ -101,6 +105,9 @@ export const api = {
   login: (token: string) => request<Session>("/api/login", { method: "POST", body: { token } }),
   logout: () => request<Session>("/api/session", { method: "DELETE", body: {} }),
   alerts: (signal?: AbortSignal) => request<AlertsResponse>("/api/alerts", { signal }),
+  /** Unread listings of up to `UNREAD_BATCH` searches: `readThrough` maps each search ID to its last read listing, or null. */
+  unreadCounts: (readThrough: Record<string, string | null>, signal?: AbortSignal) =>
+    request<UnreadCounts>("/api/alerts/unread", { method: "POST", body: { read_through: readThrough }, signal }),
   rules: (alertId: string, signal?: AbortSignal) =>
     request<RulesResponse>(`/api/alerts/${encodeURIComponent(alertId)}/rules`, { signal }),
   candidates(query: CandidateQuery, cursor: string | null, limit: number, signal?: AbortSignal) {

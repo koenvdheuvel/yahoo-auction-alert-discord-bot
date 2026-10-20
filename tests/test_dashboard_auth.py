@@ -649,6 +649,10 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([alert["id"] for alert in body["alerts"]], [a])
         self.assertEqual(body["totals"], {"archived_count": 1, "unassigned_count": 0,
                                           "guilds": {str(GUILD_A): {"archived_count": 1, "unassigned_count": 0}}})
+        response = await self.client.post("/api/alerts/unread", json={
+            "read_through": dict.fromkeys((a, b, self.legacy["id"], "999999"))}, headers=self.headers)
+        await check("unread", response, status=200)
+        self.assertEqual(await response.json(), {"counts": {a: 1}})
         await check("rules", await self.client.get(f"/api/alerts/{b}/rules"))
         await check("rules", await self.client.get(f"/api/alerts/{self.legacy['id']}/rules"))
         await check("candidates", await self.client.get("/api/candidates", params={"alert_id": b}))
@@ -797,6 +801,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
                                    {"id": str(GUILD_B), "name": "Record shop", "icon_url": None, "level": "member"}])
         # Someone who manages no server gets nothing else, not even an empty list or the rule checker.
         await refused("alerts", await get("/api/alerts"))
+        await refused("unread", await post("/api/alerts/unread", json={"read_through": {a: None}}, headers=h))
         await refused("candidates", await get("/api/candidates"))
         await refused("candidates", await get("/api/candidates", params={"alert_id": a}))
         await refused("history_import", await post("/api/history/import", json={}, headers=h))

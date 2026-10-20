@@ -9,7 +9,8 @@ import {
 
 import { claimDrafts } from "../lib/drafts";
 import { canonical } from "../lib/ruleset";
-import { ApiError, api, type CandidateQuery } from "./client";
+import { ApiError, UNREAD_BATCH, api } from "./client";
+import type { CandidateQuery } from "./client";
 import type { GraphRange, RemovalDays, Ruleset, Session } from "./types";
 
 export const PAGE_SIZE = 48;
@@ -33,6 +34,7 @@ export const keys = {
   candidates: (query: CandidateQuery) => ["candidates", query] as const,
   allCandidates: ["candidates"] as const,
   removalStatus: (alertId: string) => ["removal-status", alertId] as const,
+  unread: (owner: string, asks: UnreadAsk[]) => ["unread", owner, asks] as const,
 };
 
 /**
@@ -191,6 +193,49 @@ export function useSession() {
 export function useAlerts(enabled = true) {
   return useQuery({ queryKey: keys.alerts, queryFn: ({ signal }) => api.alerts(signal), staleTime: 30_000,
     refetchInterval: 30_000, enabled });
+}
+
+/** A search whose listings may be unread: its ID, the listing it was read through (null: none yet) and its newest listing. */
+export type UnreadAsk = readonly [alertId: string, readThrough: string | null, latestCandidateId: string];
+
+/** What one count asked as well as what it answered, so an answer is only used for the cursors it was asked about. */
+export interface UnreadAnswer {
+  owner: string;
+  asked: Record<string, string | null>;
+  counts: Record<string, number>;
+}
+
+/**
+ * How many listings of each search lie after this person's read cursor, in as many requests as the server's limit asks for.
+ * The key holds the owner, every cursor and every newest listing: another person, a read search or a new listing asks again,
+ * and a late answer lands under the key it was asked for, where nothing looks at it any more.
+ */
+export function useUnreadCounts(owner: string | null, asks: UnreadAsk[]) {
+  return useQuery({
+    queryKey: keys.unread(owner ?? "none", asks),
+    queryFn: async ({ signal }): Promise<UnreadAnswer> => {
+      const asked: Record<string, string | null> = {};
+      for (const [alertId, readThrough] of asks) asked[alertId] = readThrough;
+      const answers = await Promise.all(Array.from({ length: Math.ceil(asks.length / UNREAD_BATCH) }, (_, index) => {
+        const batch: Record<string, string | null> = {};
+        const end = Math.min((index + 1) * UNREAD_BATCH, asks.length);
+        for (let row = index * UNREAD_BATCH; row < end; row++) {
+          const [alertId, readThrough] = asks[row]!;
+          batch[alertId] = readThrough;
+        }
+        return api.unreadCounts(batch, signal);
+      }));
+      const counts: Record<string, number> = {};
+      for (const answer of answers) Object.assign(counts, answer.counts);
+      return { owner: owner!, asked, counts };
+    },
+    enabled: owner !== null && asks.length > 0,
+    // Searches whose cursor did not move keep their count while the new answer is on its way; the answer says which those are.
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    // Retention drops old listings without any new one arriving.
+    refetchInterval: 60_000,
+  });
 }
 
 export function useRules(alertId: string | null) {

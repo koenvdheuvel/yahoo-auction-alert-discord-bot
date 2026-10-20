@@ -40,6 +40,7 @@ import { LoadError } from "../common/Feedback";
 import { TitleTestDialog, type TitleSeed, type TitleTest } from "../TitleTestDialog";
 import { AddSearchDialog } from "../searches/AddSearchDialog";
 import { MarketplacesDialog } from "../searches/MarketplacesDialog";
+import { SearchUnreadProvider } from "../searches/SearchUnreadProvider";
 import { UnregisterDialog } from "../searches/UnregisterDialog";
 import { ChannelView } from "../views/ChannelView";
 import { NotificationsView } from "../views/NotificationsView";
@@ -263,7 +264,7 @@ export function Shell() {
     </Box>
   );
 
-  return (
+  const dashboard = (
     <Box sx={{ display: "flex", height: "100dvh", overflow: "hidden", bgcolor: "background.default" }}>
       <Link href="#main" sx={{ position: "absolute", left: 8, top: -48, zIndex: 2000, bgcolor: "background.paper", p: 1,
         "&:focus": { top: 8 } }}>Skip to content</Link>
@@ -318,4 +319,7 @@ export function Shell() {
       <ShortcutsDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
     </Box>
   );
+
+  // Every unread badge below, in the lists and on the pages, shows one count of the searches listed here.
+  return <SearchUnreadProvider alerts={memberOnly ? undefined : alerts.data?.alerts}>{dashboard}</SearchUnreadProvider>;
 }

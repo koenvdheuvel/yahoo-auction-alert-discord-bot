@@ -504,6 +504,7 @@ class DashboardServer:
             web.get("/api/session", self.session, name="session"),
             web.delete("/api/session", self.logout, name="logout"),
             web.get("/api/alerts", self.alerts, name="alerts"),
+            web.post("/api/alerts/unread", self.unread, name="unread"),
             web.get("/api/alerts/{id}/rules", self.rules, name="rules"),
             web.get("/api/candidates", self.candidates, name="candidates"),
             web.post("/api/rules/validate", self.validate, name="rules_validate"),
@@ -793,6 +794,10 @@ class DashboardServer:
         for alert in result["alerts"]:
             alert["channel_name"] = names.get(alert["channel_id"])
         return web.json_response(result)
+
+    async def unread(self, request):
+        data = await self.body(request)
+        return web.json_response(await self.repository.unread_counts(data.get("read_through"), guilds=self.guilds(request)))
 
     async def rules(self, request):
         return web.json_response(await self.service.rules(request.match_info["id"], self.guilds(request)))

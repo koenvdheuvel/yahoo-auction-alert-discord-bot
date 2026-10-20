@@ -302,6 +302,11 @@ export interface AlertsResponse {
   totals: ArchiveTotals & { guilds: Record<string, ArchiveTotals> };
 }
 
+/** Listings after each search's read cursor, by search ID; searches that are gone or not yours are left out. */
+export interface UnreadCounts {
+  counts: Record<string, number>;
+}
+
 export interface Reason {
   code: string;
   message: string;

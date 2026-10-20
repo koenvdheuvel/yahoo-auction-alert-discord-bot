@@ -199,7 +199,7 @@ function SearchStatusCards({ searches, sort, direction, onSort, onDirection, onO
               onMenu={() => setMenu({ search, open: true })}>
               <Typography variant="body2" color="textSecondary" sx={{ ...figures, mt: 0.25 }}>
                 {channelLabel(search.channel_id, search.channel_name)} · {plural(search.listing_count, "listing")}
-                <SearchUnread alert={search} />
+                <SearchUnread alertId={search.id} />
               </Typography>
               <CheckLines checks={search.checks} />
               {backlog && (
@@ -294,7 +294,7 @@ export function StatusSearches({ searches, onOpenSearch, onOpenChannel }: Props)
                           <Link component="button" onClick={() => onOpenSearch(search.id)} sx={{ fontWeight: 600, color: "text.primary" }}>
                             {search.search_query}
                           </Link>
-                          <SearchUnread alert={search} />
+                          <SearchUnread alertId={search.id} />
                         </TableCell>
                         <TableCell>
                           <Link component="button" color="inherit" onClick={() => onOpenChannel(search.channel_id)}>

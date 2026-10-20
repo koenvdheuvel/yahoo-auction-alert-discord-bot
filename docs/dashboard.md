@@ -289,20 +289,26 @@ channel, and whether you can view a channel for your notifications.
 
 ### Searches
 
-A dot labelled **Unread listings** marks searches with saved listings you have
-not read yet, in the channel list, Searches and Status. A search with existing
-listings starts unread; an empty search does not. Opening its unfiltered
-**Listings** tab, with **Earlier decisions** off, marks history through the
-newest loaded decision as read. Rules, Replay, Versions, filtered views, failed
-loads and background tabs do not advance that position. New listings or new
-decisions bring the dot back; seeing an unchanged listing on another check does
-not. Search summaries refresh every 30 seconds while the dashboard is visible.
+Numeric badges show each search's **unread listing count** in the channel list,
+Searches and Status. A listing counts once, using its latest saved decision;
+older decisions for the same listing do not inflate the count. A never-read
+search starts with all its current listings unread. Zero counts are hidden,
+and larger counts show the exact number rather than a cap such as `99+`.
+
+Opening a search's unfiltered **Listings** tab, with **Earlier decisions** off,
+marks history through the newest loaded decision as read. Rules, Replay,
+Versions, filtered views, failed loads and background tabs do not advance that
+position. New listings or changed decisions update the count; seeing an unchanged
+listing on another check does not. Search summaries refresh every 30 seconds
+while the dashboard is visible. Counts also refresh every minute to account for
+history retention. A badge shows `…` while counting, or `?` if counting fails;
+neither means zero unread listings.
 
 Read positions live only in this browser's `localStorage`, separately for each
 Discord user and search (`dashboard:read:<user-id>:<search-id>`). They survive
 reloads and signing out, and update other open tabs. The access-key login has
 its own shared browser-local history, under `access_key`, because it has no
-individual user identity. Clearing site storage resets the markers; nothing
+individual user identity. Clearing site storage resets the read positions; nothing
 syncs to Discord or another device. If storage is blocked or full, reads stay
 in memory until the page reloads.
 
@@ -663,8 +669,20 @@ Discord sign-in, `guild_id` on `/api/candidates` limits All listings to one of
 the servers they manage, and `/api/alerts` totals list each server under
 `guilds`.
 Each search summary also includes `latest_candidate_id`, a string ID or `null`
-when empty. It identifies the newest saved decision for the browser's local
-read marker; unlike `last_seen_at`, repeated unchanged sightings do not advance it.
+when empty. It identifies the newest saved decision and triggers unread-count
+refreshes; unlike `last_seen_at`, repeated unchanged sightings do not advance it.
+Candidate IDs span all searches, so their difference is not an unread count.
+
+`POST /api/alerts/unread` accepts up to 200 search IDs and their browser-local
+read positions, for example `{"read_through":{"5":"123","6":null}}`.
+A `null` position means the search has never been read. The response is
+`{"counts":{"5":3,"6":9}}`: each search's current listings whose latest decision
+comes after its read position. Accessible empty or fully read searches return
+zero; missing searches and searches outside the person's managed servers are
+omitted. IDs and non-null positions must be positive signed 64-bit integer
+strings. The request needs the same session, JSON content type and same-origin
+protection as the other POST routes, but stores no read positions on the server.
+The dashboard batches larger search lists rather than requesting each badge.
 
 The management routes:
 
@@ -675,6 +693,7 @@ The management routes:
 | `GET /api/guilds/{id}/status` | The bot's state and each search's last checks and waiting posts |
 | `GET /api/guilds/{id}/graphs` | The Status page's graphs; `range` is `1h`, `6h`, `24h` (the default) or `7d` |
 | `POST /api/alerts` | `/register`: `channel_id` and `search_query` |
+| `POST /api/alerts/unread` | Unread listing counts for up to 200 searches, using the body's `read_through` positions |
 | `GET` and `DELETE /api/alerts/{id}` | A search with what unregistering touches; `/unregister` |
 | `PUT /api/alerts/{id}/sources` | `/marketplaces on` and `off`: the body's `sources` is every marketplace the search should check, as in a search's own `sources`; answers `sources`, `turned_on` and `turned_off` |
 | `DELETE /api/alerts/{id}/legacy-filters/{filter}` | `/filters delete` |

@@ -158,7 +158,7 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
     <Row key={alert.id} depth={depth} icon={<SearchOutlined sx={{ fontSize: 16 }} />} label={alert.search_query}
       selected={place.alertId === alert.id} bright onClick={() => onNavigate({ alertId: alert.id, channelId: null, me: false })}
       end={<>
-        <SearchUnread alert={alert} />
+        <SearchUnread alertId={alert.id} />
         {alert.review_count ? <CountBadge value={alert.review_count} label={`${formatCount(alert.review_count)} need review`} /> : null}
       </>} />
   ));

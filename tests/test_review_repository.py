@@ -555,6 +555,54 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((empty["archived_count"], empty["listing_count"], empty["last_seen_at"]), (0, 0, None))
         self.assertIsNone(empty["latest_candidate_id"])
 
+    async def test_unread_counts_use_each_searchs_current_latest_listings_after_its_cursor(self):
+        await self.repository.register_alert(self.channel, "second", self.guild)
+        await self.repository.register_alert(self.channel, "foreign", self.guild + 1)
+        alerts = await self.repository.list_alerts()
+        second, foreign = (next(row for row in alerts if row["search_query"] == query)
+                           for query in ("second", "foreign"))
+        a1 = await self.archive("accepted", "a")
+        s1 = await self.repository.archive_candidate(second, facts("s"), decision("accepted"))
+        a2 = await self.archive("filtered", "a")      # a's newer decision replaces a1
+        await self.repository.archive_candidate(foreign, facts("f"), decision("accepted"))
+        a3 = await self.archive("review", "b")
+        await self.archive("review", "b")             # an unchanged sighting adds no unread listing
+        ids = [self.alert["id"], second["id"], foreign["id"]]
+        keys = [str(identifier) for identifier in ids]
+
+        async def counts(read_through, guilds=None):
+            return (await self.repository.unread_counts(read_through, guilds))["counts"]
+        self.assertEqual(await counts(dict.fromkeys(keys)), dict(zip(keys, (2, 1, 1))))
+        # a1 is no longer a latest listing, so reading through it still leaves a (a2) and b unread.
+        self.assertEqual(await counts({keys[0]: a1}), {keys[0]: 2})
+        self.assertEqual(await counts({keys[0]: a2}), {keys[0]: 1})
+        self.assertEqual(await counts({keys[0]: a3}), {keys[0]: 0})
+        # Interleaved IDs: second's listing is older than a2 but newer than a1; cursors are per search.
+        self.assertEqual(await counts({keys[0]: a3, keys[1]: s1}), {keys[0]: 0, keys[1]: 0})
+        self.assertEqual(await counts({keys[1]: str(int(s1) - 1)}), {keys[1]: 1})
+        self.assertEqual(await counts({keys[0]: str(2 ** 63 - 1)}), {keys[0]: 0})
+        # Missing, other-server and unregistered searches are omitted rather than reported as zero.
+        self.assertEqual(await counts(dict.fromkeys(keys + ["999999"]), {self.guild}), {keys[0]: 2, keys[1]: 1})
+        self.assertEqual(await counts(dict.fromkeys(keys), set()), {})
+        await self.repository.register_alert(self.channel, "empty", self.guild)
+        empty = next(row for row in await self.repository.list_alerts() if row["search_query"] == "empty")
+        self.assertEqual(await counts({str(empty["id"]): None}), {str(empty["id"]): 0})
+        await self.repository.unregister_alert(self.channel, "second")
+        self.assertEqual(await counts({keys[1]: None}), {})
+        self.assertEqual(await counts({}), {})
+
+    async def test_unread_counts_reject_invalid_or_unbounded_requests(self):
+        key = str(self.alert["id"])
+        for bad in (None, [], "1", {"0": None}, {"-1": None}, {"x": None}, {"05": None, "5": None},
+                    {key: 0}, {key: "0"}, {key: True}, {key: -3}, {key: "1.5"}, {key: str(2 ** 63)},
+                    {str(2 ** 63): None}, {key: {}}):
+            with self.subTest(bad=bad), self.assertRaises(ReviewValidation):
+                await self.repository.unread_counts(bad)
+        result = await self.repository.unread_counts({str(number): None for number in range(1, 201)})
+        self.assertEqual(result, {"counts": {key: 0}})
+        with self.assertRaises(ReviewValidation):
+            await self.repository.unread_counts({str(number): None for number in range(1, 202)})
+
     async def test_review_filters_include_disabled_discord_filters(self):
         await self.repository.add_filter(self.channel, "BABYMETAL", "text", "blacklist", "Tシャツ")
         await self.repository._call("test_disabled_filter", lambda: Filter.create(

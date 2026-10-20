@@ -41,6 +41,9 @@ class ReviewValidation(ValueError):
     """The request cannot be represented as bounded review data."""
 
 
+MAX_UNREAD_SEARCHES = 200
+
+
 def _identifier(value, name, nullable=False):
     if value is None and nullable:
         return None
@@ -201,7 +204,7 @@ def _decode_cursor(cursor):
     return observed_at.astimezone(timezone.utc).replace(tzinfo=None), _identifier(identifier, "cursor")
 
 
-def _latest_condition(alert=None):
+def _latest_condition(alert_ids=None):
     """Keep the newest row of each listing per alert; older rows hold decisions it no longer gets.
 
     Rows without an alert or a listing ID cannot be matched to later sightings, so they count
@@ -209,8 +212,8 @@ def _latest_condition(alert=None):
     """
     newest = CandidateObservation.alias()
     latest = newest.select(fn.MAX(newest.id)).where(newest.alert.is_null(False), newest.external_id != "")
-    if alert is not None:
-        latest = latest.where(newest.alert == alert)
+    if alert_ids is not None:
+        latest = latest.where(newest.alert.in_(alert_ids))
     latest = latest.group_by(newest.alert, newest.source, newest.external_id)
     return (CandidateObservation.id.in_(latest) | CandidateObservation.alert.is_null()
             | (CandidateObservation.external_id == ""))
@@ -402,6 +405,42 @@ class ReviewRepositoryMixin:
                 "unassigned_count": unassigned, "guilds": by_guild}}
         return await self._call("review_alerts", select)
 
+    async def unread_counts(self, read_through, guilds=None):
+        """Listings per alert whose current latest decision is newer than that alert's read cursor.
+
+        read_through maps alert IDs to the last-read candidate ID, or None for never read. Alerts that
+        do not exist or are outside guilds are left out; alerts with nothing unread count zero.
+        """
+        if not isinstance(read_through, dict):
+            raise ReviewValidation("read_through must be a JSON object")
+        if len(read_through) > MAX_UNREAD_SEARCHES:
+            raise ReviewValidation(f"read_through must contain at most {MAX_UNREAD_SEARCHES} searches")
+        cursors = {}
+        for key, value in read_through.items():
+            alert_id = _identifier(key, "read_through alert ID")
+            if alert_id in cursors:
+                raise ReviewValidation("read_through must not repeat a search")
+            cursors[alert_id] = _identifier(value, "read_through cursor", nullable=True) or 0
+
+        def select():
+            if not cursors:
+                return {}
+            query = Alert.select(Alert.id).where(Alert.id.in_(list(cursors)))
+            if guilds is not None:
+                query = query.where(Alert.guild_id.in_(guilds))
+            counts = {row.id: 0 for row in query}
+            if counts:
+                alert_ids = tuple(counts)
+                # Candidate IDs are positive, so a threshold of 0 counts never-read alerts' listings.
+                threshold = Case(CandidateObservation.alert, [(alert_id, cursors[alert_id]) for alert_id in counts], 0)
+                counts.update(CandidateObservation.select(CandidateObservation.alert, fn.COUNT(CandidateObservation.id))
+                              .where(CandidateObservation.alert.in_(alert_ids), CandidateObservation.id > threshold,
+                                     _latest_condition(alert_ids))
+                              .group_by(CandidateObservation.alert).tuples())
+            return counts
+        counts = await self._call("unread_counts", select)
+        return {"counts": {str(alert_id): count for alert_id, count in counts.items()}}
+
     async def review_alert(self, alert_id, guilds=None):
         """One alert as the dashboard lists it, or ReviewNotFound outside these servers."""
         return await self._call("review_alert", lambda: _alert_json(self._review_alert(alert_id, guilds)))
@@ -535,7 +574,7 @@ class ReviewRepositoryMixin:
                                 CandidateObservation.channel_id == alert.channel_id,
                                 CandidateObservation.search_query == alert.search_query)
         if latest:
-            query = query.where(_latest_condition(alert))
+            query = query.where(_latest_condition((alert.id,) if alert is not None else None))
         if not isinstance(search, str) or len(search) > 256:
             raise ReviewValidation("search must contain at most 256 characters")
         if search:
