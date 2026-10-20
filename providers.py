@@ -7,8 +7,9 @@ import asyncio
 import json
 import logging
 import math
+import re
 import time
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import aiohttp
 
@@ -194,11 +195,14 @@ class FromJapanAdapter:
             stock=integer(data.get("stock"), self.source, "stock", default=1 if self.source == "yahooauction" else None),
             price=integer(data.get("price"), self.source, "price"),
             buyout_price=integer(data.get("buyItNowPrice"), self.source, "buyout_price", default=0),
-            image_url=image_url, url=self.listing_url(data, identifier),
+            image_url=self.listing_image(image_url), url=self.listing_url(data, identifier),
         )
 
     def listing_url(self, data, identifier):
         return self.item_url.format(id=quote(identifier, safe=""))
+
+    def listing_image(self, image_url):
+        return image_url
 
 
 class YahooAuctionsAdapter(FromJapanAdapter):
@@ -225,6 +229,17 @@ class SurugayaAdapter(FromJapanAdapter):
         if isinstance(url, str) and url.startswith("https://www.suruga-ya.jp/product/"):
             return url
         return super().listing_url(data, identifier)
+
+    def listing_image(self, image_url):
+        # FromJapan points at photo.php on www.suruga-ya.jp, which sits behind Cloudflare, so
+        # Discord's image proxy can be challenged. photo.php only redirects to cdn.suruga-ya.jp
+        # (plain nginx); link the CDN's JPEG directly.
+        parts = urlsplit(image_url)
+        if parts.scheme == "https" and parts.netloc == "www.suruga-ya.jp" and parts.path == "/database/photo.php":
+            shinaban = parse_qs(parts.query).get("shinaban", [""])[0]
+            if re.fullmatch(r"[0-9A-Za-z]+", shinaban):
+                return f"https://cdn.suruga-ya.jp/pics/boxart_m/{shinaban.lower()}m.jpg"
+        return image_url
 
 
 class RakumaAdapter(FromJapanAdapter):
