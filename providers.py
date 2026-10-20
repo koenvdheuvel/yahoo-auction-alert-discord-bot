@@ -203,7 +203,7 @@ class FromJapanAdapter:
 
 class YahooAuctionsAdapter(FromJapanAdapter):
     source = "yahooauction"
-    item_url = "https://buyee.jp/item/yahoo/auction/{id}"
+    item_url = "https://auctions.yahoo.co.jp/jp/auction/{id}"
 
 
 class MercariAdapter(FromJapanAdapter):
