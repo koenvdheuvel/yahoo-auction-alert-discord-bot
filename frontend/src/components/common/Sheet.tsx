@@ -13,7 +13,9 @@ import { useSwipe } from "../../lib/gestures";
 import { useKeyboardArea, usePhone } from "../../lib/responsive";
 
 // Content scrolled away from its top scrolls back up; only a drag that starts at the top moves the sheet.
-function inScrolledContent(target: Element): boolean {
+// A drag in a text field selects text or moves the cursor, and closing would lose what was typed.
+function keepsSheet(target: Element): boolean {
+  if (target.closest("input, textarea, select, [contenteditable='true']")) return true;
   const content = target.closest(".MuiDialogContent-root");
   return content !== null && content.scrollTop > 0;
 }
@@ -48,7 +50,7 @@ export function SheetDialog(props: DialogProps) {
   const handle = useRef<HTMLDivElement>(null);
   const swipe = useSwipe({
     directions: ["down"],
-    ignore: inScrolledContent,
+    ignore: keepsSheet,
     onDrag: (offset) => {
       const element = handle.current?.closest<HTMLElement>(".MuiDialog-paper");
       if (!element) return;

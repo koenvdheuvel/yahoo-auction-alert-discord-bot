@@ -129,7 +129,9 @@ export const theme = createTheme({
     // iOS zooms in on a field whose text is under 16 pixels.
     MuiInputBase: { styleOverrides: { root: { [touch]: { fontSize: 16 } } } },
     MuiOutlinedInput: {
-      styleOverrides: { input: { [touch]: { "&.MuiInputBase-inputSizeSmall": { paddingTop: 10.5, paddingBottom: 10.5 } } } },
+      styleOverrides: {
+        root: { [touch]: { "&.MuiInputBase-sizeSmall:not(.MuiInputBase-multiline) .MuiOutlinedInput-input": { paddingTop: 10.5, paddingBottom: 10.5 } } },
+      },
     },
     MuiInputLabel: {
       styleOverrides: {

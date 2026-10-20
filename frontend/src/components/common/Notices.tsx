@@ -2,6 +2,8 @@ import Alert, { type AlertColor } from "@mui/material/Alert";
 import Snackbar from "@mui/material/Snackbar";
 import { useCallback, useState, type ReactNode } from "react";
 
+import { useCompact } from "../../lib/responsive";
+import { TOPBAR_HEIGHT } from "../../theme";
 import { NoticeContext, type Notify } from "./notify";
 
 interface Notice {
@@ -18,6 +20,7 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
   }, []);
   const current = queue[0];
   const close = useCallback(() => setQueue((items) => items.slice(1)), []);
+  const compact = useCompact();
   return (
     <NoticeContext.Provider value={notify}>
       {children}
@@ -28,8 +31,9 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
         onClose={(_, reason) => reason !== "clickaway" && close()}
         // Top centre, as Discord shows its notices: clear of the account panel and the draft bar.
         anchorOrigin={{ vertical: "top", horizontal: "center" }}
-        // Phones put the status bar or the notch over the top of the page.
-        sx={{ mt: "env(safe-area-inset-top, 0px)" }}
+        // Phones put the status bar or the notch over the top of the page. There the notice sits under
+        // the top bar, so it does not cover the menu button and the title while it shows.
+        sx={{ mt: compact ? `calc(${TOPBAR_HEIGHT}px + env(safe-area-inset-top, 0px))` : "env(safe-area-inset-top, 0px)" }}
       >
         {current && (
           <Alert onClose={close} severity={current.severity} variant="filled" sx={{ maxWidth: 560 }}>

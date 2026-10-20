@@ -25,6 +25,12 @@ interface SwipeOptions {
   ignore?: (target: Element) => boolean;
 }
 
+// React passes touches in sheets and menus up to the component that opened them, though the
+// sheet is elsewhere on the page. Only touches that start inside the element itself count.
+function inside(event: TouchEvent): boolean {
+  return event.target instanceof Node && event.currentTarget.contains(event.target);
+}
+
 /**
  * Touch handlers for swipes, like the ones in Discord's app: across the screen to open the list
  * of channels, or down to close a sheet. Mouse and pen input are left alone.
@@ -43,7 +49,7 @@ export function useSwipe({ directions, onSwipe, onDrag, ignore }: SwipeOptions) 
     onTouchStart(event: TouchEvent) {
       gesture.current = null;
       const touch = event.touches[0];
-      if (event.touches.length !== 1 || !touch) return;
+      if (event.touches.length !== 1 || !touch || !inside(event)) return;
       if (ignore && event.target instanceof Element && ignore(event.target)) return;
       gesture.current = { x: touch.clientX, y: touch.clientY, time: event.timeStamp, axis: null, offset: 0 };
     },
@@ -125,7 +131,7 @@ export function useLongPress(onLongPress: () => void) {
       cancel();
       fired.current = false;
       const touch = event.touches[0];
-      if (event.touches.length !== 1 || !touch) return;
+      if (event.touches.length !== 1 || !touch || !inside(event)) return;
       origin.current = { x: touch.clientX, y: touch.clientY };
       timer.current = window.setTimeout(() => {
         timer.current = undefined;
@@ -140,7 +146,11 @@ export function useLongPress(onLongPress: () => void) {
       const touch = event.touches[0];
       if (start && touch && Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > LOCK_DISTANCE) cancel();
     },
-    onTouchEnd: cancel,
+    onTouchEnd(event: TouchEvent) {
+      // The lifted finger would also click whatever the long press just opened under it.
+      if (fired.current) event.preventDefault();
+      cancel();
+    },
     onTouchCancel: cancel,
     // Android opens its own menu for a long press.
     onContextMenu(event: MouseEvent) {

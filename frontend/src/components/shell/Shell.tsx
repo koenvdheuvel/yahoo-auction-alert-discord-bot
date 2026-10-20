@@ -123,7 +123,7 @@ export function Shell() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || isTyping(event) || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (document.querySelector(".MuiModal-root")) return;
+      if (document.querySelector(".MuiModal-root:not(.MuiModal-hidden)")) return;
       if (event.key === "?") {
         event.preventDefault();
         setHelpOpen(true);
@@ -266,7 +266,7 @@ export function Shell() {
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
         pl: "env(safe-area-inset-left, 0px)", pr: "env(safe-area-inset-right, 0px)" }}>
         <Box component="main" id="main" ref={main} tabIndex={-1} {...(wide ? {} : swipe)}
-          sx={{ flex: 1, minHeight: 0, overflowY: "auto", outline: "none" }}>
+          sx={{ flex: 1, minHeight: 0, overflowY: "auto", outline: "none", pb: sections ? 0 : "env(safe-area-inset-bottom, 0px)" }}>
           <TopBar icon={heading.icon} title={heading.title} detail={heading.detail} showMenu={!wide} onMenu={() => setNavOpen(true)}
             onHelp={() => setHelpOpen(true)} onTitle={info ? () => setInfoOpen(true) : undefined}
             actions={(view === "search" || view === "listings") && (wide ? (

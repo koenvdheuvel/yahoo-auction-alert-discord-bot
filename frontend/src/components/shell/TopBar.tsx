@@ -41,7 +41,9 @@ export function TopBar({ icon, title, detail, showMenu, onMenu, onHelp, onTitle,
       <Typography variant="h2" component="h1" noWrap sx={{ minWidth: 0, flexShrink: 1 }}>
         {onTitle ? (
           <ButtonBase onClick={onTitle} aria-haspopup="dialog" aria-label={`${title}: show the details`}
-            sx={{ maxWidth: "100%", minHeight: 44, gap: 0.25, px: 0.5, mx: -0.5, borderRadius: 1, font: "inherit" }}>
+            // The title cuts off long names, which would cut off a focus ring around the button too.
+            sx={{ maxWidth: "100%", minHeight: 44, gap: 0.25, px: 0.5, mx: -0.5, borderRadius: 1, font: "inherit",
+              "&.Mui-focusVisible": { outlineOffset: -2 } }}>
             <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</Box>
             <ExpandMore fontSize="small" sx={{ color: "text.secondary", flex: "none" }} />
           </ButtonBase>

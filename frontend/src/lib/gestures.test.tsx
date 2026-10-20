@@ -1,19 +1,19 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { createPortal } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { drag } from "../test/screen";
 import { useLongPress, useSwipe, type Direction } from "./gestures";
 
 function SwipeArea({ onSwipe, directions = ["right"] }: { onSwipe: (direction: Direction) => void; directions?: Direction[] }) {
   const swipe = useSwipe({ directions, onSwipe, ignore: (target) => target.tagName === "INPUT" });
-  return <div data-testid="area" {...swipe}><input aria-label="Field" /></div>;
-}
-
-/** Moves one finger from the start to each point in turn, then lifts it. */
-function drag(element: Element, points: [number, number][]) {
-  const [first, ...rest] = points;
-  fireEvent.touchStart(element, { touches: [{ clientX: first![0], clientY: first![1] }] });
-  for (const [x, y] of rest) fireEvent.touchMove(element, { touches: [{ clientX: x, clientY: y }] });
-  fireEvent.touchEnd(element, { touches: [] });
+  return (
+    <div data-testid="area" {...swipe}>
+      <input aria-label="Field" />
+      {/* Like a sheet the page opens: a child for React, elsewhere on the page. */}
+      {createPortal(<div data-testid="sheet" />, document.body)}
+    </div>
+  );
 }
 
 describe("useSwipe", () => {
@@ -34,6 +34,8 @@ describe("useSwipe", () => {
     drag(screen.getByRole("textbox", { name: "Field" }), [[20, 300], [90, 300], [160, 300]]);
     // A move that starts as a scroll stays one, even when it turns sideways.
     drag(area, [[100, 300], [100, 330], [200, 330]]);
+    // A swipe in a sheet the page opened belongs to the sheet.
+    drag(screen.getByTestId("sheet"), [[20, 300], [90, 300], [160, 300]]);
     expect(onSwipe).not.toHaveBeenCalled();
   });
 });
@@ -57,14 +59,15 @@ describe("useLongPress", () => {
 
     fireEvent.touchStart(button, { touches: [{ clientX: 10, clientY: 10 }] });
     act(() => { vi.advanceTimersByTime(500); });
-    fireEvent.touchEnd(button, { touches: [] });
+    // Cancelling the touch end keeps the browser from clicking whatever opened under the finger.
+    expect(fireEvent.touchEnd(button, { touches: [] })).toBe(false);
     fireEvent.click(button);
     expect(onLongPress).toHaveBeenCalledTimes(1);
     expect(onClick).not.toHaveBeenCalled();
 
     // A plain tap still counts.
     fireEvent.touchStart(button, { touches: [{ clientX: 10, clientY: 10 }] });
-    fireEvent.touchEnd(button, { touches: [] });
+    expect(fireEvent.touchEnd(button, { touches: [] })).toBe(true);
     fireEvent.click(button);
     expect(onClick).toHaveBeenCalledTimes(1);
   });
