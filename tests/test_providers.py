@@ -237,7 +237,10 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
 
     def test_surugaya_images_link_the_cdn_instead_of_cloudflare_photo_page(self):
         adapter = self.adapter(SurugayaAdapter)
-        image = lambda url: adapter.normalize({"id": "a1", "price": 1, "stock": 0, "imageUrl": url}).image_url
+
+        def image(url):
+            return adapter.normalize({"id": "a1", "price": 1, "stock": 0, "imageUrl": url}).image_url
+
         self.assertEqual(image("https://www.suruga-ya.jp/database/photo.php?shinaban=BO5043259&size=m"),
                          "https://cdn.suruga-ya.jp/pics/boxart_m/bo5043259m.jpg")
         for url in ("", "https://www.suruga-ya.jp/database/photo.php?shinaban=../x&size=m",
