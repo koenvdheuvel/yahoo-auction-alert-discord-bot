@@ -10,17 +10,29 @@ import { useCandidates } from "../../api/hooks";
 import type { Candidate, Source } from "../../api/types";
 import { formatCount, safeUrl } from "../../lib/format";
 import { isTyping, useDebounced } from "../../lib/hooks";
+import { useCompact, usePhone, useTouch } from "../../lib/responsive";
 import { figures } from "../../theme";
 import type { TitleSeed } from "../TitleTestDialog";
 import type { ListingFilters } from "../views/SearchView";
 import { EmptyState, LoadError } from "../common/Feedback";
-import { FilterBar, ViewOptions, type View } from "./FilterBar";
+import { FilterBar, LayoutToggle, ViewOptions, type View } from "./FilterBar";
+import { ListingActions } from "./ListingActions";
 import { ListingDrawer } from "./ListingDrawer";
 import { ListingFrame } from "./ListingFrame";
 
 const VIEW_KEY = "dashboard:view";
+// Set after the first long press on a listing; the hint about it goes away then.
+const HELD_KEY = "dashboard:held";
 // Frames of at least 196px; a phone still gets two columns (the gap is 12px).
 const GRID_COLUMNS = "repeat(auto-fill, minmax(min(196px, calc(50% - 6px)), 1fr))";
+
+/** The element that scrolls the list. The page scrolls inside the dashboard, not in the window. */
+function scrollParent(node: HTMLElement): HTMLElement | null {
+  for (let element = node.parentElement; element; element = element.parentElement) {
+    if (/auto|scroll/.test(getComputedStyle(element).overflowY)) return element;
+  }
+  return null;
+}
 
 function seedFrom(candidate: Candidate): TitleSeed {
   const source = ["yahooauction", "mercari", "surugaya"].includes(candidate.source) ? candidate.source as Source : undefined;
@@ -38,6 +50,10 @@ interface Props {
 
 export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitle }: Props) {
   const [view, setView] = useState<View>(() => (localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid"));
+  const [held, setHeld] = useState(() => localStorage.getItem(HELD_KEY) !== null);
+  const touch = useTouch();
+  const phone = usePhone();
+  const compact = useCompact();
   const search = useDebounced(filters.search.trim(), 300);
   const query = useMemo<CandidateQuery>(() => ({
     alertId, guildId: alertId ? null : guildId, search, source: filters.source, verdict: filters.verdict,
@@ -50,6 +66,7 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
 
   const [active, setActive] = useState(0);
   const [drawer, setDrawer] = useState<number | null>(null);
+  const [menu, setMenu] = useState<number | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -62,6 +79,7 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
     setShownKey(queryKey);
     setActive(0);
     setDrawer(null);
+    setMenu(null);
   }
 
   useEffect(() => {
@@ -77,20 +95,23 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
     node?.scrollIntoView({ block: "nearest" });
   }, [active, items.length]);
 
-  // Load the next page before the end of the list comes into view.
+  // Load the next page before the end of the list comes into view. The margin only counts in the
+  // element that scrolls, so that element is the one to watch.
   useEffect(() => {
     const node = sentinelRef.current;
     if (!node || !hasNextPage) return;
     const observer = new IntersectionObserver((entries) => {
       if (entries[0]?.isIntersecting && !isFetchingNextPage) void fetchNextPage();
-    }, { rootMargin: "800px 0px" });
+    }, { root: scrollParent(node), rootMargin: "800px 0px" });
     observer.observe(node);
     return () => observer.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
+  // Narrow screens keep the closed list of channels mounted, hidden; only an open dialog or drawer takes the key.
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "/" || event.defaultPrevented || isTyping(event) || document.querySelector(".MuiModal-root")) return;
+      if (event.key !== "/" || event.defaultPrevented || isTyping(event)
+        || document.querySelector(".MuiModal-root:not(.MuiModal-hidden)")) return;
       event.preventDefault();
       searchRef.current?.focus();
     };
@@ -100,6 +121,12 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
 
   const onActivate = useCallback((index: number) => setActive(index), []);
   const onOpen = useCallback((index: number) => setDrawer(index), []);
+  const onMenu = useCallback((index: number) => {
+    setActive(index);
+    setMenu(index);
+    setHeld(true);
+    localStorage.setItem(HELD_KEY, "1");
+  }, []);
 
   const columns = () => {
     const nodes = listRef.current?.querySelectorAll<HTMLElement>("[data-index]");
@@ -158,20 +185,36 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
   return (
     <Box>
       <FilterBar filters={filters} onFilters={onFilters} facets={first?.facets} searchRef={searchRef} />
-      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 2, rowGap: 1, mt: 1.5, mb: 1.5, minHeight: 40 }}>
-        <Typography variant="body2" color="textSecondary" aria-live="polite" sx={figures}>
-          {candidates.isSuccess && (total
-            ? `${formatCount(items.length)} of ${formatCount(total)} ${total === 1 ? "listing" : "listings"}`
-            : "")}
-        </Typography>
-        {items.length > 0 && (
-          <Typography variant="caption" color="textSecondary" sx={{ display: { xs: "none", md: "block" } }}>
-            j and k move, Enter shows details. Press ? for all keys.
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 2, rowGap: 1, mt: { xs: 0.5, sm: 1.5 },
+        mb: { xs: 1, sm: 1.5 }, minHeight: 40, position: "relative" }}>
+        {/* Phones put the hint under the count, so both share the line with the layout buttons. */}
+        <Box sx={{ display: "flex", flexDirection: { xs: "column", sm: "row" }, alignItems: { sm: "center" }, columnGap: 2, rowGap: 0.25,
+          flex: { xs: "1 1 0", sm: "0 1 auto" }, minWidth: 0 }}>
+          <Typography variant="body2" color="textSecondary" aria-live="polite" sx={figures}>
+            {candidates.isSuccess && (total
+              ? `${formatCount(items.length)} of ${formatCount(total)} ${total === 1 ? "listing" : "listings"}`
+              : "")}
           </Typography>
+          {items.length > 0 && !touch && (
+            <Typography variant="caption" color="textSecondary" sx={{ display: { xs: "none", md: "block" } }}>
+              j and k move, Enter shows details. Press ? for all keys.
+            </Typography>
+          )}
+          {/* Fingers have no keys, so touch screens get the long press instead, until it has been used once. */}
+          {items.length > 0 && touch && !held && (
+            <Typography variant="caption" color="textSecondary">Press and hold a listing for more.</Typography>
+          )}
+        </Box>
+        {/* On phones a thin line under the count, so nothing moves while the list updates. */}
+        {candidates.isFetching && !candidates.isPending && (
+          <LinearProgress aria-label="Updating listings" sx={{ flex: 1, maxWidth: { sm: 120 }, position: { xs: "absolute", sm: "static" },
+            left: 0, right: 0, bottom: -4, height: { xs: 2, sm: 4 } }} />
         )}
-        {candidates.isFetching && !candidates.isPending && <LinearProgress sx={{ flex: 1, maxWidth: 120 }} aria-label="Updating listings" />}
         <Box sx={{ ml: "auto" }}>
-          <ViewOptions latest={filters.latest} onLatest={(latest) => onFilters({ ...filters, latest })} view={view} onView={setView} />
+          {/* On phones Earlier decisions is one of the filter chips. */}
+          {phone ? <LayoutToggle view={view} onView={setView} /> : (
+            <ViewOptions latest={filters.latest} onLatest={(latest) => onFilters({ ...filters, latest })} view={view} onView={setView} />
+          )}
         </Box>
       </Box>
 
@@ -206,8 +249,8 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
               opacity: candidates.isPlaceholderData ? 0.55 : 1,
               "& > li": { scrollMarginTop: 120, scrollMarginBottom: 96 }, "& > li:last-of-type": { borderBottom: 0 } }}>
           {items.map((candidate, index) => (
-            <ListingFrame key={candidate.id} candidate={candidate} index={index} layout={view}
-              active={index === Math.min(active, items.length - 1)} onActivate={onActivate} onOpen={onOpen} />
+            <ListingFrame key={candidate.id} candidate={candidate} index={index} layout={view} compact={compact} touch={touch}
+              active={index === Math.min(active, items.length - 1)} onActivate={onActivate} onOpen={onOpen} onMenu={onMenu} />
           ))}
         </Box>
       )}
@@ -241,6 +284,8 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
         }}
         onTestTitle={(candidate) => onTestTitle(seedFrom(candidate))}
       />
+      <ListingActions candidate={menu === null ? null : items[menu] ?? null} onClose={() => setMenu(null)}
+        onDetails={() => setDrawer(menu)} onTestTitle={(candidate) => onTestTitle(seedFrom(candidate))} />
     </Box>
   );
 }
