@@ -219,12 +219,13 @@ client secret are never logged.
 
 ## Servers and channels
 
-The dashboard looks like Discord. The server list is on the far left, the
-picked server's channels next to it, and the page on the right. On a phone, the
-menu button opens both lists. The round button at the top of the server list is
-Home: your 🔔 notifications, or every server's searches with the access key.
-Settings, under your name at the bottom, has the appearance: light, dark or the
-same as the system, in Discord's own colours.
+The dashboard looks like Discord. The server list is on the far left, the picked
+server's channels next to it, and the page on the right. On a phone, the menu
+button or a swipe to the right opens both lists; see [On a phone](#on-a-phone).
+The round button at the top of the server list is Home: your 🔔 notifications, or
+every server's searches with the access key. Settings, under your name at the
+bottom, has the appearance: light, dark or the same as the system, in Discord's
+own colours.
 
 The channel list starts with three pages of the whole server: **Status**,
 **Searches** (every search, as `/allalerts` lists them) and **All listings**.
@@ -241,6 +242,25 @@ bot may not see it or Discord did not answer.
 
 In a server where you are only a member, the channel list has just your
 notifications there.
+
+### On a phone
+
+On a phone or a small tablet the dashboard works like Discord's app. Swipe to
+the right anywhere on a page, or tap the menu button, to open the server and
+channel lists. A search's tabs and a channel's tabs sit in a bar at the bottom
+of the screen, and tapping a search's name at the top shows its counts and
+**Unregister**. Dialogs open as sheets from the bottom of the screen; drag a
+sheet down to close it.
+
+Press and hold a listing for what you can do with it: its details, the
+marketplace page, testing its title, 🔔 and copying its link. A tap opens the
+details, where a swipe to the left or right moves to the next or previous
+listing and a swipe down closes them. Posts, hidden listings, searches, rule
+versions and your notifications work the same way: press and hold one, or tap
+its ⋯ button, for its actions.
+
+Buttons and rows are big enough for a finger, and text fields use 16 pixel text,
+so iOS does not zoom in while you type.
 
 ### Where the channel list comes from
 
