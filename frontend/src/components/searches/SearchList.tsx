@@ -21,6 +21,7 @@ import { useCompact } from "../../lib/responsive";
 import { figures } from "../../theme";
 import { ActionSheet, type SheetAction } from "../common/Sheet";
 import { SearchCard, SearchCards } from "./SearchCard";
+import { SearchUnread } from "./SearchUnread";
 
 interface Props {
   alerts: AlertSummary[];
@@ -67,6 +68,7 @@ export function SearchList({ alerts, canChange, showChannel = false, onOpen, onO
                 <Typography variant="body2" color="textSecondary" sx={{ ...figures, mt: 0.25 }}>
                   {showChannel && `${channelLabel(alert.channel_id, alert.channel_name)} · `}
                   {plural(alert.listing_count, "listing")}
+                  <SearchUnread alert={alert} />
                   {alert.review_count > 0 && (
                     <> · <Box component="span" sx={{ color: "warning.main" }}>{formatCount(alert.review_count)} need review</Box></>
                   )}
@@ -122,6 +124,7 @@ export function SearchList({ alerts, canChange, showChannel = false, onOpen, onO
                 <Link component="button" onClick={() => onOpen(alert)} sx={{ fontWeight: 600, textAlign: "left", color: "text.primary" }}>
                   {alert.search_query}
                 </Link>
+                <SearchUnread alert={alert} />
               </TableCell>
               {showChannel && (
                 <TableCell>

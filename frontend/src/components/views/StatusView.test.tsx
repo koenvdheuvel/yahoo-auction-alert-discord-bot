@@ -31,7 +31,7 @@ function show() {
   render(
     <ThemeProvider theme={theme}>
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <StatusView guildId="11" onOpenSearch={onOpenSearch} onOpenChannel={vi.fn()} />
+        <StatusView guildId="11" tab="overview" onTab={vi.fn()} onOpenSearch={onOpenSearch} onOpenChannel={vi.fn()} />
       </QueryClientProvider>
     </ThemeProvider>,
   );

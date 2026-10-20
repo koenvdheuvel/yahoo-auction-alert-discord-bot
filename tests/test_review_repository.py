@@ -532,7 +532,7 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_alert_summaries_count_latest_decisions_and_unassigned_history(self):
         await self.archive("accepted", "a")
         await self.archive("filtered", "a")
-        await self.archive("review", "b")
+        latest = await self.archive("review", "b")
         await self.repository.register_alert(555555555555555555, "detached")
         other = next(row for row in await self.repository.list_alerts() if row["search_query"] == "detached")
         await self.repository.archive_candidate(other, facts("x"), decision())
@@ -543,12 +543,17 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "archived_count", "listing_count", "accepted_count", "filtered_count", "review_count")},
             {"archived_count": 3, "listing_count": 2, "accepted_count": 0, "filtered_count": 1, "review_count": 1})
         self.assertTrue(summary["last_seen_at"].endswith("Z"))
+        self.assertEqual(summary["latest_candidate_id"], latest)
+        # Polling the same listing again refreshes last_seen_at, not its unread marker.
+        await self.archive("review", "b")
+        self.assertEqual((await self.repository.review_alerts())["alerts"][0]["latest_candidate_id"], latest)
         # The detached row's alert had no server, so it counts in the totals but in no server.
         self.assertEqual(result["totals"], {"archived_count": 4, "unassigned_count": 1, "guilds": {
             str(self.guild): {"archived_count": 3, "unassigned_count": 0}}})
         await self.repository.register_alert(self.channel, "empty")
         empty = next(row for row in (await self.repository.review_alerts())["alerts"] if row["search_query"] == "empty")
         self.assertEqual((empty["archived_count"], empty["listing_count"], empty["last_seen_at"]), (0, 0, None))
+        self.assertIsNone(empty["latest_candidate_id"])
 
     async def test_review_filters_include_disabled_discord_filters(self):
         await self.repository.add_filter(self.channel, "BABYMETAL", "text", "blacklist", "Tシャツ")

@@ -1,5 +1,6 @@
 import CleaningServicesOutlined from "@mui/icons-material/CleaningServicesOutlined";
 import CollectionsOutlined from "@mui/icons-material/CollectionsOutlined";
+import DashboardOutlined from "@mui/icons-material/DashboardOutlined";
 import DeleteOutlined from "@mui/icons-material/DeleteOutlined";
 import ForumOutlined from "@mui/icons-material/ForumOutlined";
 import GridViewOutlined from "@mui/icons-material/GridViewOutlined";
@@ -9,6 +10,7 @@ import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
 import ReplayOutlined from "@mui/icons-material/ReplayOutlined";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
+import ShowChartOutlined from "@mui/icons-material/ShowChartOutlined";
 import StorefrontOutlined from "@mui/icons-material/StorefrontOutlined";
 import TuneOutlined from "@mui/icons-material/TuneOutlined";
 import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
@@ -28,9 +30,9 @@ import { useAlerts, useChannels, useGuilds, useRules, useSession } from "../../a
 import type { AlertSummary, ArchiveTotals } from "../../api/types";
 import { canChangeSearch, channelLabel, channelTabs, findChannel } from "../../lib/channels";
 import { ownsSidewaysTouch, useSwipe } from "../../lib/gestures";
-import { isTyping, usePlace, type ChannelTab, type Tab } from "../../lib/hooks";
+import { isTyping, usePlace, type ChannelTab, type StatusTab, type Tab } from "../../lib/hooks";
 import { useDraft } from "../../lib/useDraft";
-import { CHANNEL_TABS, SEARCH_TABS } from "../../lib/vocabulary";
+import { CHANNEL_TABS, SEARCH_TABS, STATUS_TABS } from "../../lib/vocabulary";
 import { RAIL_WIDTH, SIDEBAR_WIDTH } from "../../theme";
 import { AlertInfoSheet } from "../AlertHeader";
 import { ShortcutsDialog } from "../ShortcutsDialog";
@@ -61,6 +63,7 @@ const SEARCH_ICONS: Record<Tab, ReactNode> = {
 const CHANNEL_ICONS: Record<ChannelTab, ReactNode> = {
   searches: <SearchOutlined />, posts: <ForumOutlined />, hidden: <VisibilityOffOutlined />, cleanup: <CleaningServicesOutlined />,
 };
+const STATUS_ICONS: Record<StatusTab, ReactNode> = { overview: <DashboardOutlined />, graphs: <ShowChartOutlined /> };
 
 /** The dashboard after sign-in: servers on the left, the picked server's channels, and the page. */
 export function Shell() {
@@ -217,8 +220,8 @@ export function Shell() {
       return <ServerListingsView guildId={guildId} guildName={guildName} totals={listingTotals} draft={draft} filters={filters}
         onFilters={setFilters} onTestTitle={openTitleTest} />;
     }
-    return <StatusView guildId={guildId} onOpenSearch={(alertId) => go({ alertId })}
-      onOpenChannel={(channelId) => go({ channelId, alertId: null })} />;
+    return <StatusView guildId={guildId} tab={place.statusTab} onTab={(statusTab) => { navigate({ statusTab }); toTop(); }}
+      onOpenSearch={(alertId) => go({ alertId })} onOpenChannel={(channelId) => go({ channelId, alertId: null })} />;
   })();
 
   const unknownChannel = channels.data?.unknown.find((item) => item.id === place.channelId) ?? null;
@@ -236,6 +239,12 @@ export function Shell() {
       return <SectionBar label="Channel sections" sections={tabs}
         value={available.includes(place.channelTab) ? place.channelTab : "searches"}
         onChange={(channelTab) => { navigate({ channelTab }); toTop(); }} />;
+    }
+    if (view === "status" && guildId && !guilds.isPending && !guilds.isError) {
+      const tabs = (Object.keys(STATUS_TABS) as StatusTab[]).map((tab): Section<StatusTab> => ({ value: tab, label: STATUS_TABS[tab],
+        icon: STATUS_ICONS[tab] }));
+      return <SectionBar label="Status sections" sections={tabs} value={place.statusTab}
+        onChange={(statusTab) => { navigate({ statusTab }); toTop(); }} />;
     }
     return null;
   })();

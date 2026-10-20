@@ -21,6 +21,7 @@ import type { Place } from "../../lib/hooks";
 import { useTouch } from "../../lib/responsive";
 import { SIDEBAR_WIDTH, TOPBAR_HEIGHT, figures } from "../../theme";
 import { LoadError } from "../common/Feedback";
+import { SearchUnread } from "../searches/SearchUnread";
 import { ChannelIcon } from "./ChannelIcon";
 
 const COLLAPSED_KEY = "dashboard:collapsed";
@@ -156,7 +157,10 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
   const searchRows = (channelId: string, depth: number) => (byChannel.get(channelId) ?? []).map((alert) => (
     <Row key={alert.id} depth={depth} icon={<SearchOutlined sx={{ fontSize: 16 }} />} label={alert.search_query}
       selected={place.alertId === alert.id} bright onClick={() => onNavigate({ alertId: alert.id, channelId: null, me: false })}
-      end={alert.review_count ? <CountBadge value={alert.review_count} label={`${formatCount(alert.review_count)} need review`} /> : undefined} />
+      end={<>
+        <SearchUnread alert={alert} />
+        {alert.review_count ? <CountBadge value={alert.review_count} label={`${formatCount(alert.review_count)} need review`} /> : null}
+      </>} />
   ));
 
   const channelRow = (channel: ChannelRow, depth = 0) => (

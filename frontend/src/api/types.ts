@@ -278,6 +278,8 @@ export interface AlertSummary {
   filtered_count: number;
   review_count: number;
   last_seen_at: string | null;
+  /** Newest saved decision, not refreshed when a check sees the same listing again. */
+  latest_candidate_id: string | null;
   active_version_id: string | null;
   /** The marketplaces this search checks, in display order. */
   sources: Source[];

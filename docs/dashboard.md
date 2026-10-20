@@ -289,6 +289,23 @@ channel, and whether you can view a channel for your notifications.
 
 ### Searches
 
+A dot labelled **Unread listings** marks searches with saved listings you have
+not read yet, in the channel list, Searches and Status. A search with existing
+listings starts unread; an empty search does not. Opening its unfiltered
+**Listings** tab, with **Earlier decisions** off, marks history through the
+newest loaded decision as read. Rules, Replay, Versions, filtered views, failed
+loads and background tabs do not advance that position. New listings or new
+decisions bring the dot back; seeing an unchanged listing on another check does
+not. Search summaries refresh every 30 seconds while the dashboard is visible.
+
+Read positions live only in this browser's `localStorage`, separately for each
+Discord user and search (`dashboard:read:<user-id>:<search-id>`). They survive
+reloads and signing out, and update other open tabs. The access-key login has
+its own shared browser-local history, under `access_key`, because it has no
+individual user identity. Clearing site storage resets the markers; nothing
+syncs to Discord or another device. If storage is blocked or full, reads stay
+in memory until the page reloads.
+
 **Add search**, on the Searches page or in a channel's Searches tab, does what
 `/register` does. The query takes 1 to 100 characters and the spaces at its ends
 are dropped, with the same check as the slash command. The channel must be a
@@ -349,9 +366,10 @@ Discord user, so there are no notifications.
 
 ### Status
 
-The Status page shows, for the server, whether the bot is ready and connected,
-when the last round of checks ended and the next one starts, and the last
-round without errors for each marketplace. For each search it shows the last
+The Status page opens on **Overview**. For the selected server it shows
+whether the bot is ready and connected, when the last round of checks ended
+and the next one starts, and the last round without errors for each
+marketplace. For each search it shows the last
 check for each marketplace: whether it worked, timed out or failed and with
 which kind of error, its listings, and its posts and DMs waiting to be sent or
 failed. The checks are kept in memory, so after a restart a search shows "not
@@ -360,8 +378,17 @@ checked since the bot started" until its next check. The standalone
 database. The server list puts a red dot on a server where a search failed its
 last check or a post or DM could not be sent.
 
-Each card and the Searches table have a **?** that explains them. Below them,
-**Graphs** shows the main graphs of the bot's Grafana dashboard for the last
+Click a column heading in the Searches table to sort by search, channel,
+latest check, listings, waiting messages or failed messages; click again to
+reverse the order. Searches without a recorded check stay last when sorting
+by last check. The table sorts the whole list before splitting it into pages,
+with 25 searches per page by default and a choice of 10, 25, 50 or 100.
+On phones and tablets, the search cards have **Sort by** and a direction
+button instead of table headings. The selected sort and page are kept while
+switching between Overview and Graphs.
+
+Each card and the Searches table have a **?** that explains them. The separate
+**Graphs** tab shows the main graphs of the bot's Grafana dashboard for the last
 hour, 6 hours, 24 hours or 7 days: checks and how long ago each marketplace
 last worked, how long rounds take, each search's checks and check time,
 listings, marketplace requests, and Discord delivery and the outbox. Each
@@ -372,6 +399,10 @@ Prometheus that scrapes the bot, so they need `PROMETHEUS_URL`, and
 `PROMETHEUS_INSTANCE` when more than one bot reports to it; see
 [monitoring.md](monitoring.md#the-same-graphs-on-the-dashboards-status-page).
 The standalone `dashboard.py` shows them too.
+
+Graph components and data load only when Graphs is opened, and graph refreshes
+stop when leaving that tab. The selected tab is in the URL, so a Graphs link
+can be bookmarked and browser Back returns to the previous tab.
 
 ## Rules for wrong products, accessories and bundles
 
@@ -631,6 +662,9 @@ Discord it also returns the `user` and the `guilds`
 Discord sign-in, `guild_id` on `/api/candidates` limits All listings to one of
 the servers they manage, and `/api/alerts` totals list each server under
 `guilds`.
+Each search summary also includes `latest_candidate_id`, a string ID or `null`
+when empty. It identifies the newest saved decision for the browser's local
+read marker; unlike `last_seen_at`, repeated unchanged sightings do not advance it.
 
 The management routes:
 

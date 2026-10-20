@@ -1,5 +1,5 @@
 import type { AlertSummary, Change, Policy, Source, TermMethod, Verdict } from "../api/types";
-import type { ChannelTab, Tab } from "./hooks";
+import type { ChannelTab, StatusTab, Tab } from "./hooks";
 
 export const SOURCES: Record<Source, string> = {
   yahooauction: "Yahoo Auctions",
@@ -54,3 +54,6 @@ export const SEARCH_TABS: Record<Tab, string> = { listings: "Listings", rules: "
 
 /** A channel's sections, in the order of its tabs. */
 export const CHANNEL_TABS: Record<ChannelTab, string> = { searches: "Searches", posts: "Posts", hidden: "Hidden", cleanup: "Cleanup" };
+
+/** The server status page's sections, in the order of its tabs. */
+export const STATUS_TABS: Record<StatusTab, string> = { overview: "Overview", graphs: "Graphs" };

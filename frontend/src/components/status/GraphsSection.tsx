@@ -28,7 +28,7 @@ export function GraphsSection({ guildId, channels, onOpenSearch }: Props) {
   const graphs = useGuildGraphs(guildId, range);
   const data = graphs.data;
   return (
-    <Box sx={{ mt: 4 }}>
+    <Box>
       <Typography variant="h3" component="h2" sx={{ mb: 1 }}>
         Graphs
         <HelpTip title="Graphs" text={HELP} />

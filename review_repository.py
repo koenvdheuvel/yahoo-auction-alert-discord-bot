@@ -371,7 +371,7 @@ class ReviewRepositoryMixin:
             counts = [fn.SUM(Case(None, [(CandidateObservation.verdict == verdict, 1)], 0)) for verdict in VERDICTS]
             latest = (CandidateObservation
                       .select(CandidateObservation.alert, fn.COUNT(CandidateObservation.id), *counts,
-                              fn.MAX(CandidateObservation.last_seen_at))
+                              fn.MAX(CandidateObservation.last_seen_at), fn.MAX(CandidateObservation.id))
                       .where(CandidateObservation.alert.is_null(False), _latest_condition())
                       .group_by(CandidateObservation.alert).tuples())
             stats = {row[0]: row[1:] for row in latest}
@@ -382,11 +382,12 @@ class ReviewRepositoryMixin:
                 query = query.where(Alert.guild_id.in_(guilds))
             alerts, servers = [], {}
             for alert in query:
-                listings, accepted, filtered, review, last_seen = stats.get(alert.id, (0, 0, 0, 0, None))
+                listings, accepted, filtered, review, last_seen, latest_id = stats.get(alert.id, (0, 0, 0, 0, None, None))
                 alerts.append(_alert_json(alert, {
                     "archived_count": archived.get(alert.id, 0), "listing_count": listings,
                     "accepted_count": accepted, "filtered_count": filtered, "review_count": review,
                     "last_seen_at": _timestamp(last_seen),
+                    "latest_candidate_id": str(latest_id) if latest_id is not None else None,
                 }, active.get(alert.id), choices.get(alert.id, {})))
                 if alert.guild_id is not None:
                     servers[alert.guild_id] = servers.get(alert.guild_id, 0) + archived.get(alert.id, 0)

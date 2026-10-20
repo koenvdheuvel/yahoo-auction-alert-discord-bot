@@ -12,6 +12,7 @@ import { Login, type SessionEnd } from "./components/Login";
 import { Shell } from "./components/shell/Shell";
 import { NoticeProvider } from "./components/common/Notices";
 import { claimDrafts } from "./lib/drafts";
+import { SearchReadOwner } from "./lib/searchReads";
 import { pageColor, theme } from "./theme";
 
 const queryClient: QueryClient = new QueryClient({
@@ -90,5 +91,6 @@ function SessionGate() {
       />
     );
   }
-  return <Shell />;
+  const owner = session.data.user?.id ?? (session.data.method === "access_key" ? "access_key" : null);
+  return <SearchReadOwner.Provider value={owner}><Shell /></SearchReadOwner.Provider>;
 }

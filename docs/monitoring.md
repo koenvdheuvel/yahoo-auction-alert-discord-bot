@@ -194,6 +194,9 @@ Tune concurrency after watching request/check latency, provider error rates, SQL
 
 ## The same graphs on the dashboard's Status page
 
+Open **Graphs** on the Status page to view these panels. The Overview tab
+does not load or refresh them.
+
 The dashboard's Status page (see [dashboard.md](dashboard.md#status)) shows the main panels of this Grafana dashboard, each with its description behind a **?**. They are not copied: at startup the dashboard reads each panel's title, description, unit, drawing style and PromQL from `monitoring/grafana-dashboard.json`, and it runs those queries against `PROMETHEUS_URL` with `$instance`, `$__rate_interval`, `$__interval` and `$__range` filled in the way Grafana fills them. Grafana's rows become the page's headings. To change a graph, change it in Grafana, export the dashboard as JSON into that file (keep the data sources as the dashboard's `prometheus` and `loki` variables), and restart. `PANELS` in `dashboard_graphs.py` lists the panels the Status page shows. Startup stops with a message when one of them is missing, is not a time series or a table, or uses another variable, so a dashboard change cannot quietly break the page.
 
 The browser only talks to the dashboard, and the dashboard asks Prometheus, so Prometheus needs no public address. The browser picks a range (1 hour, 6 hours, 24 hours or 7 days) and never sends PromQL. The answers are shared by everyone for 30 seconds. Most graphs count the whole bot. A panel whose query keeps `alert_id` is about single searches: each server only sees the series of its own searches, and only those whose search text and channel match the search as it is now, so a reused alert ID does not show a deleted search's history. When Prometheus has more than one bot under the `auction-bot` job and `PROMETHEUS_INSTANCE` is not set, the Status page says so and leaves the per-search graphs out, because an alert ID does not say which bot it belongs to.

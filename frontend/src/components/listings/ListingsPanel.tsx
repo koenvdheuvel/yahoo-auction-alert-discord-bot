@@ -11,6 +11,7 @@ import type { Candidate, Source } from "../../api/types";
 import { formatCount, safeUrl } from "../../lib/format";
 import { isTyping, useDebounced } from "../../lib/hooks";
 import { useCompact, usePhone, useTouch } from "../../lib/responsive";
+import { useSearchRead } from "../../lib/searchReads";
 import { SOURCES } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { TitleSeed } from "../TitleTestDialog";
@@ -64,6 +65,21 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = candidates;
   const items = useMemo(() => candidates.data?.pages.flatMap((page) => page.items) ?? [], [candidates.data]);
   const first = candidates.data?.pages[0];
+  const { markRead } = useSearchRead(alertId);
+  const readThrough = first?.items.reduce((latest, item) =>
+    item.alert_id === alertId && BigInt(item.id) > BigInt(latest) ? item.id : latest, "0") ?? "0";
+  const canMarkRead = alertId !== null && candidates.isSuccess && !candidates.isPlaceholderData
+    && filters.latest && !filters.search.trim() && !search && !filters.source && !filters.verdict;
+
+  useEffect(() => {
+    if (!canMarkRead || readThrough === "0") return;
+    const markVisible = () => {
+      if (document.visibilityState === "visible") markRead(readThrough);
+    };
+    markVisible();
+    document.addEventListener("visibilitychange", markVisible);
+    return () => document.removeEventListener("visibilitychange", markVisible);
+  }, [canMarkRead, readThrough, markRead]);
 
   const [active, setActive] = useState(0);
   const [drawer, setDrawer] = useState<number | null>(null);

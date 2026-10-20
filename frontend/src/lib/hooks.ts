@@ -5,6 +5,8 @@ export type Tab = "listings" | "rules" | "replay" | "versions";
 const TABS: Tab[] = ["listings", "rules", "replay", "versions"];
 export type ChannelTab = "searches" | "posts" | "hidden" | "cleanup";
 const CHANNEL_TABS: ChannelTab[] = ["searches", "posts", "hidden", "cleanup"];
+export type StatusTab = "overview" | "graphs";
+const STATUS_TABS: StatusTab[] = ["overview", "graphs"];
 /** Pages that belong to a server rather than to a channel or a search, and your own page. */
 export type ServerView = "status" | "searches" | "listings";
 const SERVER_VIEWS: ServerView[] = ["status", "searches", "listings"];
@@ -23,6 +25,8 @@ export interface Place {
   /** The search's tab. */
   tab: Tab;
   channelTab: ChannelTab;
+  /** The server status page's tab. */
+  statusTab: StatusTab;
 }
 
 const digits = (value: string | null) => (value && /^\d+$/.test(value) ? value : null);
@@ -41,6 +45,7 @@ function readPlace(): Place {
     view: SERVER_VIEWS.includes(view as ServerView) ? view as ServerView : "status",
     tab: TABS.includes(tab as Tab) ? tab as Tab : "listings",
     channelTab: CHANNEL_TABS.includes(tab as ChannelTab) ? tab as ChannelTab : "searches",
+    statusTab: STATUS_TABS.includes(tab as StatusTab) ? tab as StatusTab : "overview",
   };
 }
 
@@ -71,6 +76,8 @@ export function placeUrl(target: Place): string {
       if (target.channelTab !== "searches") params.set("tab", target.channelTab);
     } else if (target.view !== "status") {
       params.set("view", target.view);
+    } else if (target.statusTab !== "overview") {
+      params.set("tab", target.statusTab);
     }
   }
   const search = params.toString();

@@ -13,7 +13,7 @@ import { ChannelSidebar } from "./ChannelSidebar";
 import { setPhone } from "../../test/screen";
 
 const PLACE: Place = { guildId: "11", channelId: null, alertId: null, me: false, view: "status", tab: "listings",
-  channelTab: "searches" };
+  channelTab: "searches", statusTab: "overview" };
 const ALERTS = [alertSummary("1", "201", "BABYMETAL poster"), alertSummary("2", "203", "Sold out"),
   alertSummary("3", "999000000000000123", "Gone"), alertSummary("4", "777", "Elsewhere", "22")];
 

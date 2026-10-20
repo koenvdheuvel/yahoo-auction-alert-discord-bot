@@ -1,33 +1,26 @@
-import SearchOutlined from "@mui/icons-material/SearchOutlined";
-import Tag from "@mui/icons-material/Tag";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
-import Chip from "@mui/material/Chip";
-import Link from "@mui/material/Link";
 import Paper from "@mui/material/Paper";
 import Skeleton from "@mui/material/Skeleton";
-import Table from "@mui/material/Table";
-import TableBody from "@mui/material/TableBody";
-import TableCell from "@mui/material/TableCell";
-import TableHead from "@mui/material/TableHead";
-import TableRow from "@mui/material/TableRow";
-import Tooltip from "@mui/material/Tooltip";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
-import { useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useMemo } from "react";
+import type { ReactNode } from "react";
 
 import { useGuildStatus } from "../../api/hooks";
-import type { CheckResult, GuildStatus, SearchStatus } from "../../api/types";
-import { channelLabel } from "../../lib/channels";
-import { formatCount, formatDateTime, formatRelative, plural } from "../../lib/format";
+import type { GuildStatus } from "../../api/types";
+import { formatCount, formatRelative, plural } from "../../lib/format";
 import { sharedSearchChannels } from "../../lib/graphs";
+import type { StatusTab } from "../../lib/hooks";
 import { useCompact } from "../../lib/responsive";
-import { sourceName } from "../../lib/vocabulary";
-import { figures } from "../../theme";
+import { sourceName, STATUS_TABS } from "../../lib/vocabulary";
+import { TOPBAR_HEIGHT } from "../../theme";
 import { LoadError } from "../common/Feedback";
 import { HelpTip } from "../common/HelpTip";
-import { ActionSheet } from "../common/Sheet";
-import { SearchCard, SearchCards } from "../searches/SearchCard";
-import { GraphsSection } from "../status/GraphsSection";
+import { StatusSearches } from "../status/StatusSearches";
+
+const GraphsSection = lazy(() => import("../status/GraphsSection").then((module) => ({ default: module.GraphsSection })));
 
 const HELP = {
   bot: "Whether the bot is working. Ready means it is connected to Discord, its database answers, all of its background workers run, "
@@ -38,9 +31,6 @@ const HELP = {
     + "A time long ago means that marketplace keeps failing; the Searches table shows which searches and why.",
   waiting: "Posts and DMs for this server's searches that are queued but not yet accepted by Discord. They normally go out within seconds. "
     + "Failed ones gave up after several tries or a permanent error, such as a missing permission; the bot's operator can retry them.",
-  searches: "Each search in this server: the result of its last check on each marketplace (hover a chip for when, how long and why), "
-    + "how many listings it has found, and its posts and DMs that are waiting or failed. "
-    + "Last checks are kept in memory, so they are empty for a while after the bot restarts.",
 };
 
 const fromSeconds = (value: number | null | undefined) => (value ? new Date(value * 1000).toISOString() : null);
@@ -57,50 +47,6 @@ function Card({ title, value, detail, tone, help }: { title: string; value: Reac
       <Typography variant="h2" component="p" sx={{ color: tone, mt: { xs: 0, sm: 0.5 } }}>{value}</Typography>
       {detail && <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5, gridColumn: "1 / -1" }}>{detail}</Typography>}
     </Paper>
-  );
-}
-
-const OUTCOMES = { success: ["OK", "success"], error: ["Error", "error"], timeout: ["Timed out", "warning"] } as const;
-
-function chipLabel(check: CheckResult): string {
-  return `${sourceName(check.source)} ${check.outcome === "success" ? "✓" : OUTCOMES[check.outcome][0]}`;
-}
-
-function CheckChip({ check }: { check: CheckResult }) {
-  const [label, color] = OUTCOMES[check.outcome];
-  const finished = fromSeconds(check.finished_at);
-  const detail = [`${sourceName(check.source)}: ${label.toLowerCase()} ${formatRelative(finished)}`,
-    `took ${check.duration_seconds.toFixed(1)} s`, check.error && `(${check.error})`].filter(Boolean).join(", ");
-  return (
-    <Tooltip title={`${detail}. Finished ${formatDateTime(finished)}.`}>
-      <Chip variant="outlined" color={color} label={chipLabel(check)} sx={{ mr: 0.5, mb: 0.5 }} />
-    </Tooltip>
-  );
-}
-
-/** A card's last checks. What the desktop shows on hover is written out, since a finger cannot hover. */
-function CheckLines({ checks }: { checks: CheckResult[] | null }) {
-  if (checks === null) return null;
-  if (checks.length === 0) {
-    return <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>Not checked since the bot started</Typography>;
-  }
-  const latest = fromSeconds(Math.max(...checks.map((check) => check.finished_at)));
-  return (
-    <Box sx={{ mt: 1 }}>
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-        {checks.map((check) => (
-          <Chip key={check.source} variant="outlined" color={OUTCOMES[check.outcome][1]} label={chipLabel(check)} />
-        ))}
-      </Box>
-      {checks.filter((check) => check.outcome !== "success").map((check) => (
-        <Typography key={check.source} variant="body2" sx={{ mt: 0.5, color: `${OUTCOMES[check.outcome][1]}.main`, overflowWrap: "anywhere" }}>
-          {sourceName(check.source)}: {check.outcome === "timeout"
-            ? `timed out after ${check.duration_seconds.toFixed(1)} s`
-            : check.error ?? "the check failed"}
-        </Typography>
-      ))}
-      <Typography variant="caption" component="p" color="textSecondary" sx={{ mt: 0.5 }}>Checked {formatRelative(latest)}</Typography>
-    </Box>
   );
 }
 
@@ -137,125 +83,52 @@ function Bot({ status }: { status: GuildStatus }) {
   );
 }
 
-function backlogText(search: SearchStatus): string | null {
-  const { pending, failed, oldest_pending_seconds: oldest } = search.backlog;
-  if (!pending && !failed) return null;
-  return [pending && `${formatCount(pending)} waiting`, failed && `${formatCount(failed)} failed`].filter(Boolean).join(", ")
-    + (oldest ? `, oldest ${Math.round(oldest / 60)} min` : "");
-}
-
-function Backlog({ search }: { search: SearchStatus }) {
-  const text = backlogText(search);
-  if (!text) return <Typography variant="body2" color="textSecondary">Nothing waiting</Typography>;
-  return <Typography variant="body2" sx={{ color: search.backlog.failed ? "error.main" : undefined, ...figures }}>{text}</Typography>;
-}
-
-interface CardsProps {
-  searches: SearchStatus[];
-  onOpenSearch: (alertId: string) => void;
-  onOpenChannel: (channelId: string) => void;
-}
-
-/** On phones and tablets each search is a card that opens it; a long press also offers its channel. */
-function SearchStatusCards({ searches, onOpenSearch, onOpenChannel }: CardsProps) {
-  // The search stays while the sheet slides away, so its title does not go blank.
-  const [menu, setMenu] = useState<{ search: SearchStatus; open: boolean } | null>(null);
-  const picked = menu?.search;
-  return (
-    <>
-      <SearchCards label="Search status">
-        {searches.map((search) => {
-          const backlog = backlogText(search);
-          return (
-            <SearchCard key={search.id} name={search.search_query} onOpen={() => onOpenSearch(search.id)}
-              onMenu={() => setMenu({ search, open: true })}>
-              <Typography variant="body2" color="textSecondary" sx={{ ...figures, mt: 0.25 }}>
-                {channelLabel(search.channel_id, search.channel_name)} · {plural(search.listing_count, "listing")}
-              </Typography>
-              <CheckLines checks={search.checks} />
-              {backlog && (
-                <Typography variant="body2" sx={{ mt: 0.5, color: search.backlog.failed ? "error.main" : "text.primary", ...figures }}>
-                  Posts and DMs: {backlog}
-                </Typography>
-              )}
-            </SearchCard>
-          );
-        })}
-      </SearchCards>
-      <ActionSheet open={menu?.open ?? false} onClose={() => setMenu((current) => current && { ...current, open: false })}
-        title={picked?.search_query ?? ""} actions={picked ? [
-          { label: "Open the search", icon: <SearchOutlined />, onSelect: () => onOpenSearch(picked.id) },
-          { label: `Open ${channelLabel(picked.channel_id, picked.channel_name)}`, icon: <Tag />,
-            onSelect: () => onOpenChannel(picked.channel_id) },
-        ] : []} />
-    </>
-  );
-}
-
 interface Props {
   guildId: string;
+  tab: StatusTab;
+  onTab: (tab: StatusTab) => void;
   onOpenSearch: (alertId: string) => void;
   onOpenChannel: (channelId: string) => void;
 }
 
-/** How the server's searches are doing: the bot, each search's last checks, and what waits to be posted. */
-export function StatusView({ guildId, onOpenSearch, onOpenChannel }: Props) {
+/** The quick status overview stays separate from the on-demand Prometheus graphs. */
+export function StatusView({ guildId, tab, onTab, onOpenSearch, onOpenChannel }: Props) {
   const compact = useCompact();
   const status = useGuildStatus(guildId);
   const channels = useMemo(() => sharedSearchChannels(status.data?.searches ?? []), [status.data]);
-  if (status.isPending) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={160} /></Box>;
-  if (status.isError) return <Box sx={{ p: 3 }}><LoadError error={status.error} what="The status" onRetry={() => void status.refetch()} /></Box>;
-  const data = status.data;
   return (
-    <Box sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
-      <Bot status={data} />
-      <Typography variant="h3" component="h2" sx={{ mb: 1 }}>
-        Searches
-        <HelpTip title="Searches" text={HELP.searches} />
-      </Typography>
-      {data.searches.length === 0 ? (
-        <Typography variant="body2" color="textSecondary">No searches in this server yet.</Typography>
-      ) : compact ? (
-        <SearchStatusCards searches={data.searches} onOpenSearch={onOpenSearch} onOpenChannel={onOpenChannel} />
-      ) : (
-        <Box sx={{ overflowX: "auto" }}>
-          <Table size="small" aria-label="Search status">
-            <TableHead>
-              <TableRow>
-                <TableCell>Search</TableCell>
-                <TableCell>Channel</TableCell>
-                <TableCell>Last checks</TableCell>
-                <TableCell align="right">Listings</TableCell>
-                <TableCell>Posts and DMs</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {data.searches.map((search) => (
-                <TableRow key={search.id} hover>
-                  <TableCell>
-                    <Link component="button" onClick={() => onOpenSearch(search.id)} sx={{ fontWeight: 600, color: "text.primary" }}>
-                      {search.search_query}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <Link component="button" color="inherit" onClick={() => onOpenChannel(search.channel_id)}>
-                      {channelLabel(search.channel_id, search.channel_name)}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    {search.checks === null ? <Typography variant="body2" color="textSecondary">Unknown here</Typography>
-                      : search.checks.length === 0 ? <Typography variant="body2" color="textSecondary">Not checked since the bot started</Typography>
-                        : search.checks.map((check) => <CheckChip key={check.source} check={check} />)}
-                  </TableCell>
-                  <TableCell align="right" sx={figures}>{formatCount(search.listing_count)}</TableCell>
-                  <TableCell><Backlog search={search} /></TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+    <>
+      {!compact && (
+        <Box sx={{ px: 3, borderBottom: 1, borderColor: "divider", position: "sticky", top: TOPBAR_HEIGHT,
+          bgcolor: "background.default", zIndex: 3 }}>
+          <Tabs value={tab} onChange={(_, next: StatusTab) => onTab(next)} aria-label="Status sections">
+            {(Object.keys(STATUS_TABS) as StatusTab[]).map((section) => (
+              <Tab key={section} value={section} id={`status-tab-${section}`} aria-controls={`status-${section}-panel`}
+                label={STATUS_TABS[section]} />
+            ))}
+          </Tabs>
         </Box>
       )}
-      <GraphsSection guildId={guildId} channels={channels} onOpenSearch={onOpenSearch} />
-    </Box>
+      {/* Keep the overview's sort and page when visiting graphs, without keeping charts or their polling mounted. */}
+      <Box id="status-overview-panel" role={compact ? "region" : "tabpanel"} hidden={tab !== "overview"}
+        aria-label={compact ? STATUS_TABS.overview : undefined} aria-labelledby={compact ? undefined : "status-tab-overview"}
+        sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
+        {status.isPending ? <Skeleton variant="rounded" height={160} />
+          : status.isError ? <LoadError error={status.error} what="The status" onRetry={() => void status.refetch()} />
+            : <>
+              <Bot status={status.data} />
+              <StatusSearches searches={status.data.searches} onOpenSearch={onOpenSearch} onOpenChannel={onOpenChannel} />
+            </>}
+      </Box>
+      <Box id="status-graphs-panel" role={compact ? "region" : "tabpanel"} hidden={tab !== "graphs"}
+        aria-label={compact ? STATUS_TABS.graphs : undefined} aria-labelledby={compact ? undefined : "status-tab-graphs"}
+        sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
+        {tab === "graphs" && (
+          <Suspense fallback={<Skeleton variant="rounded" height={260} />}>
+            <GraphsSection guildId={guildId} channels={channels} onOpenSearch={onOpenSearch} />
+          </Suspense>
+        )}
+      </Box>
+    </>
   );
 }
