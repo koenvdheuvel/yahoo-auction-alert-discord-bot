@@ -3,47 +3,32 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
 import LinearProgress from "@mui/material/LinearProgress";
-import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
-import Table from "@mui/material/Table";
-import TableBody from "@mui/material/TableBody";
-import TableCell from "@mui/material/TableCell";
-import TableContainer from "@mui/material/TableContainer";
-import TableHead from "@mui/material/TableHead";
-import TablePagination from "@mui/material/TablePagination";
-import TableRow from "@mui/material/TableRow";
 import Typography from "@mui/material/Typography";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ApiError, api } from "../../api/client";
 import { useSession } from "../../api/hooks";
-import type { AlertSummary, Ruleset, ReplayItem, ReplaySummary } from "../../api/types";
+import type { AlertSummary, Change, Ruleset } from "../../api/types";
 import { errorMessage } from "../../lib/errors";
-import { formatCount, formatDateTime, formatPrice, formatRelative, plural, safeUrl } from "../../lib/format";
+import { formatCount, formatRelative, plural } from "../../lib/format";
 import type { Draft } from "../../lib/useDraft";
-import { CHANGES, VERDICTS, sourceName } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { StoredReplay } from "../views/SearchView";
-import { DecisionButton } from "../common/Decision";
 import { EmptyState } from "../common/Feedback";
-import { ListingImage } from "../common/ListingImage";
-
-type Show = "changes" | "newly_allowed" | "newly_blocked" | "all";
-
-const SHOWS: Record<Show, { name: string; test: (item: ReplayItem) => boolean }> = {
-  changes: { name: "Changed", test: (item) => item.change !== "unchanged" },
-  newly_allowed: { name: "Newly allowed", test: (item) => item.change === "newly_allowed" },
-  newly_blocked: { name: "Newly filtered", test: (item) => item.change === "newly_blocked" },
-  all: { name: "Everything checked", test: () => true },
-};
+import { ReplayResults } from "./ReplayResults";
+import { SHOWS, inView, type Show } from "./views";
 
 function Tally({ value, children, tone, onClick, active }: {
   value: number; children: ReactNode; tone?: string; onClick: () => void; active: boolean;
 }) {
   return (
     <ButtonBase onClick={onClick} aria-pressed={active} sx={{ px: 1.5, py: 1, borderRadius: 1, border: 1,
-      borderColor: active ? "text.primary" : "transparent", "&:hover": { bgcolor: "action.hover" } }}>
+      justifyContent: "flex-start", alignItems: "flex-start", bgcolor: { xs: "background.paper", sm: "transparent" },
+      borderColor: active ? "text.primary" : "transparent",
+      // A finger leaves hover behind after a tap, so only a mouse gets it.
+      "@media (hover: hover)": { "&:hover": { bgcolor: "action.hover" } } }}>
       <Box sx={{ textAlign: "left" }}>
         <Typography component="span" sx={{ display: "block", fontSize: "1.25rem", fontWeight: 680, color: value ? tone : "text.secondary",
           lineHeight: 1.2, ...figures }}>
@@ -55,56 +40,29 @@ function Tally({ value, children, tone, onClick, active }: {
   );
 }
 
-function Summary({ summary, show, onShow }: { summary: ReplaySummary; show: Show; onShow: (show: Show) => void }) {
+// Each tally shows exactly its own group of listings, so the number always matches the list.
+const TALLIES: { change: Change; label: string; tone?: string }[] = [
+  { change: "newly_allowed", label: "newly allowed", tone: "success.main" },
+  { change: "newly_blocked", label: "newly filtered", tone: "text.primary" },
+  { change: "changed", label: "other changes, such as held for review", tone: "warning.main" },
+  { change: "unchanged", label: "unchanged" },
+];
+
+function Summary({ counts, show, onShow }: { counts: Record<Change, number>; show: Show; onShow: (show: Show) => void }) {
   return (
     <Box>
       <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>What the draft changes</Typography>
-      <Stack direction="row" sx={{ flexWrap: "wrap", gap: 0.5 }}>
-        <Tally value={summary.newly_allowed} tone="success.main" active={show === "newly_allowed"} onClick={() => onShow("newly_allowed")}>
-          newly allowed
-        </Tally>
-        <Tally value={summary.newly_blocked} tone="text.primary" active={show === "newly_blocked"} onClick={() => onShow("newly_blocked")}>
-          newly filtered
-        </Tally>
-        <Tally value={summary.changed} tone="warning.main" active={show === "changes"} onClick={() => onShow("changes")}>
-          other changes, such as held for review
-        </Tally>
-        <Tally value={summary.unchanged} active={show === "all"} onClick={() => onShow("all")}>unchanged</Tally>
-      </Stack>
+      {/* Two by two on phones, a row on larger screens. */}
+      <Box sx={{ display: { xs: "grid", sm: "flex" }, gridTemplateColumns: "repeat(2, minmax(0, 1fr))", flexWrap: "wrap",
+        gap: { xs: 1, sm: 0.5 } }}>
+        {TALLIES.map((tally) => (
+          <Tally key={tally.change} value={counts[tally.change]} tone={tally.tone} active={show === tally.change}
+            onClick={() => onShow(tally.change)}>
+            {tally.label}
+          </Tally>
+        ))}
+      </Box>
     </Box>
-  );
-}
-
-function Row({ item }: { item: ReplayItem }) {
-  const candidate = item.candidate;
-  const url = safeUrl(candidate.url);
-  const title = candidate.title || "Untitled listing";
-  return (
-    <TableRow hover sx={{ "& td": { verticalAlign: "top" } }}>
-      <TableCell sx={{ minWidth: 280 }}>
-        <Stack direction="row" spacing={1.5}>
-          <ListingImage src={candidate.image_url} size={56} />
-          <Box sx={{ minWidth: 0 }}>
-            <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
-              {url ? <Link href={url} target="_blank" rel="noopener noreferrer">{title}</Link> : title}
-            </Typography>
-            <Typography variant="caption" color="textSecondary" sx={figures}>
-              {sourceName(candidate.source)} {formatPrice(candidate.price)}
-            </Typography>
-          </Box>
-        </Stack>
-      </TableCell>
-      <TableCell><DecisionButton decision={item.original_decision} label={`Recorded ${formatDateTime(candidate.observed_at)}`} /></TableCell>
-      <TableCell><DecisionButton decision={item.active_decision} label="Published rules" /></TableCell>
-      <TableCell>
-        <DecisionButton decision={item.draft_decision} label="Your draft" />
-        {item.change !== "unchanged" && (
-          <Typography variant="caption" color="textSecondary" component="p">
-            {CHANGES[item.change]}, was {VERDICTS[item.active_decision.verdict].toLowerCase()}
-          </Typography>
-        )}
-      </TableCell>
-    </TableRow>
   );
 }
 
@@ -123,6 +81,7 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
   const session = useSession();
   const [show, setShow] = useState<Show>("changes");
   const [page, setPage] = useState(0);
+  const views = useRef<HTMLDivElement>(null);
   const run = useMutation({
     mutationFn: (serialized: string) => api.replay(alert!.id, JSON.parse(serialized) as Ruleset),
     onSuccess: (result, serialized) => {
@@ -131,7 +90,12 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
       setShow("changes");
     },
   });
-  const items = useMemo(() => stored?.result.items.filter(SHOWS[show].test) ?? [], [stored, show]);
+  const items = useMemo(() => stored?.result.items.filter((item) => inView(item, show)) ?? [], [stored, show]);
+  const counts = useMemo(() => {
+    const result: Record<Change, number> = { newly_allowed: 0, newly_blocked: 0, changed: 0, unchanged: 0 };
+    for (const item of stored?.result.items ?? []) result[item.change] += 1;
+    return result;
+  }, [stored]);
   const { mutate } = run;
   const autoStarted = useRef(false);
 
@@ -154,10 +118,16 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
   const stale = stored !== null && stored.serialized !== draft.serialized;
   const summary = stored?.result.summary;
   const busy = run.error instanceof ApiError && run.error.code === "busy";
-  const perPage = 50;
+  const select = (next: Show) => {
+    setShow(next);
+    setPage(0);
+    // On phones the views scroll sideways, so a tally can pick one that is out of sight.
+    views.current?.querySelector(`[data-show="${next}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
 
   return (
-    <Box sx={{ display: "grid", gap: 2.5 }}>
+    // One column that never grows wider than the page, however wide the results are.
+    <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2.5 }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { sm: "flex-start" } }}>
         <Box sx={{ maxWidth: 720 }}>
           <Typography variant="h2" component="h2">Compare the draft with the published rules</Typography>
@@ -201,37 +171,23 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
           {summary.budget_exceeded && (
             <Alert severity="warning">Replay stopped after 10 seconds, so not every listing was checked. The counts cover the checked ones.</Alert>
           )}
-          <Summary summary={summary} show={show} onShow={(next) => { setShow(next); setPage(0); }} />
+          <Summary counts={counts} show={show} onShow={select} />
           <Box>
-            <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1, mb: 1 }} role="group" aria-label="Show">
+            {/* On phones the views are one row that scrolls sideways under the page's edges. */}
+            <Stack ref={views} direction="row" role="group" aria-label="Show" sx={{ gap: 1, mb: 1,
+              flexWrap: { xs: "nowrap", sm: "wrap" }, overflowX: { xs: "auto", sm: "visible" }, mx: { xs: -2, sm: 0 },
+              px: { xs: 2, sm: 0 }, scrollPaddingInline: "16px", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
               {(Object.keys(SHOWS) as Show[]).map((key) => (
-                <Button key={key} size="small" variant={show === key ? "contained" : "outlined"} color="inherit"
-                  aria-pressed={show === key} onClick={() => { setShow(key); setPage(0); }}>
-                  {SHOWS[key].name}
+                <Button key={key} data-show={key} size="small" variant={show === key ? "contained" : "outlined"} color="inherit"
+                  aria-pressed={show === key} onClick={() => select(key)} sx={{ flex: "none" }}>
+                  {SHOWS[key]}
                 </Button>
               ))}
             </Stack>
             {items.length === 0 ? (
               <EmptyState title="Nothing here">No checked listing falls in this group.</EmptyState>
             ) : (
-              <TableContainer sx={{ border: 1, borderColor: "divider", borderRadius: 1, bgcolor: "background.paper" }}>
-                <Table size="small" aria-label="Replay results">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Listing</TableCell>
-                      <TableCell>Recorded then</TableCell>
-                      <TableCell>Published rules</TableCell>
-                      <TableCell>Your draft</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {items.slice(page * perPage, (page + 1) * perPage).map((item) => <Row key={item.candidate.id} item={item} />)}
-                  </TableBody>
-                </Table>
-                <TablePagination component="div" count={items.length} page={page} rowsPerPage={perPage}
-                  rowsPerPageOptions={[perPage]} onPageChange={(_, next) => setPage(next)}
-                  labelDisplayedRows={({ from, to, count }) => `${formatCount(from)} to ${formatCount(to)} of ${formatCount(count)}`} />
-              </TableContainer>
+              <ReplayResults items={items} page={page} onPage={setPage} />
             )}
           </Box>
         </>

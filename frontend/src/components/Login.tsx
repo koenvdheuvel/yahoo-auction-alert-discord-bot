@@ -35,16 +35,24 @@ interface Props {
 
 const ENDED = "Your session ended. Sign in again; your unpublished drafts are still here.";
 
+// The page reaches under the notch and the home bar (viewport-fit=cover), so each side keeps at least that much space free.
+const clear = (side: "top" | "right" | "bottom" | "left", least: number) => `max(${least}px, env(safe-area-inset-${side}, 0px))`;
+
 export function Login({ method, title = "Dashboard", bot = null, ended, unreachable, onRetry, onSignedIn }: Props) {
   return (
-    <Box component="main" sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 3, bgcolor: "surface.rail" }}>
-      <Box sx={{ width: "100%", maxWidth: 440, bgcolor: "background.default", borderRadius: 2, p: { xs: 3, sm: 4 },
-        boxShadow: "0 8px 24px rgba(0,0,0,0.24)" }}>
+    // On phones the form fills the screen from the top, like Discord's app, so the on-screen keyboard does not
+    // cover the button. Larger screens get a card in the middle.
+    <Box component="main" sx={{ minHeight: "100dvh", display: "grid", placeItems: { xs: "start center", sm: "center" },
+      bgcolor: { xs: "background.default", sm: "surface.rail" },
+      pt: { xs: clear("top", 16), sm: clear("top", 24) }, pb: { xs: clear("bottom", 16), sm: clear("bottom", 24) },
+      pl: { xs: clear("left", 0), sm: clear("left", 24) }, pr: { xs: clear("right", 0), sm: clear("right", 24) } }}>
+      <Box sx={{ width: "100%", maxWidth: 440, bgcolor: "background.default", borderRadius: { xs: 0, sm: 2 }, p: { xs: 3, sm: 4 },
+        boxShadow: { xs: "none", sm: "0 8px 24px rgba(0,0,0,0.24)" } }}>
         <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 3 }}>
           <Avatar src={bot?.avatar_url} alt="" sx={{ width: 48, height: 48, bgcolor: "primary.main" }}>
             {bot ? bot.name.slice(0, 1) : <LogoMark size={28} />}
           </Avatar>
-          <Typography variant="h1" component="h1">{title}</Typography>
+          <Typography variant="h1" component="h1" sx={{ minWidth: 0, overflowWrap: "anywhere" }}>{title}</Typography>
         </Stack>
         <Typography variant="body1" color="textSecondary" sx={{ mb: 3 }}>
           Manage the bot's searches, channels and notifications, and tune the rules that decide what gets posted to
@@ -121,7 +129,8 @@ function AccessKeySignIn({ ended, onSignedIn }: { ended: boolean; onSignedIn: (s
         size="medium"
         helperText="It is in the .dashboard-token file next to the bot's database, or in DASHBOARD_TOKEN."
         slotProps={{
-          htmlInput: { maxLength: 512, spellCheck: false, autoCapitalize: "off" },
+          // The keyboard's Enter key signs in, so phones label it Go.
+          htmlInput: { maxLength: 512, spellCheck: false, autoCapitalize: "off", enterKeyHint: "go" },
           input: {
             endAdornment: (
               <InputAdornment position="end">

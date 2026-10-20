@@ -1,7 +1,6 @@
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
@@ -19,6 +18,7 @@ import { errorMessage } from "../lib/errors";
 import type { Draft } from "../lib/useDraft";
 import { SOURCES } from "../lib/vocabulary";
 import { ReasonList, VerdictText } from "./common/Decision";
+import { SheetDialog } from "./common/Sheet";
 
 export interface TitleSeed {
   title?: string;
@@ -57,7 +57,8 @@ function TitleTestForm({ seed, alert, draft, onClose }: FormProps) {
 
   const decision = preview.data?.decision;
   return (
-    <Box component="form" onSubmit={submit} noValidate>
+    // A flex column, so the content scrolls and the buttons stay in sight, also above the on-screen keyboard.
+    <Box component="form" onSubmit={submit} noValidate sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
       <DialogTitle id="title-test-title">Test a title</DialogTitle>
       <DialogContent sx={{ display: "grid", gap: 2 }}>
         <Typography variant="body2" color="textSecondary">
@@ -67,12 +68,13 @@ function TitleTestForm({ seed, alert, draft, onClose }: FormProps) {
         </Typography>
         <TextField label="Listing title" value={title} onChange={(event) => setTitle(event.target.value)}
           multiline minRows={2} required autoFocus fullWidth slotProps={{ htmlInput: { maxLength: 10000 } }} />
+        {/* On phones the marketplace gets more of the row than the short price. */}
         <Stack direction="row" spacing={1.5}>
           <TextField select label="Marketplace" value={source} onChange={(event) => setSource(event.target.value as Source)}
-            sx={{ flex: 1 }}>
+            sx={{ flex: { xs: 3, sm: 1 } }}>
             {(Object.keys(SOURCES) as Source[]).map((name) => <MenuItem key={name} value={name}>{SOURCES[name]}</MenuItem>)}
           </TextField>
-          <TextField label="Price" value={price} onChange={(event) => setPrice(event.target.value)} sx={{ flex: 1 }}
+          <TextField label="Price" value={price} onChange={(event) => setPrice(event.target.value)} sx={{ flex: { xs: 2, sm: 1 } }}
             error={!priceValid} helperText={priceValid ? undefined : "Enter a whole number of yen"}
             slotProps={{ htmlInput: { inputMode: "numeric" }, input: { startAdornment: <InputAdornment position="start">¥</InputAdornment> } }} />
         </Stack>
@@ -109,8 +111,8 @@ interface Props {
 
 export function TitleTestDialog({ test, alert, draft, onClose }: Props) {
   return (
-    <Dialog open={test?.open ?? false} onClose={onClose} maxWidth="sm" aria-labelledby="title-test-title">
+    <SheetDialog open={test?.open ?? false} onClose={onClose} maxWidth="sm" aria-labelledby="title-test-title">
       {test && <TitleTestForm key={test.id} seed={test.seed} alert={alert} draft={draft} onClose={onClose} />}
-    </Dialog>
+    </SheetDialog>
   );
 }

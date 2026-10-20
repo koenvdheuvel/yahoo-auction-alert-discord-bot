@@ -1,10 +1,11 @@
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import Typography from "@mui/material/Typography";
+
+import { SheetDialog } from "./common/Sheet";
 
 const GROUPS: [string, [string[], string][]][] = [
   ["Listings", [
@@ -24,7 +25,7 @@ const GROUPS: [string, [string[], string][]][] = [
 
 export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" aria-labelledby="shortcuts-title">
+    <SheetDialog open={open} onClose={onClose} maxWidth="sm" aria-labelledby="shortcuts-title">
       <DialogTitle id="shortcuts-title">Keyboard shortcuts</DialogTitle>
       <DialogContent sx={{ display: "grid", gap: 2.5 }}>
         {GROUPS.map(([group, rows]) => (
@@ -48,6 +49,6 @@ export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () 
         ))}
       </DialogContent>
       <DialogActions><Button onClick={onClose}>Close</Button></DialogActions>
-    </Dialog>
+    </SheetDialog>
   );
 }

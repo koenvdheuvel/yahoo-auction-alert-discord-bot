@@ -23,9 +23,12 @@ export function RulesetSummary({ ruleset }: { ruleset: Ruleset }) {
           </Box>
           <Box component="dd" sx={{ m: 0, display: "flex", flexWrap: "wrap", gap: 0.5, alignContent: "flex-start" }}>
             {group.terms.map((term, index) => (
+              // A long term wraps inside its chip instead of being cut off at the edge of a phone.
               <Chip key={`${term.value}-${index}`} variant="outlined"
                 label={term.method === "contains" ? term.value : `${METHODS[term.method].name}: ${term.value}`}
-                sx={term.method === "regex" ? { fontFamily: mono, fontSize: "0.75rem" } : undefined} />
+                sx={{ height: "auto", minHeight: 24,
+                  "& .MuiChip-label": { whiteSpace: "normal", overflowWrap: "anywhere" },
+                  ...(term.method === "regex" ? { fontFamily: mono, fontSize: "0.75rem" } : {}) }} />
             ))}
           </Box>
         </Box>
