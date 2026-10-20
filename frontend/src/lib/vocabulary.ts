@@ -5,6 +5,7 @@ export const SOURCES: Record<Source, string> = {
   yahooauction: "Yahoo Auctions",
   mercari: "Mercari",
   surugaya: "Surugaya",
+  rakuma: "Rakuma",
 };
 
 export function sourceName(source: string): string {

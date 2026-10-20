@@ -27,6 +27,7 @@ from dashboard_limits import (DISCORD_FAILURES_PER_MINUTE, VISITOR_FAILURES_PER_
                               client_address, forwarded_proto, visitor_key)
 from dashboard_manage import Management
 from discord_directory import ChannelDirectory
+from marketplaces import SOURCES
 from review_repository import ReviewConflict, ReviewNotFound, ReviewValidation
 from review_service import ReviewBusy, ReviewService, identifier
 
@@ -53,7 +54,6 @@ ACCESS_RETRY_SECONDS = 30
 REVOKED_SECONDS = 600
 # Where sign-in may return to: the UI's page with its search and tab, nothing else.
 NEXT_PAGE = re.compile(r"/(\?[A-Za-z0-9=&_-]{1,200})?")
-SOURCES = {"yahooauction", "mercari", "surugaya"}
 # Vite writes this placeholder into index.html (html.cspNonce); each page view gets a new value.
 NONCE_PLACEHOLDER = "__CSP_NONCE__"
 ASSET_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,199}")
@@ -634,6 +634,8 @@ class DashboardServer:
         return {"authenticated": True, **await self.about(),
                 "expires_in": int(session.expires - time.monotonic()),
                 "replay_limit": self.settings.dashboard_replay_limit, "user": session.user, "guilds": guilds,
+                # The marketplaces the bot searches; a search's own choice only has effect for these.
+                "enabled_sources": list(self.settings.enabled_sources),
                 # 🔔 notifications belong to a Discord user; the channel checks need Discord data.
                 "features": {"notifications": session.user is not None, "discord_data": self.directory.available}}
 

@@ -32,11 +32,11 @@ class ApplicationBot(hikari.GatewayBot):
     services: ApplicationServices
 
 
-def load_commands(bot, client, repository):
+def load_commands(bot, client, repository, enabled_sources):
     # Explicit registration makes startup independent of cwd/module search path.
     from commands import register_commands
 
-    register_commands(client, bot, repository)
+    register_commands(client, bot, repository, enabled_sources)
 
 
 def create_application(settings=None):
@@ -88,7 +88,7 @@ def create_application(settings=None):
     dashboard.runtime = runtime
     bot.services = ApplicationServices(repository, runtime, metrics, client)
     processor = HikariEventProcessor()
-    load_commands(bot, client, repository)
+    load_commands(bot, client, repository, settings.enabled_sources)
 
     async def startup_failed():
         logger.exception("runtime_startup_failed")

@@ -47,7 +47,7 @@ describe("parseRuleset", () => {
     ['{"groups": [{"terms": [{"value": "x", "method": "glob"}]}]}', "Group 1, term 1 method must be one of: contains, exact, regex."],
     ['{"groups": [{"terms": []}, {"label": "no terms"}]}', "Group 2 needs a list of terms."],
     ['{"price": {"min": -1}}', "price.min must be a whole number of yen, or null."],
-    ['{"sources": ["ebay"]}', "Each source must be one of: mercari, surugaya, yahooauction."],
+    ['{"sources": ["ebay"]}', "Each source must be one of: mercari, rakuma, surugaya, yahooauction."],
     ['{"include_legacy": "yes"}', "include_legacy must be true or false."],
   ])("says what is wrong with %s", (text, message) => {
     expect(() => parseRuleset(text)).toThrow(message);

@@ -126,10 +126,9 @@ def integer(value, source, field, *, default=None):
 
 class FromJapanAdapter:
     source = ""
-    color = 0
     items_per_page = 99
     item_url = ""
-    # Yahoo and Surugaya report an exact total; Mercari's is an estimate (see MercariAdapter).
+    # Yahoo, Surugaya and Rakuma report an exact total; Mercari's is an estimate (see MercariAdapter).
     exact_count = True
 
     def __init__(self, http, settings):
@@ -204,13 +203,11 @@ class FromJapanAdapter:
 
 class YahooAuctionsAdapter(FromJapanAdapter):
     source = "yahooauction"
-    color = 0xFFA500
     item_url = "https://buyee.jp/item/yahoo/auction/{id}"
 
 
 class MercariAdapter(FromJapanAdapter):
     source = "mercari"
-    color = 0xFF0000
     item_url = "https://jp.mercari.com/item/{id}"
     # FromJapan's Mercari `count` changes from page to page (e.g. 127 -> 300 -> 0, or
     # 3844 -> 9319) and pages hold fewer than `hits` items.
@@ -219,7 +216,6 @@ class MercariAdapter(FromJapanAdapter):
 
 class SurugayaAdapter(FromJapanAdapter):
     source = "surugaya"
-    color = 0x0000FF
     items_per_page = 24
     item_url = "https://www.suruga-ya.jp/product/detail/{id}"
 
@@ -231,6 +227,12 @@ class SurugayaAdapter(FromJapanAdapter):
         return super().listing_url(data, identifier)
 
 
+class RakumaAdapter(FromJapanAdapter):
+    # Rakuma IDs are 32 hex characters; every listing reports its stock.
+    source = "rakuma"
+    item_url = "https://item.fril.jp/{id}"
+
+
 PROVIDERS = {provider.source: provider for provider in (
-    YahooAuctionsAdapter, MercariAdapter, SurugayaAdapter,
+    YahooAuctionsAdapter, MercariAdapter, SurugayaAdapter, RakumaAdapter,
 )}

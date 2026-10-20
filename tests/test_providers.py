@@ -11,7 +11,7 @@ from prometheus_client import generate_latest
 
 from config import Settings
 from observability import Metrics
-from providers import HttpClient, MercariAdapter, ProviderError, SurugayaAdapter, YahooAuctionsAdapter
+from providers import HttpClient, MercariAdapter, ProviderError, RakumaAdapter, SurugayaAdapter, YahooAuctionsAdapter
 
 
 class HttpClientTests(unittest.IsolatedAsyncioTestCase):
@@ -216,7 +216,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                 self.adapter().normalize(data)
 
     def test_non_auction_missing_stock_is_rejected_while_explicit_zero_is_valid(self):
-        for adapter_type in (MercariAdapter, SurugayaAdapter):
+        for adapter_type in (MercariAdapter, SurugayaAdapter, RakumaAdapter):
             adapter = self.adapter(adapter_type)
             for data in ({"id": "a", "price": 1}, {"id": "a", "price": 1, "stock": None}):
                 with self.subTest(source=adapter.source, data=data), self.assertRaisesRegex(ProviderError, "invalid_stock"):

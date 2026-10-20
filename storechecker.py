@@ -41,7 +41,10 @@ class Ingestion:
         decision = {**decision, "observation_kind": kind}
         await self.repository.archive_candidate(alert, payload, decision, version_id)
 
-    async def check(self, provider, alert):
+    async def check(self, provider, alert, *, seeding=False):
+        """seeding: the search has no baseline on this marketplace yet, because it was just turned on
+        or is new to the bot. Its listings are saved without being posted, so later checks post only
+        listings that are new from then on."""
         version = await self.repository.active_rules_for_alert(alert)
         version_id = version["id"] if version else None
         policy = CompiledRuleset(version["ruleset"] if version else default_ruleset(),
@@ -87,9 +90,14 @@ class Ingestion:
                     continue
                 outcome = await self.repository.observe(alert, listing, self.settings.price_threshold,
                                                         decision_payload=decision.payload(),
-                                                        ruleset_version_id=version_id)
+                                                        ruleset_version_id=version_id, post=not seeding)
                 self.metrics.items.labels(source=provider.source, outcome=outcome).inc()
         finally:
             await self.repository.record_filter_matches(matched)
+        if seeding:
+            # Every page was read. A listing that failed to parse is not part of the baseline, as
+            # in any check; staying unseeded would keep the search from ever posting.
+            await self.repository.mark_seeded(alert, provider.source)
+            logger.info("alert_source_seeded")
         if invalid:
             raise IngestionError(f"Check completed with {invalid} invalid listings")

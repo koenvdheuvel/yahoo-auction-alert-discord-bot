@@ -9,6 +9,7 @@ import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
 import ReplayOutlined from "@mui/icons-material/ReplayOutlined";
 import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import SearchOutlined from "@mui/icons-material/SearchOutlined";
+import StorefrontOutlined from "@mui/icons-material/StorefrontOutlined";
 import TuneOutlined from "@mui/icons-material/TuneOutlined";
 import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
 import Alert from "@mui/material/Alert";
@@ -36,6 +37,7 @@ import { ShortcutsDialog } from "../ShortcutsDialog";
 import { LoadError } from "../common/Feedback";
 import { TitleTestDialog, type TitleSeed, type TitleTest } from "../TitleTestDialog";
 import { AddSearchDialog } from "../searches/AddSearchDialog";
+import { MarketplacesDialog } from "../searches/MarketplacesDialog";
 import { UnregisterDialog } from "../searches/UnregisterDialog";
 import { ChannelView } from "../views/ChannelView";
 import { NotificationsView } from "../views/NotificationsView";
@@ -78,6 +80,7 @@ export function Shell() {
   const [titleTest, setTitleTest] = useState<TitleTest | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [adding, setAdding] = useState<{ channelId: string | null } | null>(null);
+  const [marketplaces, setMarketplaces] = useState<AlertSummary | null>(null);
   const [unregistering, setUnregistering] = useState<AlertSummary | null>(null);
   const [replays, setReplays] = useState<Record<string, StoredReplay>>({});
   // "Replay draft" in the Rules tab opens Replay and starts it in one step.
@@ -163,9 +166,11 @@ export function Shell() {
   }, [heading.title, session?.title]);
 
   const changeable = alert !== null && (accessKey || canChangeSearch(channels.data, alert));
-  const unregister = alert && (
+  const searchActions = alert && (
     <Tooltip title={changeable ? "" : "You need Manage Channels in its channel"}>
-      <span>
+      <span style={{ display: "inline-flex", gap: 8 }}>
+        <Button size="small" variant="outlined" startIcon={<StorefrontOutlined />} disabled={!changeable}
+          onClick={() => { setInfoOpen(false); setMarketplaces(alert); }}>Marketplaces</Button>
         <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlined />} disabled={!changeable}
           onClick={() => { setInfoOpen(false); setUnregistering(alert); }}>Unregister</Button>
       </span>
@@ -190,7 +195,7 @@ export function Shell() {
       return <SearchView place={place} navigate={navigate} alert={alert} rules={rules} draft={draft} filters={filters}
         onFilters={setFilters} replays={replays} onReplay={(stored) => setReplays((current) => ({ ...current, [stored.alertId]: stored }))}
         replayRequested={replayRequested} setReplayRequested={setReplayRequested} onTestTitle={openTitleTest}
-        canChange={changeable} actions={unregister} />;
+        canChange={changeable} actions={searchActions} />;
     }
     if (view === "search") return null;
     if (guilds.isPending) return <Box sx={{ p: 3 }}><Skeleton variant="rounded" height={120} /></Box>;
@@ -289,10 +294,11 @@ export function Shell() {
       {info && (
         <AlertInfoSheet open={infoOpen} onClose={() => setInfoOpen(false)} alert={view === "search" ? alert : null}
           totals={view === "listings" ? listingTotals : undefined} guildName={guildName} draft={draft}
-          actions={view === "search" ? unregister : undefined} />
+          actions={view === "search" ? searchActions : undefined} />
       )}
       <AddSearchDialog open={adding !== null} channels={channels.data} channelId={adding?.channelId ?? null}
         onClose={() => setAdding(null)} onCreated={(created) => { setAdding(null); go({ alertId: created.id }); }} />
+      <MarketplacesDialog alert={marketplaces} onClose={() => setMarketplaces(null)} />
       <UnregisterDialog alert={unregistering} onClose={() => setUnregistering(null)}
         onDone={() => {
           const gone = unregistering;

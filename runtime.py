@@ -33,6 +33,9 @@ class Runtime:
         self.check_results = {}
         # Source to the wall-clock time of its last cycle without failed checks.
         self.source_success = {}
+        # Sources the bot searches that no search checks. They export no success time, so they never
+        # look stale; when a search checks one again its staleness counts from then, as after a start.
+        self.idle_sources = set()
         self._history_pruned_at = None
         self._history_prune_backlog = False
         self.tasks = self.health.tasks
@@ -168,27 +171,35 @@ class Runtime:
         """Settle every check before sleeping, with only N worker tasks."""
         cycle_id = uuid4().hex
         context = log_context.set({"cycle_id": cycle_id})
-        started = time.monotonic()
+        started, started_at = time.monotonic(), time.time()
         outcome = "error"
         settled = False
         workers = []
         results = defaultdict(lambda: [0, 0])
         try:
             alerts = await self.repository.list_alerts()
+            states = await self.repository.source_states()
             self.metrics.alerts.set(len(alerts))
             self.metrics.update_alert_metadata(alerts)
-            current = {alert["id"] for alert in alerts}
-            self.check_results = {key: value for key, value in self.check_results.items() if key[0] in current}
-            jobs = iter((source, provider, alert) for alert in alerts
-                        for source, provider in self.providers.items())
+            # Each search checks the marketplaces the bot searches that it has not turned off. One it
+            # has not seeded yet saves what it finds without posting (see Ingestion.check).
+            jobs = []
+            for alert in alerts:
+                for source, provider in self.providers.items():
+                    enabled, seeded = states.get(alert["id"], {}).get(source, (True, False))
+                    if enabled:
+                        jobs.append((source, provider, alert, not seeded))
+            pairs = {(alert["id"], source) for source, _, alert, _ in jobs}
+            self.check_results = {key: value for key, value in self.check_results.items() if key in pairs}
+            queue = iter(jobs)
 
             async def worker():
-                for source, provider, alert in jobs:
-                    result = await self._run_check(source, provider, alert)
+                for source, provider, alert, seeding in queue:
+                    result = await self._run_check(source, provider, alert, seeding)
                     results[source][0] += 1
                     results[source][1] += result != "success"
 
-            count = min(self.settings.concurrency, len(alerts) * len(self.providers))
+            count = min(self.settings.concurrency, len(jobs))
             workers = [asyncio.create_task(worker(), name=f"auction-bot:check-worker:{index}")
                        for index in range(count)]
             if workers:
@@ -200,6 +211,14 @@ class Runtime:
             failures = sum(failed for _, failed in results.values())
             outcome = "partial" if failures else "success"
             now = time.time()
+            used = {source for source, *_ in jobs}
+            for source in self.providers:
+                if source not in used and source not in self.idle_sources:
+                    self.metrics.source_last_success.remove(source)
+                    self.idle_sources.add(source)
+                elif source in used and source in self.idle_sources:
+                    self.metrics.source_last_success.labels(source).set(started_at)
+                    self.idle_sources.discard(source)
             for source, (checked, failed) in results.items():
                 if checked and not failed:
                     self.metrics.source_last_success.labels(source).set(now)
@@ -231,7 +250,7 @@ class Runtime:
                 self.health.last_poll = time.monotonic()
             log_context.reset(context)
 
-    async def _run_check(self, source, provider, alert):
+    async def _run_check(self, source, provider, alert, seeding=False):
         context = log_context.set({**log_context.get(), "source": source, "alert_id": alert["id"]})
         started = time.monotonic()
         outcome = "cancelled"
@@ -241,7 +260,7 @@ class Runtime:
         self.metrics.active_checks.inc()
         try:
             async with asyncio.timeout(self.settings.check_timeout):
-                await self.ingestion.check(provider, alert)
+                await self.ingestion.check(provider, alert, seeding=seeding)
             outcome = "success"
         except TimeoutError:
             outcome = "timeout"

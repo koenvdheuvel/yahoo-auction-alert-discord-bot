@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from filtering import default_ruleset
-from models import (ActiveReviewRules, Alert, AlertItem, CandidateObservation, DeliveryJob, Filter,
+from models import (ActiveReviewRules, Alert, AlertItem, AlertSource, CandidateObservation, DeliveryJob, Filter,
                     Item, Message, Notification, REVIEW_TABLES, ReviewRuleVersion, SCHEMA_VERSION,
                     SchemaVersion, TABLES, configure_database, create_tables, database, utcnow)
 from observability import Metrics
@@ -707,7 +707,8 @@ class CandidateHistoryMigrationTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 4)
         migrated = next(record for record in logs.records if record.getMessage() == "database_migrated")
         self.assertEqual(migrated.fields, {"schema_version": SCHEMA_VERSION, "previous_version": 3, "backup": str(backups[0]),
-                                           "labels_removed": 4, "repeated_snapshots_removed": 4})
+                                           "labels_removed": 4, "repeated_snapshots_removed": 4,
+                                           "alert_sources_added": 3})
         create_tables()
         self.assertEqual(list(self.path.parent.glob("*.bak")), backups)
 
@@ -782,7 +783,7 @@ class LabelRemovalMigrationTests(unittest.TestCase):
         with sqlite3.connect(backups[0]) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 2)
         self.assertEqual(fields, {"schema_version": SCHEMA_VERSION, "previous_version": 4,
-                                  "backup": str(backups[0]), "labels_removed": 2})
+                                  "backup": str(backups[0]), "labels_removed": 2, "alert_sources_added": 3})
         create_tables()
         self.assertEqual(list(self.path.parent.glob("*.bak")), backups)
 
@@ -801,3 +802,42 @@ class LabelRemovalMigrationTests(unittest.TestCase):
         with sqlite3.connect(self.path) as connection:
             self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 4)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM candidate_feedback").fetchone()[0], 2)
+
+
+class MarketplaceChoiceMigrationTests(unittest.TestCase):
+    """Schema v4 checked every marketplace for every search; v5 lets each search choose."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / "v4.sqlite"
+        configure_database(str(self.path))
+        database.connect()
+        database.create_tables([model for model in TABLES if model is not AlertSource])
+        for channel_id in (123, 124):
+            Alert.create(channel_id=channel_id, guild_id=456, search_query="poster")
+        SchemaVersion.create(id=1, version=4)
+        database.close()
+
+    def tearDown(self):
+        database.close()
+        self.directory.cleanup()
+
+    def test_searches_keep_posting_on_their_marketplaces_and_rakuma_starts_quietly(self):
+        with self.assertLogs("models", "WARNING") as logs:
+            create_tables()
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], SCHEMA_VERSION)
+            rows = connection.execute('SELECT "alert_id", "source", "enabled", "seeded" FROM "alert_source" '
+                                      'ORDER BY "alert_id", "source"').fetchall()
+        # No Rakuma row: on, and not seeded, so its first check posts nothing.
+        self.assertEqual(rows, [(alert, source, 1, 1) for alert in (1, 2)
+                                for source in ("mercari", "surugaya", "yahooauction")])
+        migrated = next(record for record in logs.records if record.getMessage() == "database_migrated")
+        self.assertEqual(migrated.fields["alert_sources_added"], 6)
+        backups = list(self.path.parent.glob(f"v4.sqlite.pre-v{SCHEMA_VERSION}.*.bak"))
+        self.assertEqual(len(backups), 1)
+        with sqlite3.connect(backups[0]) as connection:
+            self.assertEqual(connection.execute("SELECT version FROM schema_version").fetchone()[0], 4)
+            self.assertIsNone(connection.execute("SELECT name FROM sqlite_master WHERE name='alert_source'").fetchone())
+        create_tables()
+        self.assertEqual(list(self.path.parent.glob("*.bak")), backups)

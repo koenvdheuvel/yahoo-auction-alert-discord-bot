@@ -8,10 +8,11 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { ReactNode } from "react";
 
+import { useSession } from "../api/hooks";
 import type { AlertSummary, ArchiveTotals } from "../api/types";
 import { formatCount, formatDateTime, formatRelative } from "../lib/format";
 import type { Draft } from "../lib/useDraft";
-import { channelName } from "../lib/vocabulary";
+import { channelName, sourceName } from "../lib/vocabulary";
 import { figures } from "../theme";
 import { SheetDialog } from "./common/Sheet";
 
@@ -52,11 +53,15 @@ function RulesState({ draft }: { draft: Draft }) {
 /** The counts for one search, or for all of them. `stacked` puts one per line, with full dates. */
 function Facts({ alert, totals, guildName, stacked = false }: Omit<Props, "draft" | "actions"> & { stacked?: boolean }) {
   const lastChecked = alert?.last_seen_at;
+  // The marketplaces the search checks, among those the bot searches at all.
+  const enabled = useSession().data?.enabled_sources;
+  const searched = alert ? alert.sources.filter((source) => !enabled || enabled.includes(source)).map(sourceName) : [];
   return (
     <Stack direction={stacked ? "column" : "row"} sx={{ flexWrap: "wrap", columnGap: 3, rowGap: stacked ? 1 : 0.5 }}>
       {alert ? (
         <>
           <Fact value={channelName(alert)}>channel</Fact>
+          <Fact value={searched.length ? searched.join(", ") : "Nothing"} tone={searched.length ? undefined : "warning.main"}>searched</Fact>
           <Fact value={formatCount(alert.listing_count)}>{alert.listing_count === 1 ? "listing" : "listings"}</Fact>
           <Fact value={formatCount(alert.review_count)} tone={alert.review_count ? "warning.main" : undefined}>need review</Fact>
           {lastChecked && (stacked ? (

@@ -6,6 +6,7 @@ import time
 
 from domain import FilterRule
 from filtering import CompiledRuleset, Decision, default_ruleset, validate_ruleset
+from marketplaces import SOURCES
 from review_repository import POST_REMOVAL_DAYS, POST_REMOVAL_LIMIT, ReviewConflict, ReviewValidation
 
 
@@ -14,7 +15,6 @@ REPLAY_BUDGET_SECONDS = 10
 BLOCKING_REASONS = frozenset({"source_excluded", "price_below_minimum", "price_above_maximum",
                               "excluded_group_match", "required_group_missing",
                               "legacy_blacklist_match", "legacy_whitelist_missing"})
-SOURCES = frozenset({"yahooauction", "mercari", "surugaya"})
 
 
 class ReviewBusy(Exception):
@@ -113,7 +113,7 @@ class ReviewService:
         if not isinstance(title, str):
             raise ReviewValidation("Title must be text")
         source = data.get("source", "yahooauction")
-        if not isinstance(source, str) or source not in {"yahooauction", "mercari", "surugaya"}:
+        if not isinstance(source, str) or source not in SOURCES:
             raise ReviewValidation("Select a supported source")
         price = data.get("price", 0)
         stock = data.get("stock", 1)

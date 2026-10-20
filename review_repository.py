@@ -12,7 +12,8 @@ import json
 from peewee import Case, chunked, fn
 
 from domain import discord_time, first_discord_id_at
-from models import (ActiveReviewRules, Alert, AlertItem, CandidateObservation, DeliveryJob,
+from marketplaces import MARKETPLACES
+from models import (ActiveReviewRules, Alert, AlertItem, AlertSource, CandidateObservation, DeliveryJob,
                     Filter, Item, Message, Notification, ReviewRuleVersion, database, utcnow)
 
 
@@ -138,10 +139,31 @@ def _timestamp(value):
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _alert_json(alert, stats=None, active_version_id=None):
+def source_choices(alert_ids=None):
+    """Alert ID to {source: AlertSource} for the marketplace choices saved for these searches (None: every search)."""
+    query = AlertSource.select()
+    if alert_ids is not None:
+        query = query.where(AlertSource.alert.in_(list(alert_ids)))
+    choices = {}
+    for row in query:
+        choices.setdefault(row.alert_id, {})[row.source] = row
+    return choices
+
+
+def checked_sources(choices):
+    """The marketplaces a search with these saved choices checks, in MARKETPLACES order: each one
+    it has not turned off. Whether the bot searches a marketplace at all is up to its settings."""
+    return [marketplace.source for marketplace in MARKETPLACES
+            if marketplace.source not in choices or choices[marketplace.source].enabled]
+
+
+def _alert_json(alert, stats=None, active_version_id=None, choices=None):
+    """choices: the search's saved marketplace choices, read from the database when not given."""
+    if choices is None:
+        choices = source_choices([alert.id]).get(alert.id, {})
     result = {"id": str(alert.id), "channel_id": str(alert.channel_id),
               "guild_id": str(alert.guild_id) if alert.guild_id is not None else None,
-              "search_query": alert.search_query}
+              "search_query": alert.search_query, "sources": checked_sources(choices)}
     if stats is not None:
         result.update(stats)
         result["active_version_id"] = str(active_version_id) if active_version_id is not None else None
@@ -354,6 +376,7 @@ class ReviewRepositoryMixin:
                       .group_by(CandidateObservation.alert).tuples())
             stats = {row[0]: row[1:] for row in latest}
             active = dict(ActiveReviewRules.select(ActiveReviewRules.alert, ActiveReviewRules.version).tuples())
+            choices = source_choices()
             query = Alert.select().order_by(Alert.channel_id, Alert.id)
             if guilds is not None:
                 query = query.where(Alert.guild_id.in_(guilds))
@@ -364,7 +387,7 @@ class ReviewRepositoryMixin:
                     "archived_count": archived.get(alert.id, 0), "listing_count": listings,
                     "accepted_count": accepted, "filtered_count": filtered, "review_count": review,
                     "last_seen_at": _timestamp(last_seen),
-                }, active.get(alert.id)))
+                }, active.get(alert.id), choices.get(alert.id, {})))
                 if alert.guild_id is not None:
                     servers[alert.guild_id] = servers.get(alert.guild_id, 0) + archived.get(alert.id, 0)
             for guild, count in detached.items():

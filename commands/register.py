@@ -23,7 +23,7 @@ class RegisterCommand(
             await respond(ctx, str(error), ephemeral=True)
             return
         created = await services.repository.register_alert(
-            ctx.channel_id, search_query, guild_id=ctx.guild_id,
+            ctx.channel_id, search_query, guild_id=ctx.guild_id, searched=services.enabled_sources,
         )
         if not created:
             await respond(ctx, f"Alert for **{search_query}** already exists in this channel!",

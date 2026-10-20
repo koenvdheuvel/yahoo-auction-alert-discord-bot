@@ -10,7 +10,7 @@ from unittest.mock import patch
 from peewee import IntegrityError
 
 from domain import Listing
-from models import (Alert, AlertItem, Blacklist, DeliveryJob, Filter, Item, Message,
+from models import (Alert, AlertItem, AlertSource, Blacklist, DeliveryJob, Filter, Item, Message,
                     Notification, SCHEMA_VERSION, SchemaVersion, configure_database, create_tables, database)
 from observability import Metrics
 from repositories import Repository
@@ -76,6 +76,11 @@ class MigrationTests(unittest.TestCase):
                          {(11, 101, 5000), (12, 102, 3000)})
         self.assertEqual(set(Message.select(Message.message_id, Message.item, Message.alert, Message.channel_id).tuples()),
                          {(50001, 101, 11, 1111), (50002, 102, 12, 2222)})
+        # The searches go on posting what is new on the marketplaces they checked; Rakuma starts quietly.
+        self.assertEqual(set(AlertSource.select(AlertSource.alert, AlertSource.source, AlertSource.enabled,
+                                                AlertSource.seeded).tuples()),
+                         {(alert, source, True, True) for alert in (11, 12)
+                          for source in ("yahooauction", "mercari", "surugaya")})
 
     def test_duplicates_orphans_and_lost_filter_method_are_handled_explicitly(self):
         self.assertEqual(set(Notification.select(Notification.item, Notification.user_id).tuples()), {(101, 42), (102, 43)})

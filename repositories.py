@@ -10,10 +10,12 @@ import time
 from peewee import chunked, fn
 
 from domain import FilterRule, changes
-from models import (Alert, AlertItem, Blacklist, DeliveryJob, Filter, Item, Message,
+from marketplaces import MARKETPLACES, SOURCES
+from models import (Alert, AlertItem, AlertSource, Blacklist, DeliveryJob, Filter, Item, Message,
                     Notification, database, utcnow)
-from review_repository import (POST_REMOVAL_SCAN_LIMIT, ReviewRepositoryMixin, live_posts,
-                               post_json, queue_removals, queued_removals, removal_days, removal_run)
+from review_repository import (POST_REMOVAL_SCAN_LIMIT, ReviewRepositoryMixin, checked_sources, live_posts,
+                               post_json, queue_removals, queued_removals, removal_days, removal_run,
+                               source_choices)
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,26 @@ def _item_json(item):
             "stock": get("stock"), "image_url": get("image_url") or None, "url": get("url") or None,
             "end_time": _time(get("end_time")), "muted": bool(get("muted")),
             "updated_at": _time(get("updated_at")), "last_seen_at": _time(get("last_seen_at"))}
+
+
+def _choose_sources(alert, wanted):
+    """Turn the search's marketplaces on and off so it checks exactly `wanted`; run in a transaction.
+
+    A marketplace turned on is not seeded: its next check saves what it has without posting it.
+    """
+    order = [marketplace.source for marketplace in MARKETPLACES]
+    current = set(checked_sources(source_choices([alert.id]).get(alert.id, {})))
+    turned_on = [source for source in order if source in wanted and source not in current]
+    turned_off = [source for source in order if source in current and source not in wanted]
+    key = [AlertSource.alert, AlertSource.source]
+    for source in turned_on:
+        AlertSource.insert(alert=alert, source=source, enabled=True, seeded=False).on_conflict(
+            conflict_target=key, update={AlertSource.enabled: True, AlertSource.seeded: False}).execute()
+    for source in turned_off:
+        AlertSource.insert(alert=alert, source=source, enabled=False).on_conflict(
+            conflict_target=key, update={AlertSource.enabled: False}).execute()
+    return {"alert_id": alert.id, "sources": [source for source in order if source in wanted],
+            "turned_on": turned_on, "turned_off": turned_off}
 
 
 class Repository(ReviewRepositoryMixin):
@@ -89,7 +111,9 @@ class Repository(ReviewRepositoryMixin):
             return list(query.dicts())
         return await self._call("list_alerts", select)
 
-    async def register_alert(self, channel_id, search_query, guild_id=None):
+    async def register_alert(self, channel_id, search_query, guild_id=None, searched=SOURCES):
+        """searched: the marketplaces the bot searches now (ENABLE_*). The new search's first check of
+        each posts everything it finds; any other starts quietly once the bot searches it."""
         search_query = search_query.strip()
         if not search_query or len(search_query) > 256:
             raise ValueError("Search queries must contain 1 to 256 characters")
@@ -99,8 +123,63 @@ class Repository(ReviewRepositoryMixin):
                                                      defaults={"guild_id": guild_id})
                 if alert.guild_id is None and guild_id is not None:
                     Alert.update(guild_id=guild_id).where(Alert.id == alert.id).execute()
+                if created:
+                    AlertSource.insert_many([{"alert": alert, "source": source, "enabled": True, "seeded": True}
+                                             for source in sorted(searched)]).execute()
                 return created
         return await self._call("register_alert", create)
+
+    async def source_states(self):
+        """For polling: alert ID to {source: (on, seeded)} for every saved marketplace choice.
+        A marketplace without one is on and not seeded."""
+        def select():
+            return {alert_id: {source: (row.enabled, row.seeded) for source, row in rows.items()}
+                    for alert_id, rows in source_choices().items()}
+        return await self._call("source_states", select)
+
+    async def alert_sources(self, alert_ids):
+        """Alert ID to the marketplaces each of these searches checks, in MARKETPLACES order."""
+        def select():
+            choices = source_choices(alert_ids)
+            return {alert_id: checked_sources(choices.get(alert_id, {})) for alert_id in alert_ids}
+        return await self._call("alert_sources", select)
+
+    async def set_alert_sources(self, alert_data, sources):
+        """Make the search check exactly these marketplaces: its id, channel_id and search_query
+        must still match. What changed, or None when the search is gone."""
+        wanted = set(sources)
+        def update():
+            with database.atomic():
+                alert = Alert.get_or_none(Alert.id == alert_data["id"], Alert.channel_id == alert_data["channel_id"],
+                                          Alert.search_query == alert_data["search_query"])
+                return None if alert is None else _choose_sources(alert, wanted)
+        return await self._call("set_alert_sources", update)
+
+    async def set_alert_source(self, channel_id, search_query, source, enabled):
+        """/marketplaces on and off for the search in this channel. What changed, or None without it."""
+        def update():
+            with database.atomic():
+                alert = Alert.get_or_none(Alert.channel_id == channel_id, Alert.search_query == search_query)
+                if alert is None:
+                    return None
+                current = set(checked_sources(source_choices([alert.id]).get(alert.id, {})))
+                return _choose_sources(alert, current | {source} if enabled else current - {source})
+        return await self._call("set_alert_source", update)
+
+    async def mark_seeded(self, alert_data, source):
+        """A check saved every listing the marketplace has for the search: from now on its checks
+        post what is new. A marketplace turned off meanwhile stays off."""
+        def update():
+            with database.atomic():
+                alert = Alert.get_or_none(Alert.id == alert_data["id"], Alert.channel_id == alert_data["channel_id"],
+                                          Alert.search_query == alert_data["search_query"])
+                if alert is None:
+                    return False
+                AlertSource.insert(alert=alert, source=source, enabled=True, seeded=True).on_conflict(
+                    conflict_target=[AlertSource.alert, AlertSource.source],
+                    update={AlertSource.seeded: True}).execute()
+                return True
+        return await self._call("mark_seeded", update)
 
     async def reconcile_guilds(self, channel_to_guild):
         """Set the server of alerts that have none, from a channel ID to server ID mapping.
@@ -199,7 +278,9 @@ class Repository(ReviewRepositoryMixin):
                            destination_id=destination_id, payload=json.dumps(payload, ensure_ascii=False))
 
     async def observe(self, alert_data, listing, threshold=500, *, decision_payload=None,
-                      ruleset_version_id=None):
+                      ruleset_version_id=None, post=True):
+        """post=False saves the listing as the search's baseline without posting it to the channel;
+        🔔 subscribers still get its listing-wide changes."""
         def persist():
             with database.atomic():
                 if decision_payload is not None:
@@ -235,7 +316,7 @@ class Repository(ReviewRepositoryMixin):
                 else:
                     AlertItem.update(**baseline).where(AlertItem.id == previous.id).execute()
                 if not item.muted:
-                    if previous is None or differences:
+                    if post and (previous is None or differences):
                         self._enqueue(item, alert, "channel", alert.channel_id, listing, differences)
                     # Listing-wide subscriptions receive a global change once even when multiple alerts match.
                     if global_differences:
@@ -243,7 +324,9 @@ class Repository(ReviewRepositoryMixin):
                             self._enqueue(item, alert, "dm", subscriber.user_id, listing, global_differences)
                 if item.muted:
                     return "muted"
-                return "new" if previous is None else "changed" if differences else "unchanged"
+                if previous is not None and not differences:
+                    return "unchanged"
+                return "seeded" if not post else "new" if previous is None else "changed"
         return await self._call("observe", persist)
 
     async def lookup_message(self, channel_id, message_id):

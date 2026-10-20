@@ -13,6 +13,7 @@ import type {
   HiddenSubscription,
   HistoryScan,
   ScanAction,
+  SourcesChange,
   Subscription,
   CandidatePage,
   Decision,
@@ -160,6 +161,8 @@ export const api = {
     request<AlertDetail>(`/api/alerts/${encodeURIComponent(alertId)}`, { signal }),
   unregister: (alertId: string) =>
     request<{ unregistered: boolean }>(`/api/alerts/${encodeURIComponent(alertId)}`, { method: "DELETE", body: {} }),
+  setSources: (alertId: string, sources: Source[]) =>
+    request<SourcesChange>(`/api/alerts/${encodeURIComponent(alertId)}/sources`, { method: "PUT", body: { sources } }),
   deleteLegacyFilter: (alertId: string, filterId: number) =>
     request<{ deleted: boolean }>(`/api/alerts/${encodeURIComponent(alertId)}/legacy-filters/${filterId}`,
       { method: "DELETE", body: {} }),

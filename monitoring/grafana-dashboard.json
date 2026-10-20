@@ -15,7 +15,7 @@
     "from": "now-24h",
     "to": "now"
   },
-  "description": "Yahoo/Mercari/Surugaya auction alert Discord bot (job auction-bot). Metrics: docs/monitoring.md.",
+  "description": "Yahoo/Mercari/Surugaya/Rakuma auction alert Discord bot (job auction-bot). Metrics: docs/monitoring.md.",
   "templating": {
     "list": [
       {
@@ -925,7 +925,7 @@
     {
       "type": "timeseries",
       "title": "Since last successful check, per source",
-      "description": "Time since each marketplace last had a fully successful round. A marketplace only counts when it had at least one check in the round and every check succeeded. Normal is about one round, 30 minutes by default. A value that keeps growing for one marketplace means its searches keep failing.",
+      "description": "Time since each marketplace last had a fully successful round. A marketplace only counts when it had at least one check in the round and every check succeeded. Normal is about one round, 30 minutes by default. A value that keeps growing for one marketplace means its searches keep failing. A marketplace that no search checks has no line.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"

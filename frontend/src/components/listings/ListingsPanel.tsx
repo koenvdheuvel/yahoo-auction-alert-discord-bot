@@ -11,6 +11,7 @@ import type { Candidate, Source } from "../../api/types";
 import { formatCount, safeUrl } from "../../lib/format";
 import { isTyping, useDebounced } from "../../lib/hooks";
 import { useCompact, usePhone, useTouch } from "../../lib/responsive";
+import { SOURCES } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { TitleSeed } from "../TitleTestDialog";
 import type { ListingFilters } from "../views/SearchView";
@@ -35,7 +36,7 @@ function scrollParent(node: HTMLElement): HTMLElement | null {
 }
 
 function seedFrom(candidate: Candidate): TitleSeed {
-  const source = ["yahooauction", "mercari", "surugaya"].includes(candidate.source) ? candidate.source as Source : undefined;
+  const source = candidate.source in SOURCES ? candidate.source as Source : undefined;
   return { title: candidate.title, source, price: candidate.payload.price ?? null };
 }
 

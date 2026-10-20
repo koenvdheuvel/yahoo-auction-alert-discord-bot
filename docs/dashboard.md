@@ -210,7 +210,8 @@ Every change logs `actor_id`, the Discord user ID, and `sign_in` (`discord` or
 `access_key`). Publishing, restoring and history imports log
 `review_rules_published`, `review_rules_restored` and `review_history_imported`. Changes that a slash command or reaction can also
 make log the same event as the command, with `via` set to `dashboard`:
-`alert_registered`, `alert_unregistered`, `filter_deleted`, `item_blacklisted`
+`alert_registered`, `alert_unregistered`, `alert_sources_changed` (with
+`turned_on` and `turned_off`), `filter_deleted`, `item_blacklisted`
 (hiding), `cleanup_completed`, `cleanup_reactions_completed`,
 `notification_subscribed` and `notification_unsubscribed`. Showing a listing
 again logs `item_unhidden`, and queued post removals log `post_removal_queued`
@@ -302,6 +303,17 @@ listings are kept without the search, and its Discord filters are deleted.
 Hidden listings and 🔔 follows do not change. A search whose channel Discord
 says is deleted can be unregistered too.
 
+**Marketplaces**, next to Unregister, does what `/marketplaces on` and
+`/marketplaces off` do, for all marketplaces at once and with the same Manage
+Channels check. A search's header lists the marketplaces it checks that the bot
+searches, under *searched*. A marketplace turned on starts quietly: its next
+complete check saves the listings there without posting them, and after that
+new listings are posted. Turning one off stops its checks; posts, hidden
+listings and 🔔 follows stay. A marketplace that is off for the whole bot
+(`ENABLE_*=false`) can still be chosen, and the choice applies once the bot
+searches it. The dialog warns when the search would check no marketplace the bot
+searches, because it then posts nothing.
+
 ### A channel's pages
 
 - **Searches** lists the channel's searches, as `/alerts` does.
@@ -380,7 +392,9 @@ your history, not rules automatically installed by the app.
 Groups support contains, exact and regex terms, any/all matching inside each
 group, and required/excluded/review policies. Exclusions take precedence over
 review matches. Source selections and optional minimum/maximum prices apply
-alongside title rules. Empty source selections allow all three marketplaces.
+alongside title rules. Empty source selections allow every marketplace. Source
+selections only filter what a search's checks find; **Marketplaces** decides
+which marketplaces it checks.
 
 The Rules tab checks the draft with the server as you type. A problem points at
 the group and term at fault, such as "Group 2, Term 3: Invalid regular
@@ -610,8 +624,9 @@ number. Errors are JSON with `error` and `message`; ruleset errors add `field`,
 such as `groups.1.terms.2`.
 
 `GET /api/session` says whether the browser is signed in and which sign-in this
-dashboard uses (`method` is `discord` or `access_key`), with the page's `title`
-and the `bot`. With Discord it also returns the `user` and the `guilds`
+dashboard uses (`method` is `discord` or `access_key`), with the page's `title`,
+the `bot` and `enabled_sources` (the marketplaces the bot searches). With
+Discord it also returns the `user` and the `guilds`
 (servers) the person is in, each with its `level`: `manager` or `member`. With
 Discord sign-in, `guild_id` on `/api/candidates` limits All listings to one of
 the servers they manage, and `/api/alerts` totals list each server under
@@ -627,6 +642,7 @@ The management routes:
 | `GET /api/guilds/{id}/graphs` | The Status page's graphs; `range` is `1h`, `6h`, `24h` (the default) or `7d` |
 | `POST /api/alerts` | `/register`: `channel_id` and `search_query` |
 | `GET` and `DELETE /api/alerts/{id}` | A search with what unregistering touches; `/unregister` |
+| `PUT /api/alerts/{id}/sources` | `/marketplaces on` and `off`: the body's `sources` is every marketplace the search should check, as in a search's own `sources`; answers `sources`, `turned_on` and `turned_off` |
 | `DELETE /api/alerts/{id}/legacy-filters/{filter}` | `/filters delete` |
 | `GET /api/channels/{id}/posts` | The bot's live posts, 50 a page; `before` is the last `message_id` of the page before |
 | `GET /api/channels/{id}/hidden`, `PUT` and `DELETE .../hidden/{item}` | Hidden listings; hide, as 🗑️; show again |

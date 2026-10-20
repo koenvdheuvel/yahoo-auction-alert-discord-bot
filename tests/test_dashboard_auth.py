@@ -703,9 +703,13 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         await check("alert_unregister", await self.client.delete(f"/api/alerts/{b}", headers=self.headers))
         await check("legacy_filter_delete", await self.client.delete(
             f"/api/alerts/{b}/legacy-filters/{filter_b}", headers=self.headers))
+        await check("alert_sources", await self.client.put(f"/api/alerts/{b}/sources", json={"sources": []},
+                                                           headers=self.headers))
         self.assertEqual([alert["search_query"] for alert in await self.repository.list_alerts(channel_id=32)],
                          ["Vinyl"])
         self.assertEqual(len(await self.repository.list_filters(32)), 1)
+        self.assertEqual(await self.repository.alert_sources([int(b)]),
+                         {int(b): ["yahooauction", "mercari", "surugaya", "rakuma"]})
 
         # Channels of another server, and a legacy channel without a server, are missing.
         item_b = items[b]
@@ -821,6 +825,7 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         await refused("alert", await get(f"/api/alerts/{a}"))
         await refused("alert_unregister", await delete(f"/api/alerts/{a}", headers=h))
         await refused("legacy_filter_delete", await delete(f"/api/alerts/{a}/legacy-filters/{filter_a}", headers=h))
+        await refused("alert_sources", await put(f"/api/alerts/{a}/sources", json={"sources": []}, headers=h))
         item = items["open"]
         for name, response in (
                 ("channel_posts", await get("/api/channels/31/posts")),
@@ -839,6 +844,8 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([alert["search_query"] for alert in await self.repository.list_alerts(channel_id=31)],
                          ["BABYMETAL poster"])
         self.assertEqual((await self.repository.hidden_items(31))["total"], 1)
+        self.assertEqual(await self.repository.alert_sources([int(a)]),
+                         {int(a): ["yahooauction", "mercari", "surugaya", "rakuma"]})
 
         # Bob's own notifications: one in a channel he can view, one in a channel only managers can view.
         notifications = (await allowed("notifications", await get("/api/me/notifications")))["items"]

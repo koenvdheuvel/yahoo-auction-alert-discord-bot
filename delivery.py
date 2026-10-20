@@ -10,10 +10,10 @@ import hikari
 from peewee import OperationalError
 
 from domain import first_discord_id_at
+from marketplaces import BY_SOURCE
 from observability import log_context
 
 logger = logging.getLogger(__name__)
-COLORS = {"yahooauction": 0xFFA500, "mercari": 0xFF0000, "surugaya": 0x0000FF}
 PERMANENT_ERRORS = (hikari.ForbiddenError, hikari.NotFoundError, hikari.BadRequestError, ValueError, KeyError, TypeError)
 # Discord's bulk delete takes 2 to 100 messages younger than 14 days and needs the Manage
 # Messages permission. The hour of margin covers clock differences and time in the queue.
@@ -27,8 +27,9 @@ SINGLE_REMOVALS_PER_ROUND = 5
 
 def create_embed(payload):
     item, differences = payload["listing"], payload["differences"]
+    marketplace = BY_SOURCE.get(item["source"])
     embed = hikari.Embed(title=item["title"][:256], url=item["url"] or None,
-                         color=0x00FF00 if differences else COLORS.get(item["source"], 0x808080))
+                         color=0x00FF00 if differences else marketplace.color if marketplace else 0x808080)
     if item["image_url"]:
         embed.set_image(item["image_url"])
     embed.add_field("Price", f'¥{item["price"]}', inline=True)
