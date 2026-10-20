@@ -32,7 +32,7 @@ function PostRow({ post, preview }: { post: RemovablePost; preview: RemovalPrevi
       <ListingImage src={post.image_url} size={40} />
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="body2" noWrap title={post.title}>{post.title}</Typography>
-        <Typography variant="caption" color="text.secondary" component="p" sx={figures}>
+        <Typography variant="caption" color="textSecondary" component="p" sx={figures}>
           {sourceName(post.source)}, {formatPrice(post.price)}, posted {formatRelative(post.posted_at)}
         </Typography>
       </Box>
@@ -70,13 +70,13 @@ function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval 
             {posts.length ? `${plural(posts.length, "post")} will be removed from Discord.` : "Every reason is unticked, so no posts are removed."}
           </Typography>
           {data.removable_total > data.posts.length && (
-            <Typography variant="caption" color="text.secondary" component="p" sx={figures}>
+            <Typography variant="caption" color="textSecondary" component="p" sx={figures}>
               {formatCount(data.removable_total)} posts match. One run removes the newest {formatCount(data.limit)}; run it
               again afterwards for the rest.
             </Typography>
           )}
           {old > 0 && (
-            <Typography variant="caption" color="text.secondary" component="p" sx={figures}>
+            <Typography variant="caption" color="textSecondary" component="p" sx={figures}>
               {plural(old, "post is", "posts are")} older than 14 days. Discord deletes those one at a time, which can take a while.
             </Typography>
           )}
@@ -102,10 +102,10 @@ function Result({ data, removal }: { data: RemovalPreview; removal: PostRemoval 
         </>
       )}
       {kept.length > 0 && (
-        <Typography variant="caption" color="text.secondary" component="p" sx={figures}>Kept: {kept.join("; ")}.</Typography>
+        <Typography variant="caption" color="textSecondary" component="p" sx={figures}>Kept: {kept.join("; ")}.</Typography>
       )}
       {data.partial && (
-        <Typography variant="caption" color="warning.main" component="p" sx={figures}>
+        <Typography variant="caption" color="warning" component="p" sx={figures}>
           Only {formatCount(data.checked)} of the {formatCount(data.posts_in_range)} posts in this range were checked.
         </Typography>
       )}
@@ -130,14 +130,14 @@ export function PostRemovalPreview({ removal }: { removal: PostRemoval }) {
       {preview.isFetching && (
         <Box>
           <LinearProgress aria-label="Checking the posts" />
-          <Typography variant="caption" color="text.secondary">Checking the posts against the rules</Typography>
+          <Typography variant="caption" color="textSecondary">Checking the posts against the rules</Typography>
         </Box>
       )}
       {preview.isError && !preview.isFetching && (
         <LoadError error={preview.error} what="The posts" onRetry={() => void preview.refetch()} />
       )}
       {preview.data && !preview.isFetching && <Result data={preview.data} removal={removal} />}
-      <Typography variant="caption" color="text.secondary" component="p">
+      <Typography variant="caption" color="textSecondary" component="p">
         Removed posts cannot be brought back. Posts with 🔔 subscribers stay. The listings in the dashboard stay too.
       </Typography>
     </Box>

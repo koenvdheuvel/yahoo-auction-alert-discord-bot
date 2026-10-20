@@ -62,7 +62,7 @@ export function UnregisterDialog({ alert, onClose, onDone }: Props) {
         </Box>
       )}
       {detail.data?.channel_deleted && (
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>Discord says its channel was deleted.</Typography>
+        <Typography variant="body2" color="textSecondary" sx={{ mt: 1.5 }}>Discord says its channel was deleted.</Typography>
       )}
       {unregister.isError && <Alert severity="error" sx={{ mt: 2 }}>{errorMessage(unregister.error)}</Alert>}
     </ConfirmDialog>

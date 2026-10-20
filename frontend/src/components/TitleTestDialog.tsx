@@ -60,7 +60,7 @@ function TitleTestForm({ seed, alert, draft, onClose }: FormProps) {
     <Box component="form" onSubmit={submit} noValidate>
       <DialogTitle id="title-test-title">Test a title</DialogTitle>
       <DialogContent sx={{ display: "grid", gap: 2 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="textSecondary">
           {alert
             ? `Checks a title against your draft for “${alert.search_query}” and its enabled Discord filters. Nothing is saved or sent.`
             : "Checks a title against your scratch draft. Choose a search to include its Discord filters. Nothing is saved or sent."}
@@ -81,7 +81,7 @@ function TitleTestForm({ seed, alert, draft, onClose }: FormProps) {
           <Box aria-live="polite" sx={{ borderTop: 1, borderColor: "divider", pt: 2, display: "grid", gap: 1 }}>
             <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
               <VerdictText verdict={decision.verdict} />
-              <Typography variant="body2" color="text.secondary">with your draft</Typography>
+              <Typography variant="body2" color="textSecondary">with your draft</Typography>
             </Stack>
             <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
               <Box component="span" sx={{ color: "text.secondary" }}>Compared title: </Box>{decision.normalized_title || title}

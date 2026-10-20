@@ -8,7 +8,7 @@ import { mono } from "../../theme";
 
 export function RulesetSummary({ ruleset }: { ruleset: Ruleset }) {
   if (!ruleset.groups.length) {
-    return <Typography variant="body2" color="text.secondary">No groups: only the marketplace, price and Discord filter settings apply.</Typography>;
+    return <Typography variant="body2" color="textSecondary">No groups: only the marketplace, price and Discord filter settings apply.</Typography>;
   }
   return (
     <Box component="dl" sx={{ m: 0, display: "grid", gridTemplateColumns: { sm: "minmax(140px, max-content) 1fr" }, columnGap: 2, rowGap: 1 }}>
@@ -16,7 +16,7 @@ export function RulesetSummary({ ruleset }: { ruleset: Ruleset }) {
         <Box key={group.id} sx={{ display: "contents" }}>
           <Box component="dt">
             <Typography variant="body2" sx={{ fontWeight: 600 }}>{group.label}</Typography>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="textSecondary">
               {POLICIES[group.policy].name}, {group.match === "all" ? "all terms" : "any term"}
               {group.normalize ? "" : ", original title"}
             </Typography>

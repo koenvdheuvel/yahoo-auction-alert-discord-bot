@@ -29,7 +29,7 @@ function Seen({ candidate }: { candidate: Candidate }) {
   const detail = `First seen with this decision ${formatDateTime(candidate.observed_at)}. Last seen ${formatDateTime(candidate.last_seen_at)}.`;
   return (
     <Tooltip title={detail}>
-      <Typography variant="caption" color="text.secondary" sx={{ ...figures, whiteSpace: "nowrap" }}>
+      <Typography variant="caption" color="textSecondary" sx={{ ...figures, whiteSpace: "nowrap" }}>
         {formatRelative(candidate.observed_at)}
       </Typography>
     </Tooltip>
@@ -68,8 +68,8 @@ export const ListingFrame = memo(function ListingFrame(props: Props) {
         </ButtonBase>
         <Box sx={{ minWidth: 0 }}>
           <Typography variant="body2" noWrap sx={{ fontWeight: 500 }} title={title}>{titleText}</Typography>
-          {normalized && <Typography variant="caption" color="text.secondary" noWrap component="p" title={normalized}>{normalized}</Typography>}
-          <Typography variant="caption" color="text.secondary" component="p" sx={figures}>
+          {normalized && <Typography variant="caption" color="textSecondary" noWrap component="p" title={normalized}>{normalized}</Typography>}
+          <Typography variant="caption" color="textSecondary" component="p" sx={figures}>
             {sourceName(candidate.source)} {candidate.external_id}
           </Typography>
         </Box>
@@ -93,14 +93,14 @@ export const ListingFrame = memo(function ListingFrame(props: Props) {
       <Box sx={{ p: 1.25, display: "flex", flexDirection: "column", gap: 0.75, flex: 1 }}>
         <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", gap: 1 }}>
           <DecisionButton decision={candidate.decision} tabIndex={tab} />
-          <Typography variant="caption" color="text.secondary" noWrap sx={figures}>{sourceName(candidate.source)}</Typography>
+          <Typography variant="caption" color="textSecondary" noWrap sx={figures}>{sourceName(candidate.source)}</Typography>
         </Stack>
         <Typography variant="body2" title={title} sx={{ fontWeight: 500, minHeight: "2.9em", display: "-webkit-box",
           WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
           {titleText}
         </Typography>
         {normalized && (
-          <Typography variant="caption" color="text.secondary" noWrap title={`Compared title: ${normalized}`}>{normalized}</Typography>
+          <Typography variant="caption" color="textSecondary" noWrap title={`Compared title: ${normalized}`}>{normalized}</Typography>
         )}
         {/* Frames in a row share a height; pinning the price down lines it up across the row. */}
         <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "baseline", mt: "auto" }}>

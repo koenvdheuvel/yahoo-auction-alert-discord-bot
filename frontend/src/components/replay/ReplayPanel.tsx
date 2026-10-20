@@ -49,7 +49,7 @@ function Tally({ value, children, tone, onClick, active }: {
           lineHeight: 1.2, ...figures }}>
           {formatCount(value)}
         </Typography>
-        <Typography component="span" variant="body2" color="text.secondary">{children}</Typography>
+        <Typography component="span" variant="body2" color="textSecondary">{children}</Typography>
       </Box>
     </ButtonBase>
   );
@@ -88,7 +88,7 @@ function Row({ item }: { item: ReplayItem }) {
             <Typography variant="body2" sx={{ fontWeight: 500, overflowWrap: "anywhere" }}>
               {url ? <Link href={url} target="_blank" rel="noopener noreferrer">{title}</Link> : title}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={figures}>
+            <Typography variant="caption" color="textSecondary" sx={figures}>
               {sourceName(candidate.source)} {formatPrice(candidate.price)}
             </Typography>
           </Box>
@@ -99,7 +99,7 @@ function Row({ item }: { item: ReplayItem }) {
       <TableCell>
         <DecisionButton decision={item.draft_decision} label="Your draft" />
         {item.change !== "unchanged" && (
-          <Typography variant="caption" color="text.secondary" component="p">
+          <Typography variant="caption" color="textSecondary" component="p">
             {CHANGES[item.change]}, was {VERDICTS[item.active_decision.verdict].toLowerCase()}
           </Typography>
         )}
@@ -161,7 +161,7 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { sm: "flex-start" } }}>
         <Box sx={{ maxWidth: 720 }}>
           <Typography variant="h2" component="h2">Compare the draft with the published rules</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
             Checks the latest decision of the {formatCount(limit)} most recently seen listings with both rule sets.
             Nothing is saved or posted.
           </Typography>
@@ -193,7 +193,7 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
               The draft changed after this replay, so the results describe an earlier draft.
             </Alert>
           )}
-          <Typography variant="caption" color="text.secondary" sx={figures}>
+          <Typography variant="caption" color="textSecondary" sx={figures}>
             Replayed {formatRelative(stored.ranAt)}: {plural(summary.total, "listing")} checked.
             {summary.truncated && !summary.budget_exceeded && summary.available > summary.recent
               ? ` This search has ${formatCount(summary.available)} listings; only the most recently seen were checked.` : ""}

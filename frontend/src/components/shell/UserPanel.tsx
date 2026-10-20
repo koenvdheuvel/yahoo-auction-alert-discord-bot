@@ -79,7 +79,7 @@ export function UserPanel({ onHelp }: { onHelp: () => void }) {
         </Avatar>
         <Box sx={{ minWidth: 0 }}>
           <Typography variant="body2" noWrap sx={{ fontWeight: 600, color: "text.primary" }}>{name}</Typography>
-          <Typography variant="caption" noWrap component="p" color="text.secondary">
+          <Typography variant="caption" noWrap component="p" color="textSecondary">
             {user ? user.username : "Every server"}
           </Typography>
         </Box>
@@ -94,7 +94,7 @@ export function UserPanel({ onHelp }: { onHelp: () => void }) {
         anchorOrigin={{ vertical: "top", horizontal: "left" }} transformOrigin={{ vertical: "bottom", horizontal: "left" }}>
         <Box sx={{ px: 2, pt: 1, pb: 1.5, maxWidth: 280 }}>
           <Typography variant="subtitle1" noWrap>{user ? user.name : "Signed in with the access key"}</Typography>
-          <Typography variant="body2" color="text.secondary" noWrap>
+          <Typography variant="body2" color="textSecondary" noWrap>
             {user ? `@${user.username} on Discord` : "It can see every server's searches."}
           </Typography>
         </Box>

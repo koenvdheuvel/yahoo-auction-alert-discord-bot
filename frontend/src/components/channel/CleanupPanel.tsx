@@ -30,7 +30,7 @@ function Section({ title, children, hint }: { title: string; hint: ReactNode; ch
   return (
     <Paper component="section" aria-label={title} sx={{ p: 2, bgcolor: "background.paper", mb: 2 }}>
       <Typography variant="h3" component="h2">{title}</Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>{hint}</Typography>
+      <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5, mb: 2 }}>{hint}</Typography>
       {children}
     </Paper>
   );
@@ -127,7 +127,7 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
                 ? `${plural(data.removable_total, "post")} can be removed, of ${formatCount(data.posts_in_range)} in this range.`
                 : `No posts to remove, of ${formatCount(data.posts_in_range)} in this range.`}
             </Typography>
-            <Typography variant="body2" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
+            <Typography variant="body2" color="textSecondary" component="div" sx={{ mt: 0.5 }}>
               {[data.kept.subscribed > 0 && `${plural(data.kept.subscribed, "post is", "posts are")} kept because of 🔔 followers.`,
                 data.kept.queued > 0 && `${plural(data.kept.queued, "post is", "posts are")} already being removed.`,
                 data.removable_total > data.limit && `One run removes at most ${formatCount(data.limit)}; run it again for the rest.`,
@@ -142,14 +142,14 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
                     <ListingImage src={post.image_url} size={36} />
                     <Box sx={{ minWidth: 0 }}>
                       <Typography variant="body2" noWrap title={post.title}>{post.title}</Typography>
-                      <Typography variant="caption" color="text.secondary" sx={figures}>
+                      <Typography variant="caption" color="textSecondary" sx={figures}>
                         {sourceName(post.source)}, {formatPrice(post.price)}, posted {formatRelative(post.posted_at)}
                       </Typography>
                     </Box>
                   </Box>
                 ))}
                 {data.posts.length > SAMPLE && (
-                  <Typography component="li" variant="caption" color="text.secondary">and {formatCount(data.posts.length - SAMPLE)} more</Typography>
+                  <Typography component="li" variant="caption" color="textSecondary">and {formatCount(data.posts.length - SAMPLE)} more</Typography>
                 )}
               </Box>
             )}
@@ -160,7 +160,7 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
               onClick={() => setConfirming(true)}>
               Remove {plural(Math.min(data.posts.length, data.limit), "post")}
             </Button>
-            {!canManage && <Typography variant="caption" color="text.secondary" sx={{ ml: 1.5 }}>You need Manage Channels in this channel.</Typography>}
+            {!canManage && <Typography variant="caption" color="textSecondary" sx={{ ml: 1.5 }}>You need Manage Channels in this channel.</Typography>}
           </>
         )}
       </Section>

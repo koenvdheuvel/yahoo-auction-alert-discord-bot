@@ -88,7 +88,7 @@ export function ChannelView({ channelId, guildId, channels, searches, place, nav
         {tab === "searches" && (
           <>
             <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1.5, flexWrap: "wrap" }}>
-              <Typography variant="body2" color="text.secondary" sx={{ flex: 1, minWidth: 240 }}>
+              <Typography variant="body2" color="textSecondary" sx={{ flex: 1, minWidth: 240 }}>
                 What /alerts lists in this channel. Each search posts its new and changed listings here.
               </Typography>
               {channel && (

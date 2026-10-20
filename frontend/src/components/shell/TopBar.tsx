@@ -50,7 +50,7 @@ export function TopBar({ icon, title, detail, showMenu, onMenu, onHelp, onTitle,
       {detail && (
         <>
           <Divider orientation="vertical" flexItem sx={{ my: 1.5, display: { xs: "none", sm: "block" } }} />
-          <Typography variant="body2" color="text.secondary" noWrap sx={{ minWidth: 0, display: { xs: "none", sm: "block" } }}>
+          <Typography variant="body2" color="textSecondary" noWrap sx={{ minWidth: 0, display: { xs: "none", sm: "block" } }}>
             {detail}
           </Typography>
         </>

@@ -47,7 +47,7 @@ export function JsonEditor({ ruleset, onApply, disabled }: Props) {
         <Typography variant="subtitle2" component="span">Edit as JSON</Typography>
       </AccordionSummary>
       <AccordionDetails sx={{ display: "grid", gap: 1.5 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="textSecondary">
           Copy the draft to another search, or paste rules in. Applying replaces the draft; nothing is published.
         </Typography>
         <TextField value={text} onChange={(event) => { setText(event.target.value); setError(null); }} multiline minRows={10}

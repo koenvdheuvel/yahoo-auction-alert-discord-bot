@@ -70,9 +70,9 @@ export function SearchList({ alerts, canChange, showChannel = false, onOpen, onO
               <TableCell sx={WIDE}>
                 {alert.last_seen_at ? (
                   <Tooltip title={formatDateTime(alert.last_seen_at)}><span>{formatRelative(alert.last_seen_at)}</span></Tooltip>
-                ) : <Typography variant="body2" color="text.secondary">Not yet</Typography>}
+                ) : <Typography variant="body2" color="textSecondary">Not yet</Typography>}
               </TableCell>
-              <TableCell sx={WIDE}>{alert.active_version_id ? "Published" : <Typography variant="body2" color="text.secondary">Discord filters only</Typography>}</TableCell>
+              <TableCell sx={WIDE}>{alert.active_version_id ? "Published" : <Typography variant="body2" color="textSecondary">Discord filters only</Typography>}</TableCell>
               {onUnregister && (
                 <TableCell padding="checkbox">
                   <Tooltip title={canChange(alert) ? "Unregister" : "You need Manage Channels in this channel to unregister it"}>

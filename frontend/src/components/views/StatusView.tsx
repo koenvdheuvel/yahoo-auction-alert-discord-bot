@@ -26,9 +26,9 @@ const fromSeconds = (value: number | null | undefined) => (value ? new Date(valu
 function Card({ title, value, detail, tone }: { title: string; value: ReactNode; detail?: ReactNode; tone?: string }) {
   return (
     <Paper sx={{ p: 2, bgcolor: "background.paper", minWidth: 0 }}>
-      <Typography variant="overline" component="p" color="text.secondary">{title}</Typography>
+      <Typography variant="overline" component="p" color="textSecondary">{title}</Typography>
       <Typography variant="h2" component="p" sx={{ color: tone, mt: 0.5 }}>{value}</Typography>
-      {detail && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{detail}</Typography>}
+      {detail && <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>{detail}</Typography>}
     </Paper>
   );
 }
@@ -83,7 +83,7 @@ function Bot({ status }: { status: GuildStatus }) {
 
 function Backlog({ search }: { search: SearchStatus }) {
   const { pending, failed, oldest_pending_seconds: oldest } = search.backlog;
-  if (!pending && !failed) return <Typography variant="body2" color="text.secondary">Nothing waiting</Typography>;
+  if (!pending && !failed) return <Typography variant="body2" color="textSecondary">Nothing waiting</Typography>;
   return (
     <Typography variant="body2" sx={{ color: failed ? "error.main" : undefined, ...figures }}>
       {[pending && `${formatCount(pending)} waiting`, failed && `${formatCount(failed)} failed`].filter(Boolean).join(", ")}
@@ -109,7 +109,7 @@ export function StatusView({ guildId, onOpenSearch, onOpenChannel }: Props) {
       <Bot status={data} />
       <Typography variant="h3" component="h2" sx={{ mb: 1 }}>Searches</Typography>
       {data.searches.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">No searches in this server yet.</Typography>
+        <Typography variant="body2" color="textSecondary">No searches in this server yet.</Typography>
       ) : (
         <Box sx={{ overflowX: "auto" }}>
           <Table size="small" aria-label="Search status">
@@ -136,8 +136,8 @@ export function StatusView({ guildId, onOpenSearch, onOpenChannel }: Props) {
                     </Link>
                   </TableCell>
                   <TableCell>
-                    {search.checks === null ? <Typography variant="body2" color="text.secondary">Unknown here</Typography>
-                      : search.checks.length === 0 ? <Typography variant="body2" color="text.secondary">Not checked since the bot started</Typography>
+                    {search.checks === null ? <Typography variant="body2" color="textSecondary">Unknown here</Typography>
+                      : search.checks.length === 0 ? <Typography variant="body2" color="textSecondary">Not checked since the bot started</Typography>
                         : search.checks.map((check) => <CheckChip key={check.source} check={check} />)}
                   </TableCell>
                   <TableCell align="right" sx={figures}>{formatCount(search.listing_count)}</TableCell>

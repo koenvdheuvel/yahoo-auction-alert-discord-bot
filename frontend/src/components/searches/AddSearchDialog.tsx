@@ -80,7 +80,7 @@ export function AddSearchDialog({ open, channels, channelId, onClose, onCreated 
       <Box component="form" onSubmit={(event) => { event.preventDefault(); register.mutate(); }}>
         <DialogTitle id="add-search-title">Add a search</DialogTitle>
         <DialogContent sx={{ display: "grid", gap: 2, pt: "8px !important" }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="textSecondary">
             Like /register in Discord: the bot checks the marketplaces for this query and posts new and changed listings
             in the channel, with 🗑️ and 🔔 under each post.
           </Typography>
@@ -98,7 +98,7 @@ export function AddSearchDialog({ open, channels, channelId, onClose, onCreated 
             slotProps={{ htmlInput: { maxLength: SEARCH_QUERY_MAX_LENGTH } }}
             helperText={`${query.length} of ${SEARCH_QUERY_MAX_LENGTH} characters. Spaces at the ends are dropped.`} />
           {leftOut > 0 && (
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="textSecondary">
               {plural(leftOut, "channel")} left out: the bot cannot post there, or you lack Manage Channels.
             </Typography>
           )}

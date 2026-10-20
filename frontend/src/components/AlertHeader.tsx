@@ -41,7 +41,7 @@ function RulesState({ draft }: { draft: Draft }) {
       <Typography variant="body2" sx={{ fontWeight: 600 }}>
         {draft.published ? `Published rules: version ${draft.published.version}` : "No published rules yet"}
       </Typography>
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="caption" color="textSecondary">
         {draft.edited ? "Your draft has unpublished changes" : draft.published
           ? `Since ${formatDateTime(draft.published.created_at)}` : "Only the Discord filters apply"}
       </Typography>

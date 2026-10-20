@@ -27,7 +27,7 @@ const WHY: Record<Verdict, string> = {
 
 export function ReasonList({ reasons, dense = false }: { reasons: Reason[]; dense?: boolean }) {
   if (!reasons.length) {
-    return <Typography variant="body2" color="text.secondary">No reasons were saved for this decision.</Typography>;
+    return <Typography variant="body2" color="textSecondary">No reasons were saved for this decision.</Typography>;
   }
   return (
     <Box component="ul" sx={{ m: 0, pl: 2.25, display: "grid", gap: dense ? 0.25 : 0.5 }}>
@@ -63,11 +63,11 @@ export function DecisionButton({ decision, label, tabIndex }: { decision: Decisi
         anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
         slotProps={{ paper: { sx: { p: 2, maxWidth: 380, border: 1, borderColor: "divider" } } }}
       >
-        {label && <Typography variant="caption" color="text.secondary" component="p">{label}</Typography>}
+        {label && <Typography variant="caption" color="textSecondary" component="p">{label}</Typography>}
         <Typography variant="subtitle2" sx={{ mb: 1 }}>{WHY[decision.verdict]}</Typography>
         <ReasonList reasons={decision.reasons} />
         {decision.normalized_title && (
-          <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 1.5 }}>
+          <Typography variant="caption" color="textSecondary" component="p" sx={{ mt: 1.5 }}>
             Compared title: {decision.normalized_title}
           </Typography>
         )}

@@ -159,13 +159,13 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
     <Box>
       <FilterBar filters={filters} onFilters={onFilters} facets={first?.facets} searchRef={searchRef} />
       <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 2, rowGap: 1, mt: 1.5, mb: 1.5, minHeight: 40 }}>
-        <Typography variant="body2" color="text.secondary" aria-live="polite" sx={figures}>
+        <Typography variant="body2" color="textSecondary" aria-live="polite" sx={figures}>
           {candidates.isSuccess && (total
             ? `${formatCount(items.length)} of ${formatCount(total)} ${total === 1 ? "listing" : "listings"}`
             : "")}
         </Typography>
         {items.length > 0 && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: { xs: "none", md: "block" } }}>
+          <Typography variant="caption" color="textSecondary" sx={{ display: { xs: "none", md: "block" } }}>
             j and k move, Enter shows details. Press ? for all keys.
           </Typography>
         )}

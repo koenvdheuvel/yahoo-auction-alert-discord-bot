@@ -88,11 +88,11 @@ export function GroupEditor({ group, index, count, error, onChange, onMove, onDu
           </MenuItem>
         </Menu>
       </Stack>
-      <Typography variant="body2" color="text.secondary">{POLICIES[group.policy].description} {explain(group)}</Typography>
+      <Typography variant="body2" color="textSecondary">{POLICIES[group.policy].description} {explain(group)}</Typography>
       <TermEditor terms={group.terms} onChange={(terms) => set({ terms })} cannotAdd={cannotAdd}
         errorTerm={error?.term} groupLabel={name} />
       {!group.terms.length && (
-        <Typography variant="body2" color="warning.main">Add at least one term; a group without terms cannot be published.</Typography>
+        <Typography variant="body2" color="warning">Add at least one term; a group without terms cannot be published.</Typography>
       )}
       <FormControlLabel
         control={<Switch size="small" checked={group.normalize} onChange={(event) => set({ normalize: event.target.checked })} />}

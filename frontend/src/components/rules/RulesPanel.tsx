@@ -143,7 +143,7 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
           This is a scratch draft for trying rules on titles. Choose a search on the left to replay and publish rules for it.
         </Alert>
       )}
-      <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 760 }}>
+      <Typography variant="body2" color="textSecondary" sx={{ maxWidth: 760 }}>
         A listing is allowed when every must-match group matches and no exclude group does. Hold-for-review groups keep a
         match from being posted until you look at it. Inside a group, any term can match, or all terms must.
       </Typography>
@@ -213,7 +213,7 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
             {draft.outdated ? (
               <>
                 <WarningAmberOutlined color="warning" sx={{ fontSize: 15 }} />
-                <Typography variant="caption" color="warning.main">
+                <Typography variant="caption" color="warning">
                   {draft.published ? `Version ${draft.published.version} was published after you started this draft.`
                     : "The rules changed after you started this draft."}
                 </Typography>
@@ -221,14 +221,14 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
                 <Button size="small" color="inherit" onClick={draft.discard} sx={{ py: 0 }}>Discard it</Button>
               </>
             ) : checking ? (
-              <><CircularProgress size={12} aria-hidden="true" /><Typography variant="caption" color="text.secondary">Checking the draft</Typography></>
+              <><CircularProgress size={12} aria-hidden="true" /><Typography variant="caption" color="textSecondary">Checking the draft</Typography></>
             ) : validation.isError ? (
               <Typography variant="caption" color="error">The draft could not be checked: {errorMessage(validation.error)}</Typography>
             ) : invalid ? (
               <><ErrorOutlined color="error" sx={{ fontSize: 15 }} /><Typography variant="caption" color="error">{invalid.message}</Typography></>
             ) : (
               <><CheckCircleOutlined color="success" sx={{ fontSize: 15 }} />
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" color="textSecondary">
                   {draft.edited && alert
                     ? replayed ? `Valid. Replayed ${formatRelative(replay.ranAt)}.` : "Valid. Not replayed yet."
                     : "Valid."}
@@ -263,7 +263,7 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
             posted are not posted again, and publishing posts nothing by itself.
           </Typography>
           {!replayed && (
-            <Typography variant="body2" color="warning.main" sx={{ mb: 1.5 }}>
+            <Typography variant="body2" color="warning" sx={{ mb: 1.5 }}>
               You have not replayed this draft. A replay shows which recent listings it would allow or filter.
             </Typography>
           )}

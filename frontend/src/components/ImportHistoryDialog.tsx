@@ -32,7 +32,7 @@ export function ImportHistoryDialog({ open, onClose }: { open: boolean; onClose:
         again skips listings that are already here.
         {discord && " Only searches in the servers you manage are included."}
       </Typography>
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" color="textSecondary">
         Their original decisions were not saved, so they come in as needing review. Listings that earlier filters
         rejected were never saved and cannot be recovered. Nothing is sent to Discord.
       </Typography>

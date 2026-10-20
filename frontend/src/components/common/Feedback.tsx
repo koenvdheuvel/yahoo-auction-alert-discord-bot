@@ -26,7 +26,7 @@ export function EmptyState({ title, children, action }: { title: string; childre
   return (
     <Box sx={{ py: 6, px: 3, textAlign: "left", maxWidth: 560 }}>
       <Typography variant="h3" component="p">{title}</Typography>
-      {children && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>{children}</Typography>}
+      {children && <Typography variant="body2" color="textSecondary" sx={{ mt: 0.75 }}>{children}</Typography>}
       {action && <Box sx={{ mt: 2 }}>{action}</Box>}
     </Box>
   );

@@ -137,7 +137,7 @@ export function TermEditor({ terms, onChange, cannotAdd, errorTerm, groupLabel }
             <Typography variant="subtitle2">Edit term</Typography>
             <MethodSelect value={editing.term.method} label="Match"
               onChange={(next) => setEditing({ ...editing, term: { ...editing.term, method: next } })} />
-            <Typography variant="caption" color="text.secondary">{METHODS[editing.term.method].description}</Typography>
+            <Typography variant="caption" color="textSecondary">{METHODS[editing.term.method].description}</Typography>
             <TextField label="Term" value={editing.term.value} autoFocus fullWidth
               onChange={(event) => setEditing({ ...editing, term: { ...editing.term, value: event.target.value } })}
               slotProps={{ htmlInput: { maxLength: termLimit(editing.term.method), spellCheck: false } }} />

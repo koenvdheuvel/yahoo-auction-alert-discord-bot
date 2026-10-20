@@ -71,7 +71,7 @@ export function PostsPanel({ channelId, guildId, channelName, canManage }: Props
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="body1" noWrap title={post.listing.title} sx={{ fontWeight: 600 }}>{post.listing.title}</Typography>
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-                  <Typography variant="caption" color="text.secondary" sx={figures}>
+                  <Typography variant="caption" color="textSecondary" sx={figures}>
                     {sourceName(post.listing.source)}, {formatPrice(post.listing.price)}, posted {formatRelative(post.posted_at)}
                   </Typography>
                   {post.hidden && <Chip label="Hidden" color="warning" variant="outlined" />}

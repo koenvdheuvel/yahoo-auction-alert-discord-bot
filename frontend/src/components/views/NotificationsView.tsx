@@ -34,7 +34,7 @@ function Card({ item, onOpenChannel, canOpen }: CardProps) {
         <Typography variant="subtitle1" sx={{ overflowWrap: "anywhere" }}>
           {url ? <Link href={url} target="_blank" rel="noopener noreferrer" color="inherit">{item.title || item.external_id}</Link> : item.title || item.external_id}
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={figures}>
+        <Typography variant="body2" color="textSecondary" sx={figures}>
           {sourceName(item.source)}, {formatPrice(item.price)}
           {item.buyout_price > 0 && `, buyout ${formatPrice(item.buyout_price)}`}
           {item.stock > 1 && `, ${plural(item.stock, "in stock", "in stock")}`}
@@ -43,12 +43,12 @@ function Card({ item, onOpenChannel, canOpen }: CardProps) {
           {item.end_time && <Chip variant="outlined" label={`Ends ${formatRelative(item.end_time)}`} title={formatDateTime(item.end_time)} />}
           {item.muted && <Chip variant="outlined" color="warning" label="Muted: no updates" />}
           {item.waiting_dms > 0 && <Chip variant="outlined" color="info" label={`${plural(item.waiting_dms, "DM")} on the way`} />}
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" color="textSecondary">
             Changed {formatRelative(item.updated_at)}, last seen {formatRelative(item.last_seen_at)}
           </Typography>
         </Stack>
         {item.posts.length > 0 && (
-          <Typography variant="caption" component="p" color="text.secondary" sx={{ mt: 0.75 }}>
+          <Typography variant="caption" component="p" color="textSecondary" sx={{ mt: 0.75 }}>
             Posted in {item.posts.map((post, index) => {
               const discord = post.message_id ? discordLink(post.guild_id, post.channel_id, post.message_id) : null;
               const label = channelLabel(post.channel_id, post.channel_name);
@@ -76,7 +76,7 @@ function HiddenCard({ item }: { item: HiddenSubscription }) {
   return (
     <Paper component="li" sx={{ p: 1.5, bgcolor: "background.paper", display: "flex", gap: 1.5, alignItems: "center",
       justifyContent: "space-between" }}>
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" color="textSecondary">
         A listing in a channel you can't see, or in a server you left. You still get its DMs.
       </Typography>
       <FollowButton itemId={item.item_id} following />
@@ -100,7 +100,7 @@ export function NotificationsView({ guildId, followHere, onOpenChannel, canOpen 
     guildId === null || (!item.redacted && item.posts.some((post) => post.guild_id === guildId)));
   return (
     <Box sx={{ px: { xs: 2, md: 3 }, py: 2.5, maxWidth: 960 }}>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
         The bot sends you a DM when a listing you follow drops in price, changes its buyout price, or comes back in
         stock. Follow a listing with 🔔 under its post in Discord{followHere ? ", or from its post or listing here" : ""}. Only
         you see this list.

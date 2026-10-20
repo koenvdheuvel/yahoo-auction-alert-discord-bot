@@ -35,7 +35,7 @@ function Section({ title, children, hint }: { title: string; hint?: string; chil
   return (
     <Box component="section" aria-label={title} sx={{ py: 2, borderTop: 1, borderColor: "divider", "&:first-of-type": { borderTop: 0, pt: 0 } }}>
       <Typography variant="h3" component="h3">{title}</Typography>
-      {hint && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{hint}</Typography>}
+      {hint && <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>{hint}</Typography>}
       <Box sx={{ mt: 1.25 }}>{children}</Box>
     </Box>
   );
@@ -120,7 +120,7 @@ export function RuleSettings({ ruleset, onChange, filters, alertId = null, canCh
               control={<Switch size="small" checked={ruleset.normalization[key]} sx={{ mt: 0.25 }}
                 onChange={(event) => set({ normalization: { ...ruleset.normalization, [key]: event.target.checked } })} />}
               label={<Box sx={{ ml: 1 }}><Typography variant="body2" sx={{ fontWeight: 600 }}>{name}</Typography>
-                <Typography variant="caption" color="text.secondary">{example}</Typography></Box>} />
+                <Typography variant="caption" color="textSecondary">{example}</Typography></Box>} />
           ))}
         </FormGroup>
       </Section>
@@ -149,9 +149,9 @@ export function RuleSettings({ ruleset, onChange, filters, alertId = null, canCh
         <FormControlLabel label="Apply them alongside these rules" slotProps={{ typography: { variant: "body2" } }}
           control={<Switch size="small" checked={ruleset.include_legacy} onChange={(event) => set({ include_legacy: event.target.checked })} />} />
         {filters === null ? (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Choose a search to see its Discord filters.</Typography>
+          <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>Choose a search to see its Discord filters.</Typography>
         ) : filters.length === 0 ? (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>This search has no Discord filters.</Typography>
+          <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>This search has no Discord filters.</Typography>
         ) : (
           <Box component="ul" sx={{ listStyle: "none", p: 0, m: 0, mt: 1, display: "grid", gap: 1 }}>
             {filters.map((filter) => (
@@ -160,7 +160,7 @@ export function RuleSettings({ ruleset, onChange, filters, alertId = null, canCh
                   <Typography variant="body2" sx={{ fontFamily: filter.method === "regex" ? mono : undefined, overflowWrap: "anywhere" }}>
                     {filter.value}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary" sx={figures}>
+                  <Typography variant="caption" color="textSecondary" sx={figures}>
                     Filter {filter.id}: {describeFilter(filter)}
                   </Typography>
                 </Box>

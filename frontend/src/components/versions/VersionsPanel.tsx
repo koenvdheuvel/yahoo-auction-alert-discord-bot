@@ -124,7 +124,7 @@ export function VersionsPanel({ alert, rules, draft, onEditRules, canChange = fa
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="body2">{describeRuleset(version.ruleset)}</Typography>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" color="textSecondary">
                     {formatDateTime(version.created_at)}
                     {version.restored_from_version_id ? `, restored from version ${restoredFrom ?? "an older version"}` : ""}
                   </Typography>
@@ -158,7 +158,7 @@ export function VersionsPanel({ alert, rules, draft, onEditRules, canChange = fa
         })}
       </Box>
       {total > versions.length && (
-        <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 1, ...figures }}>
+        <Typography variant="caption" color="textSecondary" component="p" sx={{ mt: 1, ...figures }}>
           Showing the latest {formatCount(versions.length)} of {formatCount(total)} versions. Older versions are kept but not listed.
         </Typography>
       )}

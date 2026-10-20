@@ -167,7 +167,7 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
           <>
             <Row icon={<NotificationsOutlined sx={{ fontSize: 18 }} />} label="Your notifications" bright selected
               onClick={() => onNavigate({ me: false })} />
-            <Typography variant="caption" component="p" color="text.secondary" sx={{ px: 2, pt: 1.5 }}>
+            <Typography variant="caption" component="p" color="textSecondary" sx={{ px: 2, pt: 1.5 }}>
               You are a member here, so you manage your own 🔔 notifications. People with Manage Channels in this
               server also see its channels and searches.
             </Typography>
@@ -187,7 +187,7 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
             <Row icon={<SearchOutlined sx={{ fontSize: 18 }} />} label="Searches" bright
               selected={atServer && place.view === "searches"}
               onClick={() => onNavigate({ view: "searches", channelId: null, alertId: null, me: false })}
-              end={searchCount ? <Typography component="span" variant="caption" color="text.secondary" sx={figures}>{formatCount(searchCount)}</Typography> : undefined} />
+              end={searchCount ? <Typography component="span" variant="caption" color="textSecondary" sx={figures}>{formatCount(searchCount)}</Typography> : undefined} />
             <Row icon={<CollectionsOutlined sx={{ fontSize: 18 }} />} label="All listings" bright
               selected={atServer && place.view === "listings"}
               onClick={() => onNavigate({ view: "listings", channelId: null, alertId: null, me: false })} />

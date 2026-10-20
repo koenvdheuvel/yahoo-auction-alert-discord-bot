@@ -39,7 +39,7 @@ interface Props {
 function Fact({ name, children }: { name: string; children: ReactNode }) {
   return (
     <>
-      <Typography component="dt" variant="body2" color="text.secondary">{name}</Typography>
+      <Typography component="dt" variant="body2" color="textSecondary">{name}</Typography>
       <Typography component="dd" variant="body2" sx={{ m: 0, overflowWrap: "anywhere", ...figures }}>{children}</Typography>
     </>
   );
@@ -79,7 +79,7 @@ export function ListingDrawer(props: Props) {
             <Tooltip title="Next (j)"><span>
               <IconButton onClick={onNext} disabled={!hasNext} aria-label="Next listing"><ChevronRight /></IconButton>
             </span></Tooltip>
-            <Typography variant="caption" color="text.secondary" sx={{ flex: 1, ...figures }}>{position}</Typography>
+            <Typography variant="caption" color="textSecondary" sx={{ flex: 1, ...figures }}>{position}</Typography>
             <IconButton onClick={onClose} aria-label="Close details"><Close /></IconButton>
           </Stack>
           <ListingImage src={candidate.payload.image_url} ratio="4 / 3" />
@@ -87,7 +87,7 @@ export function ListingDrawer(props: Props) {
             <Box>
               <Typography variant="h2" component="h2" sx={{ fontStretch: "100%", overflowWrap: "anywhere" }}>{title}</Typography>
               {candidate.normalized_title && (
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75, overflowWrap: "anywhere" }}>
+                <Typography variant="body2" color="textSecondary" sx={{ mt: 0.75, overflowWrap: "anywhere" }}>
                   Compared title: {candidate.normalized_title}
                 </Typography>
               )}
@@ -109,7 +109,7 @@ export function ListingDrawer(props: Props) {
               <Fact name="Saved by">{ORIGINS[candidate.origin]}</Fact>
             </Box>
             {candidate.incomplete && (
-              <Typography variant="body2" color="warning.main">
+              <Typography variant="body2" color="warning">
                 Some listing facts were missing or cut short, so replay keeps this listing in review.
               </Typography>
             )}

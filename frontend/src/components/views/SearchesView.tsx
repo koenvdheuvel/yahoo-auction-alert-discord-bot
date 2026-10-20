@@ -25,7 +25,7 @@ export function SearchesView({ searches, channels, onOpen, onOpenChannel, onAdd,
   return (
     <Box sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1.5, flexWrap: "wrap" }}>
-        <Typography variant="body2" color="text.secondary" sx={{ flex: 1, minWidth: 240 }}>
+        <Typography variant="body2" color="textSecondary" sx={{ flex: 1, minWidth: 240 }}>
           Every search in this server, as /allalerts lists them. Open a channel for its posts, hidden listings and cleanup.
         </Typography>
         <Button variant="contained" startIcon={<Add />} onClick={onAdd} disabled={postableChannels(channels).length === 0}>

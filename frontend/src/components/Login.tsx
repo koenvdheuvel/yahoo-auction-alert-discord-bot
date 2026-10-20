@@ -46,7 +46,7 @@ export function Login({ method, title = "Dashboard", bot = null, ended, unreacha
           </Avatar>
           <Typography variant="h1" component="h1">{title}</Typography>
         </Stack>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+        <Typography variant="body1" color="textSecondary" sx={{ mb: 3 }}>
           Manage the bot's searches, channels and notifications, and tune the rules that decide what gets posted to
           Discord.
         </Typography>
@@ -79,7 +79,7 @@ function DiscordSignIn({ ended }: { ended: SessionEnd | null }) {
         Sign in with Discord
       </Button>
       {!notice && (
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" color="textSecondary">
           Anyone in a server this bot is in can sign in to manage their own 🔔 notifications. With Manage Channels in a
           server you manage its searches too. The dashboard only asks Discord who you are; the bot checks your servers
           itself.

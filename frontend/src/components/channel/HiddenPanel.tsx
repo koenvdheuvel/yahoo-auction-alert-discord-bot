@@ -36,7 +36,7 @@ export function HiddenPanel({ channelId, canChange }: { channelId: string; canCh
   }
   return (
     <>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+      <Typography variant="body2" color="textSecondary" sx={{ mb: 1.5 }}>
         {plural(hidden.data.total, "listing is", "listings are")} hidden here, so the bot does not post them in this
         channel. Showing one again does not post it right away; its next change is posted.
       </Typography>
@@ -49,7 +49,7 @@ export function HiddenPanel({ channelId, canChange }: { channelId: string; canCh
               <ListingImage src={item.image_url} size={48} />
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="body1" noWrap title={item.title} sx={{ fontWeight: 600 }}>{item.title || item.external_id}</Typography>
-                <Typography variant="caption" color="text.secondary" sx={figures}>
+                <Typography variant="caption" color="textSecondary" sx={figures}>
                   {sourceName(item.source)}, {formatPrice(item.price)}, changed {formatRelative(item.updated_at)}
                   {url && <> · <Link href={url} target="_blank" rel="noopener noreferrer">Listing</Link></>}
                 </Typography>
