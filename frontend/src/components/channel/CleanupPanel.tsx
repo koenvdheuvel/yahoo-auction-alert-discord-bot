@@ -16,6 +16,7 @@ import type { AlertSummary, HistoryScan, Posting, RemovalDays } from "../../api/
 import { errorMessage } from "../../lib/errors";
 import { formatCount, formatPrice, formatRelative, plural } from "../../lib/format";
 import { REMOVAL_RANGES } from "../../lib/removal";
+import { usePhone } from "../../lib/responsive";
 import { sourceName } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import { ConfirmDialog, LoadError } from "../common/Feedback";
@@ -28,7 +29,7 @@ const MAX_DELETE_COUNT = 100;
 
 function Section({ title, children, hint }: { title: string; hint: ReactNode; children: ReactNode }) {
   return (
-    <Paper component="section" aria-label={title} sx={{ p: 2, bgcolor: "background.paper", mb: 2 }}>
+    <Paper component="section" aria-label={title} sx={{ p: { xs: 1.5, sm: 2 }, bgcolor: "background.paper", mb: 2 }}>
       <Typography variant="h3" component="h2">{title}</Typography>
       <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5, mb: 2 }}>{hint}</Typography>
       {children}
@@ -60,6 +61,11 @@ interface Props {
 export function CleanupPanel({ channelId, channelName, searches, canManage, posting }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
+  // On phones a select opens the phone's own picker instead of a menu that floats over the page.
+  // The select needs its choices as direct children, so this returns them rather than wrapping them.
+  const phone = usePhone();
+  const choice = (value: string, label: string) =>
+    phone ? <option key={value} value={value}>{label}</option> : <MenuItem key={value} value={value}>{label}</MenuItem>;
   const [days, setDays] = useState<RemovalDays>(30);
   const [alertId, setAlertId] = useState("");
   const [confirming, setConfirming] = useState(false);
@@ -107,15 +113,14 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
       </>}>
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
           <TextField select label="Posted" value={days === null ? "all" : String(days)} sx={{ minWidth: 180 }}
+            slotProps={{ select: { native: phone } }}
             onChange={(event) => setDays(event.target.value === "all" ? null : Number(event.target.value) as RemovalDays)}>
-            {REMOVAL_RANGES.map((range) => (
-              <MenuItem key={range.label} value={range.days === null ? "all" : String(range.days)}>{range.label}</MenuItem>
-            ))}
+            {REMOVAL_RANGES.map((range) => choice(range.days === null ? "all" : String(range.days), range.label))}
           </TextField>
           <TextField select label="Posts of" value={alertId} onChange={(event) => setAlertId(event.target.value)} sx={{ minWidth: 240 }}
-            slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}>
-            <MenuItem value="">Every search, and removed ones</MenuItem>
-            {searches.map((search) => <MenuItem key={search.id} value={search.id}>{search.search_query}</MenuItem>)}
+            slotProps={{ select: { displayEmpty: true, native: phone }, inputLabel: { shrink: true } }}>
+            {choice("", "Every search, and removed ones")}
+            {searches.map((search) => choice(search.id, search.search_query))}
           </TextField>
         </Stack>
         {preview.isPending && <LinearProgress />}
@@ -157,10 +162,14 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
               <Alert severity="info" sx={{ my: 1.5 }}>The bot does not run with this dashboard, so the posts are removed when it runs next.</Alert>
             )}
             <Button variant="contained" color="error" disabled={!canManage || !data.posts.length || remove.isPending}
-              onClick={() => setConfirming(true)}>
+              onClick={() => setConfirming(true)} sx={{ width: { xs: "100%", sm: "auto" } }}>
               Remove {plural(Math.min(data.posts.length, data.limit), "post")}
             </Button>
-            {!canManage && <Typography variant="caption" color="textSecondary" sx={{ ml: 1.5 }}>You need Manage Channels in this channel.</Typography>}
+            {!canManage && (
+              <Typography variant="caption" color="textSecondary" sx={{ ml: { sm: 1.5 }, mt: { xs: 0.75, sm: 0 }, display: { xs: "block", sm: "inline" } }}>
+                You need Manage Channels in this channel.
+              </Typography>
+            )}
           </>
         )}
       </Section>
@@ -176,7 +185,7 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
           <Alert severity="warning" sx={{ mb: 1.5 }}>The bot needs Read Message History here to read the messages.</Alert>
         )}
         <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { sm: "flex-start" }, mb: 1.5 }}>
-          <TextField label="How many" value={count} onChange={(event) => setCount(event.target.value)} sx={{ width: 120 }}
+          <TextField label="How many" value={count} onChange={(event) => setCount(event.target.value)} sx={{ width: { xs: "100%", sm: 120 } }}
             error={!countValid} helperText={countValid ? "1 to 100" : "Enter 1 to 100"}
             slotProps={{ htmlInput: { inputMode: "numeric" } }} />
           <Button variant="outlined" color="error" disabled={!canManage || !scanAvailable || running || !countValid || startScan.isPending}

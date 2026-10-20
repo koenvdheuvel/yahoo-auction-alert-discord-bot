@@ -25,6 +25,9 @@ describe("ServerRail", () => {
     );
     expect(screen.getByRole("button", { name: "Poster hunters" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Record shop" })).not.toHaveAttribute("aria-current");
+    // Screen readers hear the problems too, not only people who rest a mouse on the icon.
+    expect(screen.getByRole("button", { name: "Record shop" }))
+      .toHaveAccessibleDescription("1 search failed the last check; 2 posts or DMs could not be sent");
     expect(screen.getByText("PH")).toBeInTheDocument();
     await user.hover(screen.getByRole("button", { name: "Record shop" }));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(

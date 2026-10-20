@@ -49,30 +49,34 @@ export function ChannelView({ channelId, guildId, channels, searches, place, nav
   const tab = tabs.includes(place.channelTab) ? place.channelTab : "searches";
   const problem = channel ? postingProblem(channel) : null;
   const name = channel?.name ?? channelId;
+  const notice = unknown !== null || (channel !== null && (problem !== null || !canManage));
 
   return (
     <>
-      <Box sx={{ px: { xs: 2, md: 3 }, pt: 2 }}>
-        {unknown && (
-          <Alert severity={unknown.deleted ? "error" : "warning"} sx={{ mb: 2 }}>
-            {unknown.deleted
-              ? "Discord says this channel was deleted. Unregister its searches here; hidden listings can be cleared too."
-              : channels.source === "none"
-                ? "The dashboard has no bot token, so it knows this channel only by its ID."
-                : "Discord does not show this channel to the bot. Give the bot View Channel there, or unregister its searches in Discord."}
-          </Alert>
-        )}
-        {channel && problem && (
-          <Alert severity={searches.length ? "error" : "warning"} sx={{ mb: 2 }}>
-            {problem} {searches.length ? "Its searches cannot post until that is fixed." : "Searches cannot be added here until then."}
-          </Alert>
-        )}
-        {channel && !canManage && (
-          <Alert severity="info" sx={{ mb: 2 }}>
-            You do not have Manage Channels in #{channel.name}, so you can look but not change anything here.
-          </Alert>
-        )}
-      </Box>
+      {/* On phones the page starts right under the top bar when there is nothing to warn about. */}
+      {(notice || !compact) && (
+        <Box sx={{ px: { xs: 2, md: 3 }, pt: 2, "& > :last-child": { mb: { xs: 0, md: 2 } } }}>
+          {unknown && (
+            <Alert severity={unknown.deleted ? "error" : "warning"} sx={{ mb: 2 }}>
+              {unknown.deleted
+                ? "Discord says this channel was deleted. Unregister its searches here; hidden listings can be cleared too."
+                : channels.source === "none"
+                  ? "The dashboard has no bot token, so it knows this channel only by its ID."
+                  : "Discord does not show this channel to the bot. Give the bot View Channel there, or unregister its searches in Discord."}
+            </Alert>
+          )}
+          {channel && problem && (
+            <Alert severity={searches.length ? "error" : "warning"} sx={{ mb: 2 }}>
+              {problem} {searches.length ? "Its searches cannot post until that is fixed." : "Searches cannot be added here until then."}
+            </Alert>
+          )}
+          {channel && !canManage && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              You do not have Manage Channels in #{channel.name}, so you can look but not change anything here.
+            </Alert>
+          )}
+        </Box>
+      )}
       {/* On phones the tabs sit in a bar at the bottom of the screen. */}
       {!compact && (
         <Box sx={{ px: 3, borderBottom: 1, borderColor: "divider", position: "sticky", top: TOPBAR_HEIGHT,

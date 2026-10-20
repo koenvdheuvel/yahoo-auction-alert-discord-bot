@@ -18,6 +18,7 @@ import type { AlertSummary, ChannelList, ChannelRow, UnknownChannel } from "../.
 import { postingProblem, searchesByChannel } from "../../lib/channels";
 import { formatCount } from "../../lib/format";
 import type { Place } from "../../lib/hooks";
+import { useTouch } from "../../lib/responsive";
 import { SIDEBAR_WIDTH, TOPBAR_HEIGHT, figures } from "../../theme";
 import { LoadError } from "../common/Feedback";
 import { ChannelIcon } from "./ChannelIcon";
@@ -33,6 +34,9 @@ function readCollapsed(): Set<string> {
   }
 }
 
+// On touch screens rows get 44 pixels, the smallest target Apple and Google recommend for a finger.
+const TOUCH = "@media (pointer: coarse)";
+
 interface RowProps {
   icon: ReactNode;
   label: string;
@@ -43,22 +47,38 @@ interface RowProps {
   depth?: number;
   end?: ReactNode;
   title?: string;
+  /** A second line, for what a mouse would show on hover. Touch screens have no hover. */
+  detail?: { text: string; color: string } | null;
 }
 
 /** One line in the channel list, sized and coloured like Discord's. */
-function Row({ icon, label, selected, onClick, bright = false, depth = 0, end, title }: RowProps) {
+function Row({ icon, label, selected, onClick, bright = false, depth = 0, end, title, detail }: RowProps) {
+  const name = (
+    <Typography component="span" variant="body1" noWrap
+      sx={{ flex: 1, minWidth: 0, fontWeight: selected || bright ? 600 : 500, fontSize: depth ? "0.8125rem" : "0.9375rem",
+        display: detail ? "block" : undefined }}>
+      {label}
+    </Typography>
+  );
   return (
     <ButtonBase onClick={onClick} aria-current={selected ? "page" : undefined} title={title}
       sx={{ display: "flex", width: "calc(100% - 16px)", mx: 1, my: "1px", pl: 1 + depth * 2, pr: 1, minHeight: 32,
         borderRadius: 1, justifyContent: "flex-start", gap: 0.75, textAlign: "left",
         color: selected || bright ? "text.primary" : "surface.muted",
         bgcolor: selected ? "surface.selected" : "transparent",
-        "&:hover": { bgcolor: selected ? "surface.selected" : "surface.hover", color: "text.primary" } }}>
+        [TOUCH]: { minHeight: 44 },
+        // A tap leaves no hover behind on a phone; the row lights up while the finger is on it instead.
+        "@media (hover: hover)": { "&:hover": { bgcolor: selected ? "surface.selected" : "surface.hover", color: "text.primary" } },
+        "@media (hover: none)": { "&:active": { bgcolor: selected ? "surface.selected" : "surface.hover" } } }}>
       <Box component="span" sx={{ display: "flex", color: selected || bright ? "text.secondary" : "surface.muted" }}>{icon}</Box>
-      <Typography component="span" variant="body1" noWrap
-        sx={{ flex: 1, minWidth: 0, fontWeight: selected || bright ? 600 : 500, fontSize: depth ? "0.8125rem" : "0.9375rem" }}>
-        {label}
-      </Typography>
+      {detail ? (
+        <Box component="span" sx={{ flex: 1, minWidth: 0, py: 0.5 }}>
+          {name}
+          {/* Up to two lines, so a reason such as a missing permission is not cut off. */}
+          <Typography component="span" variant="caption" sx={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+            overflow: "hidden", color: detail.color }}>{detail.text}</Typography>
+        </Box>
+      ) : name}
       {end}
     </ButtonBase>
   );
@@ -74,12 +94,27 @@ function CountBadge({ value, label }: { value: number; label: string }) {
   );
 }
 
-function PostingWarning({ channel }: { channel: ChannelRow }) {
-  const problem = postingProblem(channel);
-  if (!problem || !["text", "announcement", "thread", "private_thread"].includes(channel.kind)) return null;
+/** Why the bot cannot post in a channel where searches can go, or null when it can. */
+function warning(channel: ChannelRow): string | null {
+  return ["text", "announcement", "thread", "private_thread"].includes(channel.kind) ? postingProblem(channel) : null;
+}
+
+/** What the warning icon and the archived mark show on hover, as a line under the name for touch screens. */
+function channelDetail(channel: ChannelRow): RowProps["detail"] {
+  const problem = warning(channel);
+  if (problem) return { text: problem, color: channel.searches ? "error.main" : "warning.main" };
+  return channel.archived ? { text: "Archived thread", color: "surface.muted" } : null;
+}
+
+function PostingWarning({ channel, described }: { channel: ChannelRow; described: boolean }) {
+  const problem = warning(channel);
+  if (!problem) return null;
+  const sx = { fontSize: 16, color: channel.searches ? "error.main" : "warning.main" };
+  // When the reason is written under the name, the icon only marks the row.
+  if (described) return <WarningAmber sx={sx} />;
   return (
     <Tooltip title={problem}>
-      <WarningAmber aria-label={problem} sx={{ fontSize: 16, color: channel.searches ? "error.main" : "warning.main" }} />
+      <WarningAmber role="img" aria-hidden={false} aria-label={problem} sx={sx} />
     </Tooltip>
   );
 }
@@ -101,6 +136,7 @@ interface Props {
 /** The channel list of the picked server, as Discord shows it, with each channel's searches under it. */
 export function ChannelSidebar({ guildName, channels, alerts, guildId, place, onNavigate, home, member = false, footer }: Props) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const touch = useTouch();
   const byChannel = searchesByChannel(alerts, guildId);
   const searchCount = [...byChannel.values()].reduce((total, list) => total + list.length, 0);
   const atServer = !place.me && !place.alertId && !place.channelId;
@@ -126,11 +162,11 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
   const channelRow = (channel: ChannelRow, depth = 0) => (
     <Box key={channel.id}>
       <Row depth={depth} icon={<ChannelIcon kind={channel.kind} />} label={channel.name}
-        title={channel.archived ? `${channel.name} (archived)` : undefined}
+        title={channel.archived ? `${channel.name} (archived)` : undefined} detail={touch ? channelDetail(channel) : null}
         selected={place.channelId === channel.id && !place.alertId} bright={channel.searches > 0 || channel.hidden > 0}
         onClick={() => onNavigate({ channelId: channel.id, alertId: null, me: false })}
         end={<>
-          <PostingWarning channel={channel} />
+          <PostingWarning channel={channel} described={touch} />
           {channel.searches > 0 && <CountBadge value={channel.searches}
             label={`${formatCount(channel.searches)} ${channel.searches === 1 ? "search" : "searches"}`} />}
         </>} />
@@ -155,8 +191,9 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
   );
 
   return (
-    <Box sx={{ width: SIDEBAR_WIDTH, flex: "none", bgcolor: "surface.sidebar", display: "flex", flexDirection: "column",
-      minHeight: 0, height: "100%" }}>
+    // The list gives up width before the server list does when the drawer is narrower than both, on small phones.
+    <Box sx={{ width: SIDEBAR_WIDTH, flex: "0 1 auto", minWidth: 0, bgcolor: "surface.sidebar", display: "flex",
+      flexDirection: "column", minHeight: 0, height: "100%" }}>
       <Box component="header" sx={{ height: TOPBAR_HEIGHT, flex: "none", px: 2, display: "flex", alignItems: "center",
         boxShadow: "0 1px 0 rgba(0,0,0,0.2)", zIndex: 1 }}>
         <Typography variant="h2" component="h2" noWrap>{home ? home.label : guildName ?? "Server"}</Typography>
@@ -173,11 +210,12 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
             </Typography>
           </>
         ) : home ? (
+          // Home has one page, and it is open whenever home is: also at the start, before the address says so.
           home.notifications ? (
-            <Row icon={<NotificationsOutlined sx={{ fontSize: 18 }} />} label="Your notifications" bright selected={place.me}
+            <Row icon={<NotificationsOutlined sx={{ fontSize: 18 }} />} label="Your notifications" bright selected
               onClick={() => onNavigate({ me: true })} />
           ) : (
-            <Row icon={<SearchOutlined sx={{ fontSize: 18 }} />} label="Every server's searches" bright selected={place.me}
+            <Row icon={<SearchOutlined sx={{ fontSize: 18 }} />} label="Every server's searches" bright selected
               onClick={() => onNavigate({ me: true })} />
           )
         ) : (
@@ -205,11 +243,13 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
               const closed = section.category !== null && collapsed.has(key);
               return (
                 <Box key={key} component="section" aria-label={section.category?.name ?? "Channels without a category"}
-                  sx={{ mt: section.category ? 2 : 1 }}>
+                  sx={{ mt: section.category ? 2 : 1, [TOUCH]: { mt: section.category ? 0.5 : 1 } }}>
                   {section.category && (
+                    // On touch screens the header is as tall as a row, with its name at the bottom as in Discord.
                     <ButtonBase onClick={() => toggle(key)} aria-expanded={!closed}
                       sx={{ display: "flex", width: "100%", px: 0.5, py: 0.25, justifyContent: "flex-start",
-                        color: "surface.muted", "&:hover": { color: "text.primary" } }}>
+                        color: "surface.muted", [TOUCH]: { minHeight: 44, alignItems: "flex-end", pb: 0.75 },
+                        "@media (hover: hover)": { "&:hover": { color: "text.primary" } } }}>
                       {closed ? <ChevronRight sx={{ fontSize: 14 }} /> : <ExpandMore sx={{ fontSize: 14 }} />}
                       <Typography component="span" variant="overline" noWrap sx={{ textTransform: "uppercase" }}>
                         {section.category.name}

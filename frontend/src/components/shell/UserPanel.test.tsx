@@ -1,12 +1,13 @@
 import { ThemeProvider } from "@mui/material/styles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitForElementToBeRemoved, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { keys } from "../../api/hooks";
 import type { Session } from "../../api/types";
 import { theme } from "../../theme";
+import { setPhone } from "../../test/screen";
 import { UserPanel } from "./UserPanel";
 
 const SIGNED_IN: Session = {
@@ -60,5 +61,27 @@ describe("UserPanel", () => {
     for (const name of ["Light", "Dark", "Same as the system"]) {
       expect(screen.getByRole("menuitemradio", { name })).toBeInTheDocument();
     }
+  });
+
+  it("opens the account and the settings as sheets on a phone", async () => {
+    setPhone();
+    const user = userEvent.setup();
+    const fetch = vi.fn(() => Promise.resolve(Response.json({ authenticated: false, method: "discord" })));
+    vi.stubGlobal("fetch", fetch);
+    show(SIGNED_IN);
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const settings = screen.getByRole("dialog", { name: "Settings" });
+    expect(within(settings).getByRole("radiogroup")).toBeInTheDocument();
+    expect(within(settings).getByRole("radio", { name: "Same as the system" })).toBeInTheDocument();
+    // Keyboard shortcuts mean nothing on a phone.
+    expect(within(settings).queryByRole("button", { name: "Keyboard shortcuts" })).not.toBeInTheDocument();
+    await user.click(within(settings).getByRole("button", { name: "Close" }));
+    await waitForElementToBeRemoved(settings);
+
+    await user.click(screen.getByRole("button", { name: "Alice: account" }));
+    const account = await screen.findByRole("dialog", { name: "Alice" });
+    expect(within(account).getByText("@alice on Discord")).toBeInTheDocument();
+    await user.click(within(account).getByRole("button", { name: "Sign out" }));
+    expect(fetch).toHaveBeenCalledWith("/api/session", expect.objectContaining({ method: "DELETE" }));
   });
 });

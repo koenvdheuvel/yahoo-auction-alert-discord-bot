@@ -1,7 +1,6 @@
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
@@ -18,7 +17,9 @@ import type { AlertSummary, ChannelList } from "../../api/types";
 import { allChannels, postableChannels } from "../../lib/channels";
 import { errorMessage } from "../../lib/errors";
 import { plural } from "../../lib/format";
+import { usePhone } from "../../lib/responsive";
 import { useNotify } from "../common/notify";
+import { SheetDialog } from "../common/Sheet";
 import { ChannelIcon } from "../shell/ChannelIcon";
 
 /** The longest query /register takes; the server checks it the same way. */
@@ -37,6 +38,7 @@ interface Props {
 export function AddSearchDialog({ open, channels, channelId, onClose, onCreated }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
+  const phone = usePhone();
   const postable = postableChannels(channels);
   const [picked, setPicked] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -60,24 +62,32 @@ export function AddSearchDialog({ open, channels, channelId, onClose, onCreated 
   };
 
   // Channels grouped under their category, as in the channel list.
-  const options = (channels?.sections ?? []).flatMap((section) => {
-    const items = section.channels.flatMap((row) => [row, ...(row.threads ?? [])])
-      .filter((row) => postable.some((item) => item.id === row.id));
-    if (!items.length) return [];
-    return [
-      section.category ? <ListSubheader key={`category-${section.category.id}`}>{section.category.name}</ListSubheader> : null,
-      ...items.map((row) => (
-        <MenuItem key={row.id} value={row.id} sx={{ gap: 1, pl: row.parent_id && section.channels.every((item) => item.id !== row.id) ? 4 : 2 }}>
-          <ChannelIcon kind={row.kind} sx={{ color: "text.secondary" }} />
-          {row.name}
-        </MenuItem>
-      )),
-    ];
-  });
+  const groups = (channels?.sections ?? []).map((section) => ({
+    category: section.category,
+    items: section.channels.flatMap((row) => [row, ...(row.threads ?? [])])
+      .filter((row) => postable.some((item) => item.id === row.id))
+      .map((row) => ({ row, thread: row.parent_id !== null && section.channels.every((item) => item.id !== row.id) })),
+  })).filter((group) => group.items.length > 0);
+  // On phones the select opens the phone's own picker instead of a menu over the sheet. That picker shows
+  // text only, so channels get a # and threads an arrow.
+  const options = phone ? groups.map(({ category, items }) => {
+    const choices = items.map(({ row, thread }) => <option key={row.id} value={row.id}>{thread ? `↳ ${row.name}` : `# ${row.name}`}</option>);
+    return category ? <optgroup key={category.id} label={category.name}>{choices}</optgroup> : choices;
+  }) : groups.flatMap(({ category, items }) => [
+    category ? <ListSubheader key={`category-${category.id}`}>{category.name}</ListSubheader> : null,
+    ...items.map(({ row, thread }) => (
+      <MenuItem key={row.id} value={row.id} sx={{ gap: 1, pl: thread ? 4 : 2 }}>
+        <ChannelIcon kind={row.kind} sx={{ color: "text.secondary" }} />
+        {row.name}
+      </MenuItem>
+    )),
+  ]);
 
   return (
-    <Dialog open={open} onClose={register.isPending ? undefined : close} maxWidth="sm" aria-labelledby="add-search-title">
-      <Box component="form" onSubmit={(event) => { event.preventDefault(); register.mutate(); }}>
+    <SheetDialog open={open} onClose={register.isPending ? undefined : close} maxWidth="sm" aria-labelledby="add-search-title">
+      {/* The form passes the sheet's height on to its parts, so the content scrolls and the buttons stay in view. */}
+      <Box component="form" onSubmit={(event) => { event.preventDefault(); register.mutate(); }}
+        sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
         <DialogTitle id="add-search-title">Add a search</DialogTitle>
         <DialogContent sx={{ display: "grid", gap: 2, pt: "8px !important" }}>
           <Typography variant="body2" color="textSecondary">
@@ -90,7 +100,8 @@ export function AddSearchDialog({ open, channels, channelId, onClose, onCreated 
               channels where the bot lacks a permission.
             </Alert>
           ) : (
-            <TextField select label="Channel" value={channel} onChange={(event) => setPicked(event.target.value)} required>
+            <TextField select label="Channel" value={channel} onChange={(event) => setPicked(event.target.value)} required
+              slotProps={{ select: { native: phone } }}>
               {options}
             </TextField>
           )}
@@ -111,6 +122,6 @@ export function AddSearchDialog({ open, channels, channelId, onClose, onCreated 
           </Button>
         </DialogActions>
       </Box>
-    </Dialog>
+    </SheetDialog>
   );
 }

@@ -5,9 +5,10 @@ import ButtonBase from "@mui/material/ButtonBase";
 import Divider from "@mui/material/Divider";
 import Skeleton from "@mui/material/Skeleton";
 import Tooltip from "@mui/material/Tooltip";
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 
 import type { BotUser, GuildSummary } from "../../api/types";
+import { visuallyHidden } from "../../lib/a11y";
 import { guildProblems } from "../../lib/channels";
 import { RAIL_WIDTH } from "../../theme";
 
@@ -31,15 +32,21 @@ interface ItemProps {
 
 /** One round button with Discord's pill on the left: short on hover, tall when selected. */
 function RailItem({ label, selected, onClick, alert, note, children }: ItemProps) {
+  const id = useId();
+  const description = [note, alert].filter(Boolean).join("; ");
   return (
     <Tooltip title={[label, note && `(${note})`].filter(Boolean).join(" ") + (alert ? `: ${alert}` : "")} placement="right">
+      {/* A finger has no hover: the icon rounds off while it is pressed instead, and a tap leaves nothing behind. */}
       <Box sx={{ position: "relative", width: RAIL_WIDTH, display: "flex", justifyContent: "center", my: 0.5,
-        "&:hover .pill": { height: selected ? 40 : 20 }, "&:hover .icon": { borderRadius: "16px" } }}>
+        "@media (hover: hover)": { "&:hover .pill": { height: selected ? 40 : 20 }, "&:hover .icon": { borderRadius: "16px" } },
+        "&:active .icon": { borderRadius: "16px" } }}>
         <Box className="pill" sx={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", width: 4,
           height: selected ? 40 : 0, borderRadius: "0 4px 4px 0", bgcolor: "text.primary",
           transition: "height 120ms ease" }} />
+        {/* Screen readers hear the problems after the name; the tooltip only shows them to a mouse. */}
+        {description && <Box component="span" id={id} sx={visuallyHidden}>{description}</Box>}
         <ButtonBase aria-label={label} aria-current={selected ? "page" : undefined} onClick={onClick}
-          sx={{ borderRadius: "50%" }}>
+          aria-describedby={description ? id : undefined} sx={{ borderRadius: "50%" }}>
           <Badge color="error" variant="dot" invisible={!alert} overlap="circular"
             sx={{ "& .MuiBadge-dot": { width: 12, height: 12, borderRadius: "50%", border: 3, borderColor: "surface.rail" } }}
             anchorOrigin={{ vertical: "bottom", horizontal: "right" }}>

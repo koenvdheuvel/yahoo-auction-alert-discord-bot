@@ -3,13 +3,14 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelList } from "../../api/types";
 import type { Place } from "../../lib/hooks";
 import { CHANNELS, alertSummary } from "../../test/fixtures";
 import { theme } from "../../theme";
 import { ChannelSidebar } from "./ChannelSidebar";
+import { setPhone } from "../../test/screen";
 
 const PLACE: Place = { guildId: "11", channelId: null, alertId: null, me: false, view: "status", tab: "listings",
   channelTab: "searches" };
@@ -27,6 +28,8 @@ function show(props: Partial<ComponentProps<typeof ChannelSidebar>> = {}) {
   );
   return { onNavigate };
 }
+
+afterEach(() => vi.unstubAllGlobals());
 
 const rowNames = (container: HTMLElement) =>
   within(container).getAllByRole("button").map((button) => button.textContent?.replace(/\d+$/, "").trim());
@@ -69,5 +72,16 @@ describe("ChannelSidebar", () => {
     show({ channels: { data: fallback, isPending: false, isError: false, isSuccess: true } as UseQueryResult<ChannelList> });
     expect(screen.getByText("Discord did not answer, so channels are shown by ID.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /…201unknown/ })).toBeInTheDocument();
+  });
+
+  it("writes out on touch screens what a mouse sees on hover", () => {
+    setPhone();
+    show();
+    expect(screen.getByRole("button", { name: /^quiet/ })).toHaveTextContent("quietThe bot needs Add Reactions here.");
+  });
+
+  it("marks home's one page as open, also before the address names it", () => {
+    show({ home: { label: "Home", notifications: true } });
+    expect(screen.getByRole("button", { name: "Your notifications" })).toHaveAttribute("aria-current", "page");
   });
 });

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CHANNELS, alertSummary } from "../../test/fixtures";
 import { theme } from "../../theme";
+import { setPhone } from "../../test/screen";
 import { AddSearchDialog, SEARCH_QUERY_MAX_LENGTH } from "./AddSearchDialog";
 
 function show(channelId: string | null = "201") {
@@ -51,5 +52,16 @@ describe("AddSearchDialog", () => {
       .toEqual({ channel_id: "201", search_query: "vinyl" });
     await user.click(screen.getByRole("button", { name: "Add search" }));
     await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ id: "9" })));
+  });
+
+  it("uses the phone's own picker on a phone, with categories as groups", () => {
+    setPhone();
+    show();
+    const picker = screen.getByRole("combobox", { name: /Channel/ });
+    expect(picker.tagName).toBe("SELECT");
+    expect([...picker.querySelectorAll("optgroup")].map((group) => group.label)).toEqual(["Posters", "Archive"]);
+    expect([...picker.querySelectorAll("option")].map((option) => option.textContent))
+      .toEqual(["# welcome", "# posters-yahoo", "↳ sold-out", "# old-posters"]);
+    expect(picker).toHaveValue("201");
   });
 });

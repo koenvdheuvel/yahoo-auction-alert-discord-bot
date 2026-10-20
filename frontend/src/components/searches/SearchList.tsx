@@ -1,4 +1,6 @@
 import DeleteOutlined from "@mui/icons-material/DeleteOutlined";
+import SearchOutlined from "@mui/icons-material/SearchOutlined";
+import Tag from "@mui/icons-material/Tag";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
@@ -9,12 +11,16 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { useState } from "react";
 
 import type { AlertSummary } from "../../api/types";
 import { visuallyHidden } from "../../lib/a11y";
 import { channelLabel } from "../../lib/channels";
-import { formatCount, formatDateTime, formatRelative } from "../../lib/format";
+import { formatCount, formatDateTime, formatRelative, plural } from "../../lib/format";
+import { useCompact } from "../../lib/responsive";
 import { figures } from "../../theme";
+import { ActionSheet, type SheetAction } from "../common/Sheet";
+import { SearchCard, SearchCards } from "./SearchCard";
 
 interface Props {
   alerts: AlertSummary[];
@@ -32,6 +38,69 @@ const WIDE = { display: { xs: "none", md: "table-cell" } } as const;
 
 /** Searches as /alerts and /allalerts list them, with their counts and a way to unregister. */
 export function SearchList({ alerts, canChange, showChannel = false, onOpen, onOpenChannel, onUnregister }: Props) {
+  const compact = useCompact();
+  // The search stays while the sheet slides away, so its title does not go blank.
+  const [menu, setMenu] = useState<{ alert: AlertSummary; open: boolean } | null>(null);
+
+  if (compact) {
+    const picked = menu?.alert;
+    const actions: SheetAction[] = picked ? [
+      { label: "Open the search", icon: <SearchOutlined />, onSelect: () => onOpen(picked) },
+      ...(onOpenChannel ? [{ label: `Open ${channelLabel(picked.channel_id, picked.channel_name)}`, icon: <Tag />,
+        onSelect: () => onOpenChannel(picked.channel_id) }] : []),
+      ...(onUnregister ? [{ label: "Unregister", icon: <DeleteOutlined />, onSelect: () => onUnregister(picked),
+        disabled: !canChange(picked) }] : []),
+    ] : [];
+    return (
+      <>
+        <SearchCards label="Searches">
+          {alerts.map((alert) => {
+            const changeable = canChange(alert);
+            return (
+              <SearchCard key={alert.id} name={alert.search_query} onOpen={() => onOpen(alert)}
+                onMenu={() => setMenu({ alert, open: true })}
+                end={onUnregister && changeable && (
+                  <IconButton aria-label={`Unregister ${alert.search_query}`} onClick={() => onUnregister(alert)}>
+                    <DeleteOutlined />
+                  </IconButton>
+                )}>
+                <Typography variant="body2" color="textSecondary" sx={{ ...figures, mt: 0.25 }}>
+                  {showChannel && `${channelLabel(alert.channel_id, alert.channel_name)} · `}
+                  {plural(alert.listing_count, "listing")}
+                  {alert.review_count > 0 && (
+                    <> · <Box component="span" sx={{ color: "warning.main" }}>{formatCount(alert.review_count)} need review</Box></>
+                  )}
+                </Typography>
+                <Typography variant="caption" component="p" color="textSecondary">
+                  {alert.last_seen_at ? `Last seen ${formatRelative(alert.last_seen_at)}` : "Not seen yet"}
+                  {` · ${alert.active_version_id ? "Published rules" : "Discord filters only"}`}
+                </Typography>
+                {onUnregister && !changeable && (
+                  <Typography variant="caption" component="p" color="textSecondary" sx={{ mt: 0.5 }}>
+                    You need Manage Channels in its channel to unregister it.
+                  </Typography>
+                )}
+              </SearchCard>
+            );
+          })}
+        </SearchCards>
+        <ActionSheet open={menu?.open ?? false} onClose={() => setMenu((current) => current && { ...current, open: false })}
+          title={picked?.search_query ?? ""} actions={actions}>
+          {picked && (
+            <Typography variant="body2" color="textSecondary" sx={figures}>
+              {channelLabel(picked.channel_id, picked.channel_name)} · {plural(picked.listing_count, "listing")}
+            </Typography>
+          )}
+          {picked && onUnregister && !canChange(picked) && (
+            <Typography variant="caption" component="p" color="textSecondary" sx={{ mt: 0.5 }}>
+              You need Manage Channels in its channel to unregister it.
+            </Typography>
+          )}
+        </ActionSheet>
+      </>
+    );
+  }
+
   return (
     <Box sx={{ overflowX: "auto" }}>
       <Table size="small" aria-label="Searches">
