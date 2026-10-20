@@ -93,7 +93,7 @@
     {
       "type": "stat",
       "title": "Scrape",
-      "description": "Prometheus can reach /metrics.",
+      "description": "Shows 1 when Prometheus can reach the bot's metrics page and 0 when it cannot. Normal is 1. A 0 means the bot is down, restarting, or not reachable from Prometheus, so check that the bot process is running first.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -170,7 +170,7 @@
     {
       "type": "stat",
       "title": "Ready",
-      "description": "/health/ready: gateway, workers, stats and polling fresh.",
+      "description": "Shows 1 when the bot is ready and 0 when it is not. Ready means it is connected to Discord, its database answers, all background workers run and a check round finished recently (HEALTH_MAX_POLL_AGE). Normal is 1. A 0 for more than a few minutes means searches may not be checked or posted; the other Health panels show which part is stuck.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -247,7 +247,7 @@
     {
       "type": "stat",
       "title": "Discord",
-      "description": "Gateway shards connected.",
+      "description": "Shows 1 when the bot is connected to Discord and 0 when it is not. Normal is 1, with short drops during reconnects. If it stays at 0, the bot cannot post alerts or answer commands; check the bot token and Discord's status.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -324,7 +324,7 @@
     {
       "type": "stat",
       "title": "Alerts",
-      "description": "Configured searches.",
+      "description": "The number of searches (alerts) currently set up across all servers the bot is in. It changes only when someone adds or removes a search. A sudden drop to 0 is unexpected and worth checking.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -383,7 +383,7 @@
     {
       "type": "stat",
       "title": "Since last poll",
-      "description": "Last completed cycle, including partial failures.",
+      "description": "Time since the bot last finished a round of checking every search, even if some checks failed. A new round starts CHECK_INTERVAL (30 minutes by default) after the previous one ends, so a value below that interval plus the time a round takes is normal. A much larger value means polling has stalled; look at the bot's logs.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -450,7 +450,7 @@
     {
       "type": "stat",
       "title": "Since clean poll",
-      "description": "Last cycle with zero failed checks.",
+      "description": "Time since the last round in which every check succeeded. Normal is about one round, 30 minutes by default. If this grows while 'Since last poll' stays small, rounds finish but some checks keep failing; see the checks and requests graphs below.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -517,7 +517,7 @@
     {
       "type": "stat",
       "title": "Outbox pending",
-      "description": "Discord deliveries waiting.",
+      "description": "The number of posts and DMs waiting to be sent to Discord; post removals are not counted. Normal is 0 or a small number that drops again soon. A number that keeps growing means Discord is slow or refusing messages; see the delivery graphs below.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -584,7 +584,7 @@
     {
       "type": "stat",
       "title": "Outbox failed",
-      "description": "Terminal delivery failures; inspect with manage.py outbox-list.",
+      "description": "The number of posts and DMs the bot gave up on, after DELIVERY_MAX_ATTEMPTS tries (8 by default) or a permanent error such as a deleted channel or a missing permission. Normal is 0. Anything above 0 needs the operator: manage.py outbox-list shows them and outbox-retry sends one again.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -651,7 +651,7 @@
     {
       "type": "stat",
       "title": "Uptime",
-      "description": "",
+      "description": "How long the bot has been running since its last start. A low number means it restarted recently. Many small values over time point to crashes or repeated deployments.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -710,7 +710,7 @@
     {
       "type": "stat",
       "title": "Workers alive",
-      "description": "",
+      "description": "Shows 1 for each background worker that is running (poller, delivery, event loop, database stats) and 0 for one that has stopped. Normal is 1 for all of them. A 0 means that part of the bot has stopped working; check the logs and restart the bot.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -787,7 +787,7 @@
     {
       "type": "stat",
       "title": "Legacy filters disabled",
-      "description": "Migrated filters without a known matcher; recreate them with the filter commands.",
+      "description": "The number of older filters that were carried over from an earlier version but could not be matched to a filter type, so they are switched off. Normal is 0. If it is above 0, the affected filters do nothing until someone recreates them with the filter commands.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -867,7 +867,7 @@
     {
       "type": "timeseries",
       "title": "Checks by source and outcome (per cycle window)",
-      "description": "",
+      "description": "How many checks finished in each time slot, split by marketplace and outcome (success, error, timeout, cancelled). One check is one search on one marketplace. Mostly success is normal. Many errors or timeouts for one marketplace mean it is failing or slow; see the request graphs below.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -925,7 +925,7 @@
     {
       "type": "timeseries",
       "title": "Since last successful check, per source",
-      "description": "A source only counts as successful when all its checks in a cycle succeed.",
+      "description": "Time since each marketplace last had a fully successful round. A marketplace only counts when it had at least one check in the round and every check succeeded. Normal is about one round, 30 minutes by default. A value that keeps growing for one marketplace means its searches keep failing.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -983,7 +983,7 @@
     {
       "type": "timeseries",
       "title": "Poll cycle duration",
-      "description": "",
+      "description": "How long a full round over every search and marketplace takes, over the past hour. p50 is the median: half of the rounds were faster. p95: 95% of the rounds were faster. A round starts CHECK_INTERVAL (30 minutes by default) after the previous one ends, so long rounds mean new listings are found later.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1050,7 +1050,7 @@
     {
       "type": "timeseries",
       "title": "Check duration p95 by source",
-      "description": "",
+      "description": "How long one check (one search on one marketplace) takes, per marketplace, over the past hour. 95% of the checks were faster than this value. A rise for one marketplace usually means it is slow or throttling the bot. Close to CHECK_TIMEOUT (10 minutes by default) means checks start timing out.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1125,14 +1125,14 @@
         "type": "prometheus",
         "uid": "${prometheus}"
       },
-      "description": "Per-alert check counts joined to the search query via auction_bot_alert_info.",
+      "description": "For each search, marketplace and outcome, how many checks ran in the selected time range. Mostly success is normal. Rows with errors or timeouts show which searches have trouble; the request graphs show why.",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${prometheus}"
           },
-          "expr": "(sum by (instance, search_query, source, outcome) (increase(auction_bot_alert_checks_total{job=\"auction-bot\", instance=~\"$instance\"}[$__range]) * on (job, instance, alert_id) group_left(search_query) auction_bot_alert_info{job=\"auction-bot\", instance=~\"$instance\"})) > 0",
+          "expr": "(sum by (instance, alert_id, search_query, source, outcome) (increase(auction_bot_alert_checks_total{job=\"auction-bot\", instance=~\"$instance\"}[$__range]) * on (job, instance, alert_id) group_left(search_query) auction_bot_alert_info{job=\"auction-bot\", instance=~\"$instance\"})) > 0",
           "legendFormat": "",
           "refId": "A",
           "instant": true,
@@ -1148,6 +1148,7 @@
               "Time": true
             },
             "renameByName": {
+              "alert_id": "Alert",
               "search_query": "Search",
               "source": "Source",
               "outcome": "Outcome",
@@ -1218,7 +1219,7 @@
     {
       "type": "timeseries",
       "title": "Check duration p95 per search",
-      "description": "",
+      "description": "How long checks of each search take, over the past hour. 95% of the checks for that search were faster than this value. Searches that stand out are slow on the marketplace, for example because they match many listings. Values near CHECK_TIMEOUT (10 minutes by default) risk timing out.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1276,7 +1277,7 @@
     {
       "type": "timeseries",
       "title": "Listings processed by source and outcome",
-      "description": "Ingestion decisions: observed, filtered, review, blacklisted, invalid, filter_timeout.",
+      "description": "What the bot decided for each listing it saw, per time slot, split by marketplace and outcome. New and changed listings can lead to a Discord post. The others were unchanged, muted, filtered out by the search's rules, held for review, hidden in that channel (blacklisted), invalid, or their rules timed out. Many unexpected filtered or invalid listings point to a rule or search that needs a look.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1347,7 +1348,7 @@
     {
       "type": "timeseries",
       "title": "Requests by source and outcome",
-      "description": "Attempts including retries.",
+      "description": "Requests to each marketplace per second, split by outcome. Every try counts, so a retried request shows up more than once, and one check makes one or more requests. Mostly success is normal. Many http_error, network_error or invalid_response outcomes mean the marketplace is blocking or failing.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1405,7 +1406,7 @@
     {
       "type": "timeseries",
       "title": "Request latency p95",
-      "description": "",
+      "description": "How long one request to a marketplace takes, over the past hour, per marketplace and operation. 95% of the requests were faster than this value. A rise means that marketplace is slow, which also slows down the checks.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1476,7 +1477,7 @@
     {
       "type": "timeseries",
       "title": "Delivery attempts by kind and outcome",
-      "description": "",
+      "description": "How many attempts to send a message to Discord were made in each time slot, split by kind (channel, dm, delete) and outcome. Sent is normal. Retry means the attempt failed briefly and will be tried again. Failed means the bot gave up; many of them point to missing permissions or a deleted channel.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1534,7 +1535,7 @@
     {
       "type": "timeseries",
       "title": "Outbox",
-      "description": "",
+      "description": "The number of posts and DMs waiting to be sent to Discord, and the number the bot gave up on, over time; post removals are not counted. Pending normally stays near 0 and drops again after a burst of new listings. Failed should stay at 0. A pending line that keeps rising means delivery cannot keep up.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1602,7 +1603,7 @@
     {
       "type": "timeseries",
       "title": "Oldest pending delivery / delivery p95",
-      "description": "",
+      "description": "Two things: how long the oldest waiting Discord message has been waiting, and how long sending a message takes per kind over the past hour (95% of the attempts were faster than this value). Normal is a few seconds. A large age means messages are stuck.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1682,7 +1683,7 @@
     {
       "type": "timeseries",
       "title": "Event loop lag p95",
-      "description": "",
+      "description": "How late the bot's main loop runs its tasks, in seconds, with 95% of the delays smaller than this value. Normal is a few milliseconds. Values near a second or more mean the bot is overloaded and may react slowly to Discord and marketplaces.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1740,7 +1741,7 @@
     {
       "type": "timeseries",
       "title": "SQLite operation p95 (incl. queue wait)",
-      "description": "",
+      "description": "How long database operations take, including the time spent waiting in line, per operation, over the past hour. 95% of the operations were faster than this value. Normal is milliseconds. Values of seconds point to a slow disk or a busy bot.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1798,7 +1799,7 @@
     {
       "type": "timeseries",
       "title": "Errors",
-      "description": "",
+      "description": "How many internal errors happened in each time slot: failed database operations, failed slash commands (denied or error) and failed reaction handlers. Normal is nothing. Any bars are worth a look in the warnings log below.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1874,7 +1875,7 @@
     {
       "type": "timeseries",
       "title": "Process memory / CPU",
-      "description": "",
+      "description": "The bot's memory use (RSS, in bytes) and processor use (in CPU cores, so 1 is one full core). Both are normally steady. Memory that climbs without stopping points to a leak. CPU that stays near 1 means the bot is busy all the time.",
       "datasource": {
         "type": "prometheus",
         "uid": "${prometheus}"
@@ -1971,6 +1972,7 @@
     {
       "type": "logs",
       "title": "Warnings and errors",
+      "description": "Log lines of level warning, error or critical from the bot. Normal is few or none. Read these when a graph above looks wrong; they usually name the search, marketplace or Discord channel involved.",
       "datasource": {
         "type": "loki",
         "uid": "${loki}"
@@ -2003,6 +2005,7 @@
     {
       "type": "logs",
       "title": "Poll cycles and failed checks",
+      "description": "One line each time a round finishes and each time a single check fails, with the marketplace, search number, outcome, number of checks, number of failed checks and duration. Use it to find which search or marketplace caused failed checks.",
       "datasource": {
         "type": "loki",
         "uid": "${loki}"

@@ -10,7 +10,7 @@ import {
 import { claimDrafts } from "../lib/drafts";
 import { canonical } from "../lib/ruleset";
 import { ApiError, api, type CandidateQuery } from "./client";
-import type { RemovalDays, Ruleset, Session } from "./types";
+import type { GraphRange, RemovalDays, Ruleset, Session } from "./types";
 
 export const PAGE_SIZE = 48;
 
@@ -20,6 +20,7 @@ export const keys = {
   channels: (guildId: string) => ["channels", guildId] as const,
   allChannels: ["channels"] as const,
   status: (guildId: string) => ["status", guildId] as const,
+  graphs: (guildId: string, range: GraphRange) => ["graphs", guildId, range] as const,
   alert: (alertId: string) => ["alert", alertId] as const,
   posts: (channelId: string, alertId: string | null) => ["posts", channelId, alertId] as const,
   allPosts: ["posts"] as const,
@@ -65,6 +66,15 @@ export function useGuildStatus(guildId: string | null) {
     queryFn: ({ signal }) => api.status(guildId!, signal),
     enabled: guildId !== null,
     refetchInterval: 30_000,
+  });
+}
+
+export function useGuildGraphs(guildId: string, range: GraphRange) {
+  return useQuery({
+    queryKey: keys.graphs(guildId, range),
+    queryFn: ({ signal }) => api.graphs(guildId, range, signal),
+    refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 

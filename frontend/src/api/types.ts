@@ -527,3 +527,67 @@ export interface RemovalStatus {
   run: RemovalRun | null;
   bot_running: boolean;
 }
+
+export type GraphRange = "1h" | "6h" | "24h" | "7d";
+
+export interface GraphSeries {
+  /** Grafana's legend format with `{{instance}}` removed. May be empty. */
+  legend: string;
+  labels: Record<string, string>;
+  /** One value per entry of `GuildGraphs.times`; null is a gap. */
+  values: (number | null)[];
+}
+
+export interface GraphColumn {
+  key: string;
+  title: string;
+}
+
+export interface GraphRow {
+  labels: Record<string, string>;
+  /** null when Prometheus has no number for it. */
+  value: number | null;
+}
+
+interface GraphPanelBase {
+  id: number;
+  title: string;
+  description: string;
+  unit: string;
+  decimals: number | null;
+  /** "server": only this server's searches. "bot": the whole bot. */
+  scope: "server" | "bot";
+  error: string | null;
+}
+
+export interface TimeseriesPanel extends GraphPanelBase {
+  kind: "timeseries";
+  style: "bars" | "line";
+  stacked: boolean;
+  series: GraphSeries[];
+}
+
+export interface TablePanel extends GraphPanelBase {
+  kind: "table";
+  columns: GraphColumn[];
+  rows: GraphRow[];
+}
+
+export type GraphPanel = TimeseriesPanel | TablePanel;
+
+export interface GraphSection {
+  title: string;
+  panels: GraphPanel[];
+}
+
+export interface GuildGraphs {
+  enabled: boolean;
+  range: GraphRange;
+  ranges: GraphRange[];
+  start: number | null;
+  end: number | null;
+  step: number | null;
+  times: number[];
+  warning: string | null;
+  sections: GraphSection[];
+}
