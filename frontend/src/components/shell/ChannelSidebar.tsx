@@ -9,6 +9,7 @@ import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Skeleton from "@mui/material/Skeleton";
+import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -137,10 +138,21 @@ interface Props {
 /** The channel list of the picked server, as Discord shows it, with each channel's searches under it. */
 export function ChannelSidebar({ guildName, channels, alerts, guildId, place, onNavigate, home, member = false, footer }: Props) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [finder, setFinder] = useState({ guildId, text: "" });
+  const find = finder.guildId === guildId ? finder.text : "";
+  const needle = find.trim().toLocaleLowerCase();
   const touch = useTouch();
   const byChannel = searchesByChannel(alerts, guildId);
   const searchCount = [...byChannel.values()].reduce((total, list) => total + list.length, 0);
   const atServer = !place.me && !place.alertId && !place.channelId;
+  const selectedChannel = place.channelId ?? alerts?.find((alert) => alert.id === place.alertId)?.channel_id;
+  const matches = (text: string) => text.toLocaleLowerCase().includes(needle);
+  const matchesChannel = (channel: ChannelRow): boolean => !needle || matches(channel.name)
+    || (byChannel.get(channel.id) ?? []).some((alert) => matches(alert.search_query)) || (channel.threads ?? []).some(matchesChannel);
+  const sections = channels?.data?.sections.map((section) => ({ ...section, channels: section.channels.filter(matchesChannel) }))
+    .filter((section) => section.channels.length > 0);
+  const unknown = channels?.data?.unknown.filter((channel) => !needle || matches(channel.id)
+    || (byChannel.get(channel.id) ?? []).some((alert) => matches(alert.search_query))) ?? [];
 
   const toggle = (categoryId: string) => {
     const next = new Set(collapsed);
@@ -154,19 +166,22 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
     }
   };
 
-  const searchRows = (channelId: string, depth: number) => (byChannel.get(channelId) ?? []).map((alert) => (
-    <Row key={alert.id} depth={depth} icon={<SearchOutlined sx={{ fontSize: 16 }} />} label={alert.search_query}
-      selected={place.alertId === alert.id} bright onClick={() => onNavigate({ alertId: alert.id, channelId: null, me: false })}
-      end={<>
-        <SearchUnread alertId={alert.id} />
-        {alert.review_count ? <CountBadge value={alert.review_count} label={`${formatCount(alert.review_count)} need review`} /> : null}
-      </>} />
-  ));
+  const searchRows = (channelId: string, depth: number, showAll = false) => (byChannel.get(channelId) ?? [])
+    .filter((alert) => !needle || showAll || matches(alert.search_query))
+    .map((alert) => (
+      <Row key={alert.id} depth={depth} icon={<SearchOutlined sx={{ fontSize: 16 }} />} label={alert.search_query}
+        title={alert.search_query} selected={place.alertId === alert.id} bright
+        onClick={() => onNavigate({ alertId: alert.id, channelId: null, me: false })}
+        end={<>
+          <SearchUnread alertId={alert.id} />
+          {alert.review_count ? <CountBadge value={alert.review_count} label={`${formatCount(alert.review_count)} need review`} /> : null}
+        </>} />
+    ));
 
-  const channelRow = (channel: ChannelRow, depth = 0) => (
+  const channelRow = (channel: ChannelRow, depth = 0): ReactNode => matchesChannel(channel) && (
     <Box key={channel.id}>
       <Row depth={depth} icon={<ChannelIcon kind={channel.kind} />} label={channel.name}
-        title={channel.archived ? `${channel.name} (archived)` : undefined} detail={touch ? channelDetail(channel) : null}
+        title={channel.archived ? `${channel.name} (archived)` : channel.name} detail={touch ? channelDetail(channel) : null}
         selected={place.channelId === channel.id && !place.alertId} bright={channel.searches > 0 || channel.hidden > 0}
         onClick={() => onNavigate({ channelId: channel.id, alertId: null, me: false })}
         end={<>
@@ -174,9 +189,9 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
           {channel.searches > 0 && <CountBadge value={channel.searches}
             label={`${formatCount(channel.searches)} ${channel.searches === 1 ? "search" : "searches"}`} />}
         </>} />
-      {searchRows(channel.id, depth + 1)}
+      {searchRows(channel.id, depth + 1, matches(channel.name))}
       {/* Threads without searches or hidden listings stay out of the way, unless one is open. */}
-      {channel.threads?.filter((thread) => thread.searches || thread.hidden || thread.id === place.channelId)
+      {channel.threads?.filter((thread) => thread.searches || thread.hidden || thread.id === selectedChannel || Boolean(needle))
         .map((thread) => channelRow(thread, depth + 1))}
     </Box>
   );
@@ -202,6 +217,12 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
         boxShadow: "0 1px 0 rgba(0,0,0,0.2)", zIndex: 1 }}>
         <Typography variant="h2" component="h2" noWrap>{home ? home.label : guildName ?? "Server"}</Typography>
       </Box>
+      {!member && !home && (
+        <Box sx={{ px: 1.5, pt: 1.5 }}>
+          <TextField size="small" type="search" label="Find channel or search" value={find} fullWidth
+            onChange={(event) => setFinder({ guildId, text: event.target.value })} />
+        </Box>
+      )}
       <Box component="nav" aria-label={home ? home.label : "Channels"} sx={{ flex: 1, overflowY: "auto", py: 1.5,
         scrollbarWidth: "thin" }}>
         {member ? (
@@ -242,9 +263,9 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
             {channels?.data?.discord_unavailable && (
               <Alert severity="warning" sx={{ m: 1.5 }}>Discord did not answer, so channels are shown by ID.</Alert>
             )}
-            {channels?.data?.sections.map((section) => {
+            {sections?.map((section) => {
               const key = section.category?.id ?? "none";
-              const closed = section.category !== null && collapsed.has(key);
+              const closed = !needle && section.category !== null && collapsed.has(key);
               return (
                 <Box key={key} component="section" aria-label={section.category?.name ?? "Channels without a category"}
                   sx={{ mt: section.category ? 2 : 1, [TOUCH]: { mt: section.category ? 0.5 : 1 } }}>
@@ -262,19 +283,22 @@ export function ChannelSidebar({ guildName, channels, alerts, guildId, place, on
                   )}
                   {closed
                     // A closed category still shows the selected channel, as Discord does.
-                    ? section.channels.filter((channel) => place.channelId === channel.id ||
-                      (channel.threads ?? []).some((thread) => thread.id === place.channelId)).map((channel) => channelRow(channel))
+                    ? section.channels.filter((channel) => selectedChannel === channel.id ||
+                      (channel.threads ?? []).some((thread) => thread.id === selectedChannel)).map((channel) => channelRow(channel))
                     : section.channels.map((channel) => channelRow(channel))}
                 </Box>
               );
             })}
-            {channels?.data && channels.data.unknown.length > 0 && (
+            {unknown.length > 0 && (
               <Box component="section" aria-label="Unknown channels" sx={{ mt: 2 }}>
                 <Typography variant="overline" component="p" sx={{ px: 2, color: "surface.muted", textTransform: "uppercase" }}>
-                  {channels.data.source === "none" ? "Channels" : "Unknown channels"}
+                  {channels?.data?.source === "none" ? "Channels" : "Unknown channels"}
                 </Typography>
-                {channels.data.unknown.map(unknownRow)}
+                {unknown.map(unknownRow)}
               </Box>
+            )}
+            {needle && channels?.isSuccess && !sections?.length && !unknown.length && (
+              <Typography variant="body2" color="textSecondary" sx={{ px: 2, py: 2 }}>No channels or searches match.</Typography>
             )}
           </>
         )}

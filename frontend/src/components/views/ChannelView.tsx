@@ -18,6 +18,7 @@ import { EmptyState } from "../common/Feedback";
 import { CleanupPanel } from "../channel/CleanupPanel";
 import { HiddenPanel } from "../channel/HiddenPanel";
 import { PostsPanel } from "../channel/PostsPanel";
+import { useLiveStatus } from "../searches/liveStatus";
 import { SearchList } from "../searches/SearchList";
 
 interface Props {
@@ -29,6 +30,22 @@ interface Props {
   navigate: (next: Partial<Place>) => void;
   onAddSearch: () => void;
   onUnregister: (alert: AlertSummary) => void;
+}
+
+interface ChannelSearchesProps {
+  channelId: string;
+  guildId: string | null;
+  searches: AlertSummary[];
+  canChange: boolean;
+  onOpen: (alert: AlertSummary) => void;
+  onUnregister: (alert: AlertSummary) => void;
+}
+
+/** The channel's searches in the table the server's Searches page uses, with the bot's live checks and queues. */
+function ChannelSearches({ channelId, guildId, searches, canChange, onOpen, onUnregister }: ChannelSearchesProps) {
+  const live = useLiveStatus(guildId);
+  // Another channel starts with its own filters and first page.
+  return <SearchList key={channelId} alerts={searches} live={live} canChange={() => canChange} onOpen={onOpen} onUnregister={onUnregister} />;
 }
 
 /** One channel: its searches, the bot's posts, hidden listings and cleanup. */
@@ -105,7 +122,7 @@ export function ChannelView({ channelId, guildId, channels, searches, place, nav
               )}
             </Box>
             {searches.length ? (
-              <SearchList alerts={searches} canChange={() => canManage || Boolean(unknown?.deleted)}
+              <ChannelSearches channelId={channelId} guildId={guildId} searches={searches} canChange={canManage || Boolean(unknown?.deleted)}
                 onOpen={(alert) => navigate({ alertId: alert.id })} onUnregister={onUnregister} />
             ) : (
               <EmptyState title="No searches here">Add one, or run /register in this channel.</EmptyState>
@@ -115,7 +132,7 @@ export function ChannelView({ channelId, guildId, channels, searches, place, nav
         {tab === "posts" && channel && <PostsPanel channelId={channelId} guildId={guildId} channelName={name} canManage={canManage} />}
         {tab === "hidden" && <HiddenPanel channelId={channelId} canChange={canManage || Boolean(unknown?.deleted)} />}
         {tab === "cleanup" && channel && (
-          <CleanupPanel channelId={channelId} channelName={name} searches={searches} canManage={canManage} posting={channel.posting} />
+          <CleanupPanel key={channelId} channelId={channelId} channelName={name} searches={searches} canManage={canManage} posting={channel.posting} />
         )}
       </Box>
     </>

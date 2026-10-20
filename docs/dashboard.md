@@ -228,8 +228,9 @@ every server's searches with the access key. Settings, under your name at the
 bottom, has the appearance: light, dark or the same as the system, in Discord's
 own colours.
 
-The channel list starts with three pages of the whole server: **Status**,
-**Searches** (every search, as `/allalerts` lists them) and **All listings**.
+The channel list starts with three pages of the whole server: **Status** for
+health and problems, **Searches** for the complete search inventory, and
+**All listings** for the saved archive.
 Below them are the server's channels in Discord's order: channels without a
 category first, then each category by its position, and inside each one the
 text and announcement channels before the voice channels. A channel's searches
@@ -240,6 +241,10 @@ channel has searches that cannot post. **Unknown channels** at the bottom are
 channels with searches or hidden listings that are not in the server's list:
 *deleted* when Discord says the channel no longer exists, *unknown* when the
 bot may not see it or Discord did not answer.
+
+**Find channel or search** narrows this sidebar by channel name or search query,
+keeping matching searches under their channels and categories. Matching collapsed
+categories expand temporarily; clearing the finder restores the full list.
 
 In a server where you are only a member, the channel list has just your
 notifications there.
@@ -252,6 +257,10 @@ channel lists. A search's tabs and a channel's tabs sit in a bar at the bottom
 of the screen, and tapping a search's name at the top shows its counts and
 **Unregister**. Dialogs open as sheets from the bottom of the screen; drag a
 sheet down to close it.
+
+The top bar keeps the current server visible, and a search also names its channel.
+The Searches inventory uses cards on narrow screens, with the same filters,
+numeric counts, sorting and pagination as the desktop table.
 
 Press and hold a listing for what you can do with it: its details, the
 marketplace page, testing its title, 🔔 and copying its link. A tap opens the
@@ -289,11 +298,32 @@ channel, and whether you can view a channel for your notifications.
 
 ### Searches
 
+**Searches** is the complete inventory for the selected server, as `/allalerts`
+lists it. Filter by search or channel name, choose a channel, or use **Unread**,
+**Needs review**, **Check errors**, **Pending deliveries** and **Failed deliveries**.
+These filter counts are numbers of searches, not listings or messages. Quick
+filters stay in the URL, so links from Status and browser Back preserve them.
+
+Click a column heading to sort the entire filtered inventory before pagination.
+Columns cover search, channel, listings, unread listings, review decisions,
+last listing seen, published rules, last checks, pending deliveries and failures.
+Click again to reverse the order. Unknown check times stay last. Pages contain
+25 searches by default, with choices of 10, 25, 50 or 100. Narrow screens have
+**Sort by** and an adjacent direction button instead of column headings.
+
+**Last listing seen** is an archive timestamp, not the last time the bot checked.
+**Last checks** reports actual marketplace checks. Hover or keyboard-focus its
+desktop summary for each marketplace's outcome, duration, finish time and error;
+cards show failures directly. Checks are in memory, so after a restart they are
+unknown until the next check. The standalone dashboard does not run checks.
+
 Numeric badges show each search's **unread listing count** in the channel list,
-Searches and Status. A listing counts once, using its latest saved decision;
-older decisions for the same listing do not inflate the count. A never-read
-search starts with all its current listings unread. Zero counts are hidden,
-and larger counts show the exact number rather than a cap such as `99+`.
+Searches and channel inventories. A listing counts once, using its latest saved
+decision; older decisions for the same listing do not inflate the count. A
+never-read search starts with all its current listings unread. Zero badges are
+hidden, while the table shows `0`; larger counts remain exact rather than `99+`.
+**Needs review** is a rule decision, not a read state: reading a listing does not
+clear its review decision.
 
 Opening a search's unfiltered **Listings** tab, with **Earlier decisions** off,
 marks history through the newest loaded decision as read. Rules, Replay,
@@ -303,6 +333,7 @@ listing on another check does not. Search summaries refresh every 30 seconds
 while the dashboard is visible. Counts also refresh every minute to account for
 history retention. A badge shows `…` while counting, or `?` if counting fails;
 neither means zero unread listings.
+**All listings**, even when filtered to one search, never advances read positions.
 
 Read positions live only in this browser's `localStorage`, separately for each
 Discord user and search (`dashboard:read:<user-id>:<search-id>`). They survive
@@ -326,20 +357,21 @@ listings are kept without the search, and its Discord filters are deleted.
 Hidden listings and 🔔 follows do not change. A search whose channel Discord
 says is deleted can be unregistered too.
 
-**Marketplaces**, next to Unregister, does what `/marketplaces on` and
+**Marketplaces to check**, next to Unregister, does what `/marketplaces on` and
 `/marketplaces off` do, for all marketplaces at once and with the same Manage
-Channels check. A search's header lists the marketplaces it checks that the bot
-searches, under *searched*. A marketplace turned on starts quietly: its next
-complete check saves the listings there without posting them, and after that
-new listings are posted. Turning one off stops its checks; posts, hidden
-listings and 🔔 follows stay. A marketplace that is off for the whole bot
-(`ENABLE_*=false`) can still be chosen, and the choice applies once the bot
-searches it. The dialog warns when the search would check no marketplace the bot
-searches, because it then posts nothing.
+Channels check. **Save** applies the selection from the next check; it does not
+publish rules. No marketplaces selected pauses the search. A search's header
+lists the enabled marketplaces it checks under *searched*. A marketplace turned
+on starts quietly: its next complete check saves listings without posting them,
+and later new listings are posted. Turning one off preserves posts, hidden
+listings and follows. A marketplace disabled for the whole bot (`ENABLE_*=false`)
+can still be chosen; the choice applies once the bot searches it. The dialog
+warns when none of the chosen marketplaces are enabled for the bot.
 
 ### A channel's pages
 
-- **Searches** lists the channel's searches, as `/alerts` does.
+- **Searches** reuses the sortable, filterable, paginated inventory for this
+  channel, as `/alerts` lists it; it omits the redundant channel column.
 - **Posts** lists the bot's live posts, newest first. **Follow** does what 🔔
   does: you get a DM when the listing changes. The count next to 🔔 says how many
   people follow it; who they are is never shown. **Hide** does what 🗑️ does: the
@@ -347,16 +379,21 @@ searches, because it then posts nothing.
   also when someone follows it. Followers keep getting their DMs.
 - **Hidden** lists the listings hidden in the channel. **Show again** removes the
   hide. The listing is not posted again right away; its next change is.
-- **Cleanup** has two parts. **Remove posts** removes the channel's tracked posts
-  of the last 7, 30 or 90 days, or all of them, for one search or every search,
-  through the same queue as removing the posts that rules filter: newest first,
-  up to 100 per request when they are under 14 days old. Posts that someone
-  follows with 🔔 are kept, and nothing is hidden. **Scan recent messages** does
-  what `/cleanup` and `/reacttocleanup` do with the channel's latest 1,000
-  messages: delete up to 100 of the bot's posts, or add 🗑️ to the tracked ones.
-  It reaches posts the bot does not track, such as posts from before the
-  database was converted. It needs the bot running and connected, and it runs in
-  the background while the page shows how far it got.
+- **Cleanup** separates safe tracked-post removal from direct history deletion.
+  **Remove posts** previews the channel's tracked posts from the last 7, 30 or
+  90 days, or all time, for one search or every search. It removes them through
+  the queue, newest first, up to 100 per request when under 14 days old. Posts
+  with followers are kept, and nothing is hidden.
+  **Scan recent messages** separately offers adding cleanup reactions to tracked
+  posts, as `/reacttocleanup` does.
+  **Advanced: delete recent bot posts** is collapsed by default. It scans the
+  latest 1,000 messages and deletes up to the chosen count (1–100), as `/cleanup`
+  does. This includes untracked posts and posts with followers, ignores the
+  search/date filters above, and keeps command responses. There is no preview,
+  follower protection or undo. A confirmation names the channel and count;
+  cancelling sends no deletion request. Saved listings and subscriptions stay,
+  and later changes can be posted again. History scans need the bot connected
+  and run in the background while the page shows progress.
 
 A channel that Discord says is deleted has only the Searches and Hidden tabs, to
 unregister its searches and clear its hidden listings.
@@ -372,35 +409,26 @@ Discord user, so there are no notifications.
 
 ### Status
 
-The Status page opens on **Overview**. For the selected server it shows
-whether the bot is ready and connected, when the last round of checks ended
-and the next one starts, and the last round without errors for each
-marketplace. For each search it shows the last
-check for each marketplace: whether it worked, timed out or failed and with
-which kind of error, its listings, and its posts and DMs waiting to be sent or
-failed. The checks are kept in memory, so after a restart a search shows "not
-checked since the bot started" until its next check. The standalone
-`dashboard.py` does not run the checks, so it shows only the counts from the
-database. The server list puts a red dot on a server where a search failed its
-last check or a post or DM could not be sent.
+Status opens on **Overview**, not another complete search inventory. **Bot
+health** is shared by every server: Discord/database connectivity, the last
+check round, the next round, and the last successful round per marketplace.
+**This server** shows only the selected server's pending and failed deliveries
+and searches with check errors.
 
-Click a column heading in the Searches table to sort by search, channel,
-latest check, listings, waiting messages or failed messages; click again to
-reverse the order. Searches without a recorded check stay last when sorting
-by last check. The table sorts the whole list before splitting it into pages,
-with 25 searches per page by default and a choice of 10, 25, 50 or 100.
-On phones and tablets, the search cards have **Sort by** and a direction
-button instead of table headings. The selected sort and page are kept while
-switching between Overview and Graphs.
+**Needs attention** gives up to three examples each of failed deliveries, check
+errors and pending deliveries. Open an example's search, or **Show in Searches**
+to inspect the complete inventory with the corresponding filter. The server
+rail marks servers with check or delivery failures. The standalone dashboard
+still shows database counts, but cannot report live checks.
 
-Each card and the Searches table have a **?** that explains them. The separate
-**Graphs** tab shows the main graphs of the bot's Grafana dashboard for the last
+Health and queue cards have **?** help independent of their navigation links.
+The separate **Graphs** tab shows the main graphs of the bot's Grafana dashboard for the last
 hour, 6 hours, 24 hours or 7 days: checks and how long ago each marketplace
 last worked, how long rounds take, each search's checks and check time,
 listings, marketplace requests, and Discord delivery and the outbox. Each
 graph's **?** gives the same explanation Grafana shows. Graphs marked **This
 server** only count this server's searches; **All servers** graphs count the
-whole bot. A search's name in a table opens its page. The graphs come from the
+whole bot. The graphs come from the
 Prometheus that scrapes the bot, so they need `PROMETHEUS_URL`, and
 `PROMETHEUS_INSTANCE` when more than one bot reports to it; see
 [monitoring.md](monitoring.md#the-same-graphs-on-the-dashboards-status-page).
@@ -428,10 +456,11 @@ your history, not rules automatically installed by the app.
 
 Groups support contains, exact and regex terms, any/all matching inside each
 group, and required/excluded/review policies. Exclusions take precedence over
-review matches. Source selections and optional minimum/maximum prices apply
-alongside title rules. Empty source selections allow every marketplace. Source
-selections only filter what a search's checks find; **Marketplaces** decides
-which marketplaces it checks.
+review matches. **Allowed marketplaces** and optional minimum/maximum prices
+filter the listings found by checks. No allowed marketplaces selected means all
+are allowed. **Publish** applies these draft rules to future checks.
+**Marketplaces to check** is separate: it decides what gets checked, and an empty
+selection there pauses the search.
 
 The Rules tab checks the draft with the server as you type. A problem points at
 the group and term at fault, such as "Group 2, Term 3: Invalid regular
@@ -469,10 +498,10 @@ calls for it. Regex execution has per-pattern and total-evaluation deadlines.
 
 ## Browse listings
 
-The side panel lists each search under its Discord channel; **All listings**
-shows every search together. A search has four tabs: Listings, Rules, Replay
-and Versions. The address keeps the search and the tab, so a reload or a shared
-link opens the same place.
+The side panel lists each search under its Discord channel. **All listings**
+browses the selected server's archive across searches; individual searches have
+Listings, Rules, Replay and Versions tabs. The address keeps the search and tab,
+so a reload or shared link opens the same place.
 
 Listings shows each listing's latest decision, as a photo grid or as rows.
 Filter by title or listing ID, marketplace and decision; the filters show how
@@ -481,6 +510,13 @@ that a later check replaced. Selecting a decision shows why the bot decided so.
 Selecting a photo opens the listing's details: original and compared titles,
 price, when it was first and last seen, and a link to the marketplace.
 
+All listings also has **Search** and **Channel** filters, applied by the server
+to the full authorized archive rather than just the loaded page. Switching
+servers does not carry the previous server's scope across. Cards, rows and
+details name the owning search and channel; a listing can have different
+decisions under different searches. Unregistered searches are identified as
+such instead of attributing their listings to a current search.
+
 Keys move through the listings. Press `?` in the UI for this list.
 
 | Keys | Action |
@@ -488,7 +524,7 @@ Keys move through the listings. Press `?` in the UI for this list.
 | `j` / `k`, or the arrow keys | Next or previous listing |
 | Enter | Show details |
 | `o` | Open the listing on its marketplace |
-| `t` | Test the listing's title with the draft |
+| `t` | Test the listing's title with its owning search's draft |
 | `/` | Search |
 
 ## Drafts, replay and publishing
@@ -499,11 +535,17 @@ it. When someone else signs in on the same browser, the earlier person's drafts
 are removed. If someone publishes while you edit, the draft says it was based on an older
 version: keep it on top of the new version, or discard it.
 
-Use **Test a title** (`t`) for a specific example. Run replay to compare the
-published rules with your draft on saved listings. Each row shows the recorded
-original decision, the published rules' result and the draft result. The
-summary counts the listings the draft newly allows or newly blocks. These
-counts cover the saved sample, not all marketplace traffic.
+**Test a title** is available once in the page header. From a listing, it selects
+that listing's owning search and uses its current draft, including unpublished
+edits. From All listings without an owning search, or an unregistered search's
+listing, choose a search before testing. The dialog names the search and draft
+context; changing the search or inputs clears the old answer.
+
+Run **Replay draft** to compare the published rules with your draft on saved
+listings. Each row shows the recorded decision, the published rules' result and
+the draft result. One set of clickable summary counts filters changed, newly
+allowed, newly filtered, other changes, unchanged, or everything checked.
+These counts cover the saved sample, not all marketplace traffic.
 
 Replay uses the latest decision of the `DASHBOARD_REPLAY_LIMIT` most recently
 seen listings (default and maximum 500). Processing has a 10-second budget, and
@@ -672,6 +714,13 @@ Each search summary also includes `latest_candidate_id`, a string ID or `null`
 when empty. It identifies the newest saved decision and triggers unread-count
 refreshes; unlike `last_seen_at`, repeated unchanged sightings do not advance it.
 Candidate IDs span all searches, so their difference is not an unread count.
+
+`GET /api/candidates` accepts `guild_id`, `alert_id` and `channel_id` together.
+They intersect the caller's authorized scope; a search outside the selected
+server answers 404. The response includes each listing's `guild_id` and
+`channel_name`, plus channel facets (`id`, `name`, `count`). Channel facets respect
+the other filters but omit the current channel filter, so another channel can
+still be selected.
 
 `POST /api/alerts/unread` accepts up to 200 search IDs and their browser-local
 read positions, for example `{"read_through":{"5":"123","6":null}}`.

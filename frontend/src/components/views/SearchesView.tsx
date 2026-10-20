@@ -5,35 +5,41 @@ import Typography from "@mui/material/Typography";
 
 import type { AlertSummary, ChannelList } from "../../api/types";
 import { canChangeSearch, postableChannels } from "../../lib/channels";
+import type { SearchFilter } from "../../lib/hooks";
 import { EmptyState } from "../common/Feedback";
+import { useLiveStatus } from "../searches/liveStatus";
 import { SearchList } from "../searches/SearchList";
 
 interface Props {
+  guildId: string;
   searches: AlertSummary[];
   channels: ChannelList | undefined;
+  /** The quick filter in the address; null shows every search. */
+  filter: SearchFilter | null;
+  onFilterChange: (filter: SearchFilter | null) => void;
   onOpen: (alert: AlertSummary) => void;
   onOpenChannel: (channelId: string) => void;
   onAdd: () => void;
   onUnregister: (alert: AlertSummary) => void;
 }
 
-/** The server's searches in every channel, as /allalerts lists them. */
-export function SearchesView({ searches, channels, onOpen, onOpenChannel, onAdd, onUnregister }: Props) {
-  const sorted = [...searches].sort((left, right) =>
-    (left.channel_name ?? left.channel_id).localeCompare(right.channel_name ?? right.channel_id)
-    || left.search_query.localeCompare(right.search_query));
+/** Every search of the server in one table: how it is doing, what waits to be posted, and what you may change. */
+export function SearchesView({ guildId, searches, channels, filter, onFilterChange, onOpen, onOpenChannel, onAdd, onUnregister }: Props) {
+  const live = useLiveStatus(guildId);
   return (
     <Box sx={{ px: { xs: 2, md: 3 }, py: 2.5 }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1.5, flexWrap: "wrap" }}>
         <Typography variant="body2" color="textSecondary" sx={{ flex: 1, minWidth: 240 }}>
-          Every search in this server, as /allalerts lists them. Open a channel for its posts, hidden listings and cleanup.
+          Every search in this server. Open a channel for its posts, hidden listings and cleanup.
         </Typography>
         <Button variant="contained" startIcon={<Add />} onClick={onAdd} disabled={postableChannels(channels).length === 0}>
           Add search
         </Button>
       </Box>
-      {sorted.length ? (
-        <SearchList alerts={sorted} showChannel canChange={(alert) => canChangeSearch(channels, alert)}
+      {searches.length ? (
+        // Another server starts with its own filters and first page.
+        <SearchList key={guildId} alerts={searches} showChannel live={live} filter={filter} onFilterChange={onFilterChange}
+          canChange={(alert) => canChangeSearch(channels, alert)}
           onOpen={onOpen} onOpenChannel={onOpenChannel} onUnregister={onUnregister} />
       ) : (
         <EmptyState title="No searches yet">Add one here, or run /register in a channel.</EmptyState>

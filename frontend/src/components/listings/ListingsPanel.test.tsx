@@ -1,11 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { keys } from "../../api/hooks";
-import type { Candidate, CandidatePage, Session } from "../../api/types";
+import type { AlertSummary, Candidate, CandidatePage, Session } from "../../api/types";
+import { SearchReadOwner } from "../../lib/searchReads";
 import { NoticeContext } from "../common/notify";
+import { DEFAULT_LISTING_FILTERS, type ListingFilters } from "../../lib/listingFilters";
+import { alertSummary } from "../../test/fixtures";
 import { ListingsPanel } from "./ListingsPanel";
 import { setPhone } from "../../test/screen";
 
@@ -15,7 +18,7 @@ Element.prototype.scrollIntoView = () => undefined;
 function listing(id: string): Candidate {
   const title = `BABYMETAL towel ${id}`;
   return {
-    id, alert_id: "5", channel_id: "20", search_query: "BABYMETAL towel", source: "mercari", external_id: `m${id}`,
+    id, alert_id: "5", channel_id: "20", guild_id: "9", channel_name: "posters", search_query: "BABYMETAL towel", source: "mercari", external_id: `m${id}`,
     title, normalized_title: title.toLowerCase(), payload: { url: `https://jp.mercari.com/item/m${id}`, price: 1500 },
     decision: { verdict: "accepted", normalized_title: title.toLowerCase(), reasons: [] }, verdict: "accepted",
     ruleset_version_id: "4", observation_kind: "listing", origin: "live", incomplete: false,
@@ -25,7 +28,7 @@ function listing(id: string): Candidate {
 
 const PAGE: CandidatePage = {
   items: [listing("1"), listing("2")], total: 2, has_more: false, next_cursor: null,
-  facets: { verdict: { accepted: 2, filtered: 0, review: 0 } },
+  facets: { verdict: { accepted: 2, filtered: 0, review: 0 }, channel: [{ id: "20", name: "posters", count: 2 }] },
 };
 
 const MEMBER: Session = { authenticated: true, method: "discord", features: { notifications: true, discord_data: true } };
@@ -41,7 +44,7 @@ async function showListings({ phone = false, session }: { phone?: boolean; sessi
   render(
     <QueryClientProvider client={client}>
       <NoticeContext.Provider value={notify}>
-        <ListingsPanel alertId="5" guildId={null} filters={{ search: "", source: "", verdict: "", latest: true }}
+        <ListingsPanel alertId="5" guildId={null} filters={DEFAULT_LISTING_FILTERS}
           onFilters={() => undefined} onTestTitle={() => undefined} />
       </NoticeContext.Provider>
     </QueryClientProvider>,
@@ -146,5 +149,98 @@ describe("ListingsPanel on a phone", () => {
     fireEvent.click(within(frames[0]!).getByRole("button", { name: "Allowed. Show why." }));
     expect(screen.getByRole("dialog", { name: "Why it is allowed" })).toBeInTheDocument();
     expect(details()).toBeNull();
+  });
+});
+
+
+const SEARCHES: AlertSummary[] = [
+  { ...alertSummary("5", "20", "BABYMETAL towel", "9"), channel_name: "posters" },
+  { ...alertSummary("6", "21", "Toy towel", "9"), channel_name: null },
+];
+
+/** A server's listings: the same towel saved by two searches in two channels, and once by a search since unregistered. */
+function showServer({ filters = DEFAULT_LISTING_FILTERS, guildId = "9", owner = null, onTestTitle = vi.fn() }: {
+  filters?: ListingFilters; guildId?: string; owner?: string | null; onTestTitle?: () => void } = {}) {
+  const same = listing("1");
+  const page: CandidatePage = { ...PAGE, total: 3, items: [
+    same,
+    { ...same, id: "2", alert_id: "6", channel_id: "21", channel_name: null, search_query: "Toy towel",
+      decision: { ...same.decision, verdict: "filtered" }, verdict: "filtered" },
+    { ...same, id: "3", alert_id: null, channel_id: "22", channel_name: "vinyl", search_query: "Old towel" },
+  ] };
+  const fetch = vi.fn((url: string) => Promise.resolve(Response.json(url === "/api/session" ? MEMBER : page)));
+  vi.stubGlobal("fetch", fetch);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <SearchReadOwner.Provider value={owner}>
+        <ListingsPanel alertId={null} guildId={guildId} filters={filters} onFilters={() => undefined} onTestTitle={onTestTitle}
+          searches={SEARCHES} />
+      </SearchReadOwner.Provider>
+    </QueryClientProvider>,
+  );
+  return { fetch, onTestTitle };
+}
+
+function asked(fetch: { mock: { calls: [string][] } }) {
+  const call = fetch.mock.calls.find(([url]) => url.startsWith("/api/candidates?"));
+  expect(call).toBeDefined();
+  return new URL(call![0], "http://filter.lab").searchParams;
+}
+
+describe("ListingsPanel across a server", () => {
+  it("names each listing's search and channel, and tests a title in the search that saved it", async () => {
+    const user = userEvent.setup();
+    const { fetch, onTestTitle } = showServer();
+    const frames = await screen.findAllByRole("listitem");
+
+    expect(frames.map((frame) => frame.textContent)).toEqual([
+      expect.stringContaining("Search: BABYMETAL towel#posters"),
+      expect.stringContaining("Search: Toy towelChannel …21"),
+      expect.stringContaining("Search: Old towelUnregistered search · #vinyl"),
+    ]);
+    expect(asked(fetch).get("guild_id")).toBe("9");
+    expect(asked(fetch).has("alert_id")).toBe(false);
+
+    act(() => frames[1]!.focus());
+    await user.keyboard("t");
+    expect(onTestTitle).toHaveBeenLastCalledWith(expect.objectContaining({ alertId: "6" }));
+    act(() => frames[2]!.focus());
+    await user.keyboard("t");
+    expect(onTestTitle).toHaveBeenLastCalledWith(expect.objectContaining({ alertId: null }));
+  });
+
+  it("filters by the search and channel chosen in this server, and ignores those chosen in another", async () => {
+    const chosen = { guildId: "9", alertId: "6", channelId: "21" };
+    const here = showServer({ filters: { ...DEFAULT_LISTING_FILTERS, scope: chosen } });
+    await screen.findAllByRole("listitem");
+    expect([asked(here.fetch).get("alert_id"), asked(here.fetch).get("channel_id"), asked(here.fetch).get("guild_id")])
+      .toEqual(["6", "21", "9"]);
+    cleanup();
+
+    const elsewhere = showServer({ filters: { ...DEFAULT_LISTING_FILTERS, scope: { ...chosen, guildId: "8" } } });
+    await screen.findAllByRole("listitem");
+    expect(asked(elsewhere.fetch).has("alert_id")).toBe(false);
+    expect(asked(elsewhere.fetch).has("channel_id")).toBe(false);
+  });
+
+  it("marks a search read only from its own listings, not while browsing a server", async () => {
+    localStorage.removeItem("dashboard:read:me:5");
+    showServer({ owner: "me", filters: { ...DEFAULT_LISTING_FILTERS, scope: { guildId: "9", alertId: "5", channelId: "" } } });
+    await screen.findAllByRole("listitem");
+    expect(localStorage.getItem("dashboard:read:me:5")).toBeNull();
+    cleanup();
+
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(Response.json(PAGE))));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <SearchReadOwner.Provider value="me">
+          <ListingsPanel alertId="5" guildId={null} filters={DEFAULT_LISTING_FILTERS} onFilters={() => undefined} onTestTitle={() => undefined} />
+        </SearchReadOwner.Provider>
+      </QueryClientProvider>,
+    );
+    await screen.findAllByRole("listitem");
+    await waitFor(() => expect(localStorage.getItem("dashboard:read:me:5")).toBe("2"));
+    expect(screen.queryByText(/^Search: /)).toBeNull();
+    localStorage.removeItem("dashboard:read:me:5");
   });
 });

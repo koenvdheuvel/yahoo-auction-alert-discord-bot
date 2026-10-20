@@ -14,9 +14,6 @@ import { theme } from "../../theme";
 import type { StoredReplay } from "../views/SearchView";
 import { ReplayPanel } from "./ReplayPanel";
 
-// jsdom does no layout, so it has no scrollIntoView.
-Element.prototype.scrollIntoView = () => undefined;
-
 // The published rules' decision and the draft's, for each kind of change.
 const VERDICTS: Record<Change, [Verdict, Verdict]> = {
   newly_allowed: ["filtered", "accepted"],
@@ -80,31 +77,30 @@ afterEach(() => {
 });
 
 describe("Replay results", () => {
-  it("shows exactly the listings a tally counts, and marks the matching view", async () => {
+  it("lets the counters choose every view and nothing else does, each listing exactly what its number counts", async () => {
     const user = userEvent.setup();
     show();
-    // Every change at first; no single tally covers that, so none is marked.
+    // One control picks the view: the six counters, which are the only buttons with a pressed state.
+    expect(screen.getAllByRole("button").filter((button) => button.hasAttribute("aria-pressed"))).toHaveLength(6);
+    // Every change at first.
     expect(tableRows()).toBe(6);
-    expect(pressed()).toEqual(["Changed"]);
+    expect(pressed()).toEqual(["6changed"]);
 
-    const tallies: [RegExp, number, string][] = [
-      [/^1 ?newly allowed$/, 1, "Newly allowed"],
-      [/^2 ?newly filtered$/, 2, "Newly filtered"],
-      [/^3 ?other changes/, 3, "Other changes"],
-      [/^4 ?unchanged$/, 4, "Unchanged"],
+    const views: [RegExp, number][] = [
+      [/^1 ?newly allowed$/, 1],
+      [/^2 ?newly filtered$/, 2],
+      [/^3 ?other changes/, 3],
+      [/^4 ?unchanged$/, 4],
+      [/^10 ?everything checked$/, 10],
+      [/^6 ?changed$/, 6],
     ];
-    for (const [name, count, view] of tallies) {
-      const tally = screen.getByRole("button", { name });
-      await user.click(tally);
+    for (const [name, count] of views) {
+      const counter = screen.getByRole("button", { name });
+      await user.click(counter);
       expect(tableRows()).toBe(count);
-      expect(tally).toHaveAttribute("aria-pressed", "true");
-      expect(screen.getByRole("button", { name: view })).toHaveAttribute("aria-pressed", "true");
-      expect(pressed()).toHaveLength(2);
+      expect(counter).toHaveAttribute("aria-pressed", "true");
+      expect(pressed()).toHaveLength(1);
     }
-
-    await user.click(screen.getByRole("button", { name: "Everything checked" }));
-    expect(tableRows()).toBe(10);
-    expect(pressed()).toEqual(["Everything checked"]);
   });
 
   it("shows each listing as a card with its three decisions on a phone", async () => {

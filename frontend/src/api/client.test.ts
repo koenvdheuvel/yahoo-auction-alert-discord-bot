@@ -72,7 +72,7 @@ describe("request", () => {
 });
 
 describe("api.candidates", () => {
-  const query: CandidateQuery = { alertId: "5", guildId: null, search: "B1 ポスター", source: "mercari", verdict: "review", latest: true };
+  const query: CandidateQuery = { alertId: "5", guildId: null, channelId: null, search: "B1 ポスター", source: "mercari", verdict: "review", latest: true };
 
   it("asks for facet counts on the first page only", async () => {
     const fetch = respond(200, { items: [] });
@@ -89,12 +89,15 @@ describe("api.candidates", () => {
     expect(next.searchParams.has("facets")).toBe(false);
   });
 
-  it("asks for one server's listings only when no search is selected", async () => {
+  it("scopes a request to its server and channel, also with a search selected", async () => {
     const fetch = respond(200, { items: [] });
-    await api.candidates({ ...query, alertId: null, guildId: "22" }, null, 48);
+    await api.candidates({ ...query, alertId: null, guildId: "22", channelId: "31" }, null, 48);
     await api.candidates({ ...query, guildId: "22" }, null, 48);
-    const calls = fetch.mock.calls as unknown as [[string], [string]];
-    expect(new URL(calls[0][0], "http://filter.lab").searchParams.get("guild_id")).toBe("22");
-    expect(new URL(calls[1][0], "http://filter.lab").searchParams.has("guild_id")).toBe(false);
+    await api.candidates(query, null, 48);
+    const [channel, search, alone] = (fetch.mock.calls as unknown as [string][]).map(([url]) =>
+      new URL(url, "http://filter.lab").searchParams);
+    expect([channel!.get("guild_id"), channel!.get("channel_id"), channel!.has("alert_id")]).toEqual(["22", "31", false]);
+    expect([search!.get("guild_id"), search!.get("alert_id"), search!.has("channel_id")]).toEqual(["22", "5", false]);
+    expect(alone!.has("guild_id")).toBe(false);
   });
 });

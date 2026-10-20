@@ -10,6 +10,9 @@ const STATUS_TABS: StatusTab[] = ["overview", "graphs"];
 /** Pages that belong to a server rather than to a channel or a search, and your own page. */
 export type ServerView = "status" | "searches" | "listings";
 const SERVER_VIEWS: ServerView[] = ["status", "searches", "listings"];
+/** The quick filters of the server's Searches page, which the Status page links to. */
+export type SearchFilter = "unread" | "review" | "errors" | "pending" | "failed";
+export const SEARCH_FILTERS: SearchFilter[] = ["unread", "review", "errors", "pending", "failed"];
 
 /**
  * Where the person is. A search wins over a channel, and a channel over the server's pages.
@@ -27,6 +30,8 @@ export interface Place {
   channelTab: ChannelTab;
   /** The server status page's tab. */
   statusTab: StatusTab;
+  /** The quick filter of the server's Searches page; null shows every search. */
+  searchFilter: SearchFilter | null;
 }
 
 const digits = (value: string | null) => (value && /^\d+$/.test(value) ? value : null);
@@ -37,6 +42,7 @@ function readPlace(): Place {
   const channelId = digits(params.get("channel"));
   const tab = params.get("tab");
   const view = params.get("view");
+  const filter = params.get("filter");
   return {
     guildId: digits(params.get("guild")),
     channelId,
@@ -46,6 +52,7 @@ function readPlace(): Place {
     tab: TABS.includes(tab as Tab) ? tab as Tab : "listings",
     channelTab: CHANNEL_TABS.includes(tab as ChannelTab) ? tab as ChannelTab : "searches",
     statusTab: STATUS_TABS.includes(tab as StatusTab) ? tab as StatusTab : "overview",
+    searchFilter: SEARCH_FILTERS.includes(filter as SearchFilter) ? filter as SearchFilter : null,
   };
 }
 
@@ -76,6 +83,7 @@ export function placeUrl(target: Place): string {
       if (target.channelTab !== "searches") params.set("tab", target.channelTab);
     } else if (target.view !== "status") {
       params.set("view", target.view);
+      if (target.view === "searches" && target.searchFilter) params.set("filter", target.searchFilter);
     } else if (target.statusTab !== "overview") {
       params.set("tab", target.statusTab);
     }

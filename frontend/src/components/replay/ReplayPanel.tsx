@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ApiError, api } from "../../api/client";
 import { useSession } from "../../api/hooks";
-import type { AlertSummary, Change, Ruleset } from "../../api/types";
+import type { AlertSummary, Ruleset } from "../../api/types";
 import { errorMessage } from "../../lib/errors";
 import { formatCount, formatRelative, plural } from "../../lib/format";
 import type { Draft } from "../../lib/useDraft";
@@ -40,25 +40,19 @@ function Tally({ value, children, tone, onClick, active }: {
   );
 }
 
-// Each tally shows exactly its own group of listings, so the number always matches the list.
-const TALLIES: { change: Change; label: string; tone?: string }[] = [
-  { change: "newly_allowed", label: "newly allowed", tone: "success.main" },
-  { change: "newly_blocked", label: "newly filtered", tone: "text.primary" },
-  { change: "changed", label: "other changes, such as held for review", tone: "warning.main" },
-  { change: "unchanged", label: "unchanged" },
-];
-
-function Summary({ counts, show, onShow }: { counts: Record<Change, number>; show: Show; onShow: (show: Show) => void }) {
+function Summary({ counts, show, onShow }: { counts: Record<Show, number>; show: Show; onShow: (show: Show) => void }) {
   return (
     <Box>
-      <Typography variant="subtitle2" component="h3" sx={{ mb: 0.5 }}>What the draft changes</Typography>
-      {/* Two by two on phones, a row on larger screens. */}
-      <Box sx={{ display: { xs: "grid", sm: "flex" }, gridTemplateColumns: "repeat(2, minmax(0, 1fr))", flexWrap: "wrap",
-        gap: { xs: 1, sm: 0.5 } }}>
-        {TALLIES.map((tally) => (
-          <Tally key={tally.change} value={counts[tally.change]} tone={tally.tone} active={show === tally.change}
-            onClick={() => onShow(tally.change)}>
-            {tally.label}
+      <Typography variant="subtitle2" component="h3">What the draft changes</Typography>
+      <Typography variant="caption" color="textSecondary" component="p" sx={{ mb: 0.5 }}>
+        Select a count to list those listings.
+      </Typography>
+      {/* Two columns on phones, a row on larger screens. Each counter shows exactly its own listings, so the number always matches the list. */}
+      <Box role="group" aria-label="Show listings" sx={{ display: { xs: "grid", sm: "flex" }, gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        flexWrap: "wrap", gap: { xs: 1, sm: 0.5 } }}>
+        {(Object.keys(SHOWS) as Show[]).map((key) => (
+          <Tally key={key} value={counts[key]} tone={SHOWS[key].tone} active={show === key} onClick={() => onShow(key)}>
+            {SHOWS[key].label}
           </Tally>
         ))}
       </Box>
@@ -81,7 +75,6 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
   const session = useSession();
   const [show, setShow] = useState<Show>("changes");
   const [page, setPage] = useState(0);
-  const views = useRef<HTMLDivElement>(null);
   const run = useMutation({
     mutationFn: (serialized: string) => api.replay(alert!.id, JSON.parse(serialized) as Ruleset),
     onSuccess: (result, serialized) => {
@@ -92,8 +85,8 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
   });
   const items = useMemo(() => stored?.result.items.filter((item) => inView(item, show)) ?? [], [stored, show]);
   const counts = useMemo(() => {
-    const result: Record<Change, number> = { newly_allowed: 0, newly_blocked: 0, changed: 0, unchanged: 0 };
-    for (const item of stored?.result.items ?? []) result[item.change] += 1;
+    const result = {} as Record<Show, number>;
+    for (const key of Object.keys(SHOWS) as Show[]) result[key] = stored?.result.items.filter((item) => inView(item, key)).length ?? 0;
     return result;
   }, [stored]);
   const { mutate } = run;
@@ -121,8 +114,6 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
   const select = (next: Show) => {
     setShow(next);
     setPage(0);
-    // On phones the views scroll sideways, so a tally can pick one that is out of sight.
-    views.current?.querySelector(`[data-show="${next}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
 
   return (
@@ -172,24 +163,11 @@ export function ReplayPanel({ alert, draft, stored, onResult, autoRun, onAutoRun
             <Alert severity="warning">Replay stopped after 10 seconds, so not every listing was checked. The counts cover the checked ones.</Alert>
           )}
           <Summary counts={counts} show={show} onShow={select} />
-          <Box>
-            {/* On phones the views are one row that scrolls sideways under the page's edges. */}
-            <Stack ref={views} direction="row" role="group" aria-label="Show" sx={{ gap: 1, mb: 1,
-              flexWrap: { xs: "nowrap", sm: "wrap" }, overflowX: { xs: "auto", sm: "visible" }, mx: { xs: -2, sm: 0 },
-              px: { xs: 2, sm: 0 }, scrollPaddingInline: "16px", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
-              {(Object.keys(SHOWS) as Show[]).map((key) => (
-                <Button key={key} data-show={key} size="small" variant={show === key ? "contained" : "outlined"} color="inherit"
-                  aria-pressed={show === key} onClick={() => select(key)} sx={{ flex: "none" }}>
-                  {SHOWS[key]}
-                </Button>
-              ))}
-            </Stack>
-            {items.length === 0 ? (
-              <EmptyState title="Nothing here">No checked listing falls in this group.</EmptyState>
-            ) : (
-              <ReplayResults items={items} page={page} onPage={setPage} />
-            )}
-          </Box>
+          {items.length === 0 ? (
+            <EmptyState title="Nothing here">No checked listing falls in this group.</EmptyState>
+          ) : (
+            <ReplayResults items={items} page={page} onPage={setPage} />
+          )}
         </>
       )}
     </Box>

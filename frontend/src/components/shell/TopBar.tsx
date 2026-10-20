@@ -3,7 +3,6 @@ import HelpOutlineOutlined from "@mui/icons-material/HelpOutlineOutlined";
 import MenuIcon from "@mui/icons-material/Menu";
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
-import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
@@ -15,7 +14,7 @@ import { TOPBAR_HEIGHT } from "../../theme";
 interface Props {
   icon: ReactNode;
   title: string;
-  /** Shown after the title, like a channel's topic in Discord. */
+  /** Server/channel context stays visible below the title, including on phones. */
   detail?: string | null;
   showMenu: boolean;
   onMenu: () => void;
@@ -29,6 +28,18 @@ interface Props {
 export function TopBar({ icon, title, detail, showMenu, onMenu, onHelp, onTitle, actions }: Props) {
   // Keyboard shortcuts mean nothing without a keyboard.
   const touch = useTouch();
+  const label = (
+    <Box component="span" sx={{ display: "block", minWidth: 0, textAlign: "left" }}>
+      <Box component="span" sx={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</Box>
+      {detail && (
+        <Typography component="span" variant="caption" color="textSecondary" title={detail}
+          sx={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+            whiteSpace: "normal", fontSize: { xs: "0.6875rem", sm: "0.75rem" }, lineHeight: 1.15, fontWeight: 400 }}>
+          {detail}
+        </Typography>
+      )}
+    </Box>
+  );
   return (
     <Box component="header" sx={{ height: `calc(${TOPBAR_HEIGHT}px + env(safe-area-inset-top, 0px))`,
       pt: "env(safe-area-inset-top, 0px)", flex: "none", display: "flex", alignItems: "center", gap: 1,
@@ -37,27 +48,17 @@ export function TopBar({ icon, title, detail, showMenu, onMenu, onHelp, onTitle,
       {showMenu && (
         <IconButton edge="start" aria-label="Open the server and channel lists" onClick={onMenu}><MenuIcon /></IconButton>
       )}
-      <Box sx={{ display: "flex", color: "text.secondary" }}>{icon}</Box>
-      <Typography variant="h2" component="h1" noWrap sx={{ minWidth: 0, flexShrink: 1 }}>
+      <Box sx={{ display: "flex", color: "text.secondary", flexShrink: 0 }}>{icon}</Box>
+      <Typography variant="h2" component="h1" sx={{ minWidth: 0, flex: 1 }}>
         {onTitle ? (
           <ButtonBase onClick={onTitle} aria-haspopup="dialog" aria-label={`${title}: show the details`}
-            // The title cuts off long names, which would cut off a focus ring around the button too.
             sx={{ maxWidth: "100%", minHeight: 44, gap: 0.25, px: 0.5, mx: -0.5, borderRadius: 1, font: "inherit",
               "&.Mui-focusVisible": { outlineOffset: -2 } }}>
-            <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</Box>
+            {label}
             <ExpandMore fontSize="small" sx={{ color: "text.secondary", flex: "none" }} />
           </ButtonBase>
-        ) : title}
+        ) : label}
       </Typography>
-      {detail && (
-        <>
-          <Divider orientation="vertical" flexItem sx={{ my: 1.5, display: { xs: "none", sm: "block" } }} />
-          <Typography variant="body2" color="textSecondary" noWrap sx={{ minWidth: 0, display: { xs: "none", sm: "block" } }}>
-            {detail}
-          </Typography>
-        </>
-      )}
-      <Box sx={{ flex: 1 }} />
       {actions}
       {!touch && (
         <Tooltip title="Keyboard shortcuts">

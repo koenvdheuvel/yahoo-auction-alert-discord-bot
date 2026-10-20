@@ -400,13 +400,33 @@ class ReviewTests(unittest.IsolatedAsyncioTestCase):
         params = {"alert_id": self.alert["id"], "limit": "3", "latest": "1", "facets": "1"}
         page = await (await self.client.get("/api/candidates", params=params)).json()
         self.assertEqual((len(page["items"]), page["total"], page["has_more"]), (3, 4, True))
-        self.assertEqual(page["facets"], {"verdict": {"accepted": 4, "filtered": 0, "review": 0}})
+        self.assertEqual(page["facets"]["verdict"], {"accepted": 4, "filtered": 0, "review": 0})
+        self.assertEqual(page["facets"]["channel"], [{"id": str(self.alert["channel_id"]), "count": 4, "name": None}])
+        self.assertEqual({item["channel_name"] for item in page["items"]}, {None})
         rest = await (await self.client.get("/api/candidates", params={**params, "cursor": page["next_cursor"]})).json()
         self.assertEqual((len(rest["items"]), rest["has_more"]), (1, False))
         for bad in ({"limit": "0"}, {"limit": "abc"}, {"latest": "maybe"}, {"verdict": "nope"}, {"cursor": "bad"},
                     {"source": "ebay"}, {"search": "x" * 257}):
             with self.subTest(params=bad):
                 self.assertEqual((await self.client.get("/api/candidates", params=bad)).status, 400)
+
+    async def test_candidates_name_their_channels_and_filter_by_channel_within_the_server(self):
+        await self.login()
+        await self.seed()
+        self.dashboard.directory = Names(lambda ids: {channel_id: "posters" for channel_id in ids})
+        channel, guild = str(self.alert["channel_id"]), str(self.alert["guild_id"])
+        params = {"guild_id": guild, "channel_id": channel, "facets": "1", "latest": "1"}
+        page = await (await self.client.get("/api/candidates", params=params)).json()
+        self.assertEqual((page["total"], {item["channel_name"] for item in page["items"]}), (4, {"posters"}))
+        self.assertEqual(page["facets"]["channel"], [{"id": channel, "count": 4, "name": "posters"}])
+        other = await (await self.client.get("/api/candidates", params={**params, "channel_id": "5"})).json()
+        self.assertEqual((other["total"], other["items"]), (0, []))
+        # Another server's ID is a different scope: the same channel matches nothing there.
+        elsewhere = await (await self.client.get("/api/candidates", params={**params, "guild_id": "7"})).json()
+        self.assertEqual(elsewhere["total"], 0)
+        mismatched = {"alert_id": self.alert["id"], "guild_id": "7"}
+        self.assertEqual((await self.client.get("/api/candidates", params=mismatched)).status, 404)
+        self.assertEqual((await self.client.get("/api/candidates", params={"channel_id": "x"})).status, 400)
 
     async def test_alerts_include_counts_and_channel_names_when_the_bot_cache_has_them(self):
         await self.login()

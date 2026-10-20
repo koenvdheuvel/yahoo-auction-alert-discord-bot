@@ -91,9 +91,12 @@ export async function request<T>(path: string, { method = "GET", body, signal }:
 export const UNREAD_BATCH = 200;
 
 export interface CandidateQuery {
+  /** The listings of one registered search only. */
   alertId: string | null;
-  /** All listings of one Discord server, when no alert is selected. */
+  /** The listings of one Discord server. With an alert, the alert must belong to this server. */
   guildId: string | null;
+  /** The listings saved in one channel, including those of searches since unregistered. */
+  channelId: string | null;
   search: string;
   source: Source | "";
   verdict: Verdict | "";
@@ -113,7 +116,8 @@ export const api = {
   candidates(query: CandidateQuery, cursor: string | null, limit: number, signal?: AbortSignal) {
     const params = new URLSearchParams({ limit: String(limit), latest: query.latest ? "1" : "0" });
     if (query.alertId) params.set("alert_id", query.alertId);
-    else if (query.guildId) params.set("guild_id", query.guildId);
+    if (query.guildId) params.set("guild_id", query.guildId);
+    if (query.channelId) params.set("channel_id", query.channelId);
     if (query.search) params.set("search", query.search);
     if (query.source) params.set("source", query.source);
     if (query.verdict) params.set("verdict", query.verdict);

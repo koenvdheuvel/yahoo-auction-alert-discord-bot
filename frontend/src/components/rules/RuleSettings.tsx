@@ -126,7 +126,8 @@ export function RuleSettings({ ruleset, onChange, filters, alertId = null, canCh
           ))}
         </FormGroup>
       </Section>
-      <Section title="Marketplaces" hint="With none ticked, listings from every marketplace are allowed.">
+      <Section title="Allowed marketplaces"
+        hint="Only ticked marketplaces are allowed; with none ticked, every marketplace is allowed. Publish applies this draft to checking. Which marketplaces a search checks is a separate setting.">
         <FormGroup row>
           {(Object.keys(SOURCES) as Source[]).map((source) => (
             <FormControlLabel key={source} label={SOURCES[source]} slotProps={{ typography: { variant: "body2" } }}

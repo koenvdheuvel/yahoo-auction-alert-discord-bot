@@ -38,11 +38,10 @@ interface Props {
   /** Whether you may change the search, which deleting its Discord filters needs. */
   canChange?: boolean;
   replay: StoredReplay | null;
-  onTestTitle: () => void;
   onReplay: () => void;
 }
 
-export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay, canChange = false }: Props) {
+export function RulesPanel({ alert, rules, draft, replay, onReplay, canChange = false }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
   const compact = useCompact();
@@ -123,33 +122,27 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
   const canPublish = alert !== null && draft.edited && validation.data?.state === "valid" && !checking && !draft.outdated;
   const nextVersion = (rules.data?.versions[0]?.version ?? 0) + 1;
 
-  const outdatedActions = (
-    <Stack direction="row" spacing={1}>
-      <Button color="inherit" size="small" onClick={draft.rebase}>Keep my draft</Button>
-      <Button color="inherit" size="small" onClick={draft.discard}>Discard it</Button>
-    </Stack>
-  );
+  // The draft bar holds the actions, since it stays in sight and Publish is there; this says what happened.
+  const where = compact ? "the ⋮ menu in the draft bar below" : "the draft bar below";
 
   return (
     // One column no wider than the page, so nothing long can push the page sideways.
     <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 2.5 }}>
       {draft.outdated && (
-        // Narrow screens put the buttons under the message, which otherwise gets squeezed into a thin column.
-        <Alert severity="warning" action={compact ? undefined : outdatedActions}>
+        <Alert severity="warning">
           {draft.published
-            ? `Version ${draft.published.version} was published after you started this draft. Check it under Versions, then keep your draft to publish over it, or discard your draft.`
-            : "The rules you started from were replaced after you started this draft."}
-          {compact && <Box sx={{ mt: 1, ml: -0.75 }}>{outdatedActions}</Box>}
+            ? `Version ${draft.published.version} was published after you started this draft. Check it under Versions, then use ${where} to keep your draft and publish over it, or discard it.`
+            : `The rules you started from were replaced after you started this draft. Use ${where} to keep your draft or discard it.`}
         </Alert>
       )}
       {!alert && (
         <Alert severity="info">
-          This is a scratch draft for trying rules on titles. Choose a search on the left to replay and publish rules for it.
+          This draft belongs to no search. Choose a search to replay and publish rules for it.
         </Alert>
       )}
       <Typography variant="body2" color="textSecondary" sx={{ maxWidth: 760 }}>
-        A listing is allowed when every must-match group matches and no exclude group does. Hold-for-review groups keep a
-        match from being posted until you look at it. Inside a group, any term can match, or all terms must.
+        A listing is allowed when every must-match group matches and no exclude group does. Hold-for-review groups
+        suppress posting; reading a listing does not approve it. Inside a group, any term can match, or all terms must.
       </Typography>
 
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "minmax(0, 1fr) 340px" }, gap: 3, alignItems: "start" }}>
@@ -206,7 +199,7 @@ export function RulesPanel({ alert, rules, draft, replay, onTestTitle, onReplay,
 
       <DraftBar draft={draft} alert={alert} checking={checking} checkFailed={validation.isError ? errorMessage(validation.error) : null}
         invalid={invalid?.message ?? null} replayedAt={replayed ? replay.ranAt : null} canPublish={canPublish} canChange={canChange}
-        publishing={publish.isPending} onPublish={() => setConfirming(true)} onTestTitle={onTestTitle} onReplay={onReplay} />
+        publishing={publish.isPending} onPublish={() => setConfirming(true)} onReplay={onReplay} />
 
       {alert && (
         <ConfirmDialog open={confirming} title={`Publish rules for “${alert.search_query}”?`} maxWidth={removeAlso ? "sm" : "xs"}

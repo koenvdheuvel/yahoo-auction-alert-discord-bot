@@ -339,8 +339,13 @@ export interface ListingFacts {
 
 export interface Candidate {
   id: string;
+  /** The registered search this listing was saved for; null when that search was unregistered since. */
   alert_id: string | null;
   channel_id: string;
+  guild_id: string | null;
+  /** The channel's name when Discord's cache has it; otherwise only the ID identifies the channel. */
+  channel_name?: string | null;
+  /** The search text it was saved under, kept after the search is unregistered. */
   search_query: string;
   source: string;
   external_id: string;
@@ -361,8 +366,16 @@ export interface Candidate {
   subscribed?: boolean;
 }
 
+/** How many listings of a page's scope, ignoring the channel filter, were saved in one channel. */
+export interface ChannelFacet {
+  id: string;
+  name: string | null;
+  count: number;
+}
+
 export interface Facets {
   verdict: Record<Verdict, number>;
+  channel: ChannelFacet[];
 }
 
 export interface CandidatePage {

@@ -63,4 +63,17 @@ describe("MarketplacesDialog", () => {
     const call = fetch.mock.calls.find(([url]) => url.endsWith("/api/alerts/7/sources")) as unknown as [string, RequestInit];
     expect(JSON.parse(call[1].body as string)).toEqual({ sources: ["surugaya"] });
   });
+
+  it("says that no marketplace pauses the search, and saves exactly that", async () => {
+    const user = userEvent.setup();
+    const { fetch } = show();
+    expect(screen.getByRole("dialog", { name: "Marketplaces to check for vinyl" })).toBeInTheDocument();
+    expect(screen.queryByText(/this search is paused/)).toBeNull();
+    for (const name of ["Yahoo Auctions", "Mercari", "Surugaya", "Rakuma"]) await user.click(screen.getByRole("switch", { name }));
+    expect(screen.getByText(/this search is paused/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(fetch.mock.calls.some(([url]) => url.endsWith("/api/alerts/7/sources"))).toBe(true));
+    const call = fetch.mock.calls.find(([url]) => url.endsWith("/api/alerts/7/sources")) as unknown as [string, RequestInit];
+    expect(JSON.parse(call[1].body as string)).toEqual({ sources: [] });
+  });
 });

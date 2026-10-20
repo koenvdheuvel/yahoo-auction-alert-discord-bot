@@ -21,7 +21,7 @@ interface Props {
   onClose: () => void;
 }
 
-/** /marketplaces: which marketplaces a search checks. */
+/** /marketplaces: which marketplaces a search checks. Turning every one off pauses the search. */
 export function MarketplacesDialog({ alert, onClose }: Props) {
   const client = useQueryClient();
   const notify = useNotify();
@@ -48,12 +48,13 @@ export function MarketplacesDialog({ alert, onClose }: Props) {
   const toggle = (source: Source, on: boolean) =>
     setDraft({ id: alert!.id, sources: on ? [...selected, source] : selected.filter((item) => item !== source) });
   return (
-    <ConfirmDialog open={alert !== null} title={`Marketplaces for ${alert?.search_query ?? "this search"}`} confirm="Save"
+    <ConfirmDialog open={alert !== null} title={`Marketplaces to check for ${alert?.search_query ?? "this search"}`} confirm="Save"
       busy={save.isPending} confirmDisabled={!changed} maxWidth="sm" onClose={close} onConfirm={() => save.mutate(chosen)}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-        A marketplace you turn on starts quietly: its next check saves the listings it has now without posting them, and
-        later checks post only new listings. A marketplace you turn off is no longer checked; its saved listings and posts
-        stay. This does what /marketplaces does in Discord.
+        Choose the marketplaces this search checks. Nothing changes until you save; Save applies your choice from the
+        search's next check. A marketplace you turn on starts quietly: its next check saves the listings it has now without
+        posting them, and later checks post only new listings. A marketplace you turn off is no longer checked; its saved
+        listings and posts stay. With none turned on, the search is paused. This does what /marketplaces does in Discord.
       </Typography>
       <Box sx={{ display: "grid", gap: 0.5 }}>
         {ORDER.map((source) => (
@@ -68,7 +69,11 @@ export function MarketplacesDialog({ alert, onClose }: Props) {
           </Box>
         ))}
       </Box>
-      {!chosen.some(searched) && (
+      {chosen.length === 0 ? (
+        <Alert severity="warning" sx={{ mt: 2 }}>
+          With no marketplace chosen, this search is paused: it checks nothing and posts nothing until you turn one on.
+        </Alert>
+      ) : !chosen.some(searched) && (
         <Alert severity="warning" sx={{ mt: 2 }}>This search checks no marketplace the bot searches, so it posts nothing.</Alert>
       )}
       {save.isError && <Alert severity="error" sx={{ mt: 2 }}>{errorMessage(save.error)}</Alert>}

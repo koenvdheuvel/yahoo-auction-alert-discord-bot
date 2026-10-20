@@ -52,7 +52,7 @@ function RulesState({ draft }: { draft: Draft }) {
 
 /** The counts for one search, or for all of them. `stacked` puts one per line, with full dates. */
 function Facts({ alert, totals, guildName, stacked = false }: Omit<Props, "draft" | "actions"> & { stacked?: boolean }) {
-  const lastChecked = alert?.last_seen_at;
+  const lastSeen = alert?.last_seen_at;
   // The marketplaces the search checks, among those the bot searches at all.
   const enabled = useSession().data?.enabled_sources;
   const searched = alert ? alert.sources.filter((source) => !enabled || enabled.includes(source)).map(sourceName) : [];
@@ -64,11 +64,11 @@ function Facts({ alert, totals, guildName, stacked = false }: Omit<Props, "draft
           <Fact value={searched.length ? searched.join(", ") : "Nothing"} tone={searched.length ? undefined : "warning.main"}>searched</Fact>
           <Fact value={formatCount(alert.listing_count)}>{alert.listing_count === 1 ? "listing" : "listings"}</Fact>
           <Fact value={formatCount(alert.review_count)} tone={alert.review_count ? "warning.main" : undefined}>need review</Fact>
-          {lastChecked && (stacked ? (
-            <Fact value={formatRelative(lastChecked)}>last checked, {formatDateTime(lastChecked)}</Fact>
+          {lastSeen && (stacked ? (
+            <Fact value={formatRelative(lastSeen)}>last listing seen, {formatDateTime(lastSeen)}</Fact>
           ) : (
-            <Tooltip title={formatDateTime(lastChecked)}>
-              <span><Fact value={formatRelative(lastChecked)}>last checked</Fact></span>
+            <Tooltip title={formatDateTime(lastSeen)}>
+              <span><Fact value={formatRelative(lastSeen)}>last listing seen</Fact></span>
             </Tooltip>
           ))}
         </>

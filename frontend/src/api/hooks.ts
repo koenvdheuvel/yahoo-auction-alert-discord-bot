@@ -254,11 +254,13 @@ export function useCandidates(query: CandidateQuery) {
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.next_cursor,
     staleTime: 30_000,
-    // While another filter loads, keep showing the previous results of the same search
-    // instead of flashing placeholders; another search or server starts empty.
-    placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey[1].alertId === query.alertId && previousQuery.queryKey[1].guildId === query.guildId
-        ? previous : undefined,
+    // While another filter loads, keep showing the previous results of the same search or server
+    // instead of flashing placeholders; another search, channel or server starts empty.
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey[1];
+      return before?.alertId === query.alertId && before.guildId === query.guildId && before.channelId === query.channelId
+        ? previous : undefined;
+    },
   });
 }
 

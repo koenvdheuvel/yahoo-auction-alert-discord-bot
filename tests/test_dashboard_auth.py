@@ -665,6 +665,14 @@ class DiscordSignInTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 404)
         response = await self.client.get("/api/candidates", params={"guild_id": GUILD_A})
         self.assertEqual([row["id"] for row in (await response.json())["items"]], [mine])
+        # A channel filter cannot reach another server's rows, and its facet never lists that server's channels.
+        other_channel = self.alert_b["channel_id"]
+        stolen = await (await self.client.get("/api/candidates", params={"channel_id": other_channel, "facets": "1"})).json()
+        self.assertEqual((stolen["items"], stolen["total"]), ([], 0))
+        mine_only = await (await self.client.get("/api/candidates", params={"facets": "1"})).json()
+        self.assertEqual([row["id"] for row in mine_only["facets"]["channel"]], [str(self.alert_a["channel_id"])])
+        response = await self.client.get("/api/candidates", params={"alert_id": a, "guild_id": GUILD_B})
+        self.assertEqual(response.status, 404)
         await check("preview", await self.client.post("/api/preview", json={
             "ruleset": default_ruleset(), "title": "x", "alert_id": b}, headers=self.headers))
         await check("replay", await self.client.post("/api/replay", json={

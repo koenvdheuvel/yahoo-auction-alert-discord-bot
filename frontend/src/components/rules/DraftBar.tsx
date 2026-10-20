@@ -2,7 +2,6 @@ import CheckCircleOutlined from "@mui/icons-material/CheckCircleOutlined";
 import CheckOutlined from "@mui/icons-material/CheckOutlined";
 import ErrorOutlined from "@mui/icons-material/ErrorOutlined";
 import ReplayOutlined from "@mui/icons-material/ReplayOutlined";
-import ScienceOutlined from "@mui/icons-material/ScienceOutlined";
 import UndoOutlined from "@mui/icons-material/UndoOutlined";
 import WarningAmberOutlined from "@mui/icons-material/WarningAmberOutlined";
 import Box from "@mui/material/Box";
@@ -39,7 +38,6 @@ interface Props {
   canChange: boolean;
   publishing: boolean;
   onPublish: () => void;
-  onTestTitle: () => void;
   onReplay: () => void;
 }
 
@@ -86,7 +84,7 @@ function draftStatus({ draft, alert, checking, checkFailed, invalid, replayedAt 
 
 /** The draft's state and its actions, kept at the bottom of the Rules tab. */
 export function DraftBar(props: Props) {
-  const { draft, alert, checkFailed, invalid, canPublish, canChange, publishing, onPublish, onTestTitle, onReplay } = props;
+  const { draft, alert, checkFailed, invalid, canPublish, canChange, publishing, onPublish, onReplay } = props;
   const compact = useCompact();
   const phone = usePhone();
   const keyboard = useKeyboardOpen();
@@ -124,7 +122,6 @@ export function DraftBar(props: Props) {
         </Box>
         <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1 }}>
           {draft.edited && !draft.outdated && <Button color="inherit" onClick={draft.discard}>Discard changes</Button>}
-          <Button variant="outlined" color="inherit" onClick={onTestTitle}>Test a title</Button>
           {alert && <Button variant="outlined" color="inherit" onClick={onReplay} disabled={Boolean(invalid)}>Replay draft</Button>}
           {publish}
         </Stack>
@@ -134,7 +131,7 @@ export function DraftBar(props: Props) {
 
   // Narrow screens get one row: a short status, ⋮ for the other actions, and Publish where a thumb reaches it.
   // The bar steps aside while the on-screen keyboard is up, so it never covers the field being typed in. Phones
-  // also hide it when there is nothing to do; Test a title is in the top bar and Replay in the bottom bar.
+  // also hide it when there is nothing to do. Test a title is in the top bar and Replay in the bottom bar.
   const idle = !draft.edited && !draft.outdated && invalid === null && checkFailed === null;
   const hidden = keyboard || (phone && idle);
   const actions: MoreAction[] = [
@@ -143,7 +140,6 @@ export function DraftBar(props: Props) {
       { label: "Discard it", icon: <UndoOutlined fontSize="small" />, onSelect: draft.discard },
     ] : []),
     ...(alert ? [{ label: "Replay draft", icon: <ReplayOutlined fontSize="small" />, onSelect: onReplay, disabled: invalid !== null }] : []),
-    { label: "Test a title", icon: <ScienceOutlined fontSize="small" />, onSelect: onTestTitle },
     ...(draft.edited && !draft.outdated ? [{ label: "Discard changes", icon: <UndoOutlined fontSize="small" />, onSelect: draft.discard }] : []),
   ];
   return (
@@ -155,8 +151,8 @@ export function DraftBar(props: Props) {
         <Box aria-live="polite">{status.text}</Box>
       </Box>
       {/* The status column may shrink to nothing, so a long status is cut short instead of widening the page. */}
-      <Box sx={{ display: hidden ? "none" : "grid", gridTemplateColumns: `minmax(0, 1fr) auto${alert ? " auto" : ""}`, alignItems: "center",
-        gap: 1 }}>
+      <Box sx={{ display: hidden ? "none" : "grid", gridTemplateColumns: `minmax(0, 1fr)${actions.length ? " auto" : ""}${alert ? " auto" : ""}`,
+        alignItems: "center", gap: 1 }}>
         {/* Screen readers get the whole status above. */}
         <Box aria-hidden="true" sx={{ minWidth: 0, display: "flex", alignItems: "center", gap: 0.75 }}>
           {status.icon}
@@ -164,11 +160,13 @@ export function DraftBar(props: Props) {
             {status.short}
           </Typography>
         </Box>
-        <MoreActions label="More draft actions" title={title} actions={actions} detail={
-          <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
-            {status.text}{alert && !canChange ? ` ${NO_PERMISSION}.` : ""}
-          </Typography>
-        } />
+        {actions.length > 0 && (
+          <MoreActions label="More draft actions" title={title} actions={actions} detail={
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 0.5 }}>
+              {status.text}{alert && !canChange ? ` ${NO_PERMISSION}.` : ""}
+            </Typography>
+          } />
+        )}
         {publish}
       </Box>
     </Box>

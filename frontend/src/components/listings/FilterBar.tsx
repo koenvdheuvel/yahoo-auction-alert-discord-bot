@@ -22,21 +22,33 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useId, useState, type ReactNode, type RefObject } from "react";
 
-import type { Facets, Source, Verdict } from "../../api/types";
+import type { AlertSummary, Facets, Source, Verdict } from "../../api/types";
+import { channelLabel } from "../../lib/channels";
 import { formatCount } from "../../lib/format";
 import { usePhone } from "../../lib/responsive";
 import { SOURCES, VERDICTS } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import { SheetDialog } from "../common/Sheet";
-import type { ListingFilters } from "../views/SearchView";
+import type { ListingFilters } from "../../lib/listingFilters";
 
 export type View = "grid" | "list";
+
+/** Which of a server's searches and channels its listings are narrowed to; "" is all of them. */
+export interface ScopeFilter {
+  /** The server's registered searches. */
+  searches: AlertSummary[];
+  alertId: string;
+  channelId: string;
+  onChange: (next: { alertId: string; channelId: string }) => void;
+}
 
 interface Props {
   filters: ListingFilters;
   onFilters: (next: ListingFilters) => void;
   facets: Facets | undefined;
   searchRef: RefObject<HTMLInputElement | null>;
+  /** Only for a server's listings: one search's own listings are already scoped to it. */
+  scope?: ScopeFilter;
 }
 
 // Show "All marketplaces" in the field instead of an empty box under a floating label.
@@ -58,6 +70,47 @@ function verdictChoices(facets: Facets | undefined): Choice<Verdict | "">[] {
   const any = facets ? verdicts.reduce((sum, verdict) => sum + facets.verdict[verdict], 0) : undefined;
   return [{ value: "", label: "Any decision", count: any },
     ...verdicts.map((verdict) => ({ value: verdict, label: VERDICTS[verdict], count: facets?.verdict[verdict] }))];
+}
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/**
+ * Every channel of the server that has listings or searches. Names come from the searches and from
+ * the archive's own channel counts, which also cover channels whose searches were unregistered.
+ */
+function channelChoices(scope: ScopeFilter, facets: Facets | undefined): Choice<string>[] {
+  const names = new Map<string, string | null>();
+  for (const search of scope.searches) names.set(search.channel_id, search.channel_name);
+  const counts = new Map<string, number>();
+  for (const channel of facets?.channel ?? []) {
+    names.set(channel.id, channel.name ?? names.get(channel.id) ?? null);
+    counts.set(channel.id, channel.count);
+  }
+  if (scope.channelId && !names.has(scope.channelId)) names.set(scope.channelId, null);
+  const choices = [...names].map(([id, name]): Choice<string> =>
+    ({ value: id, label: channelLabel(id, name), count: facets ? counts.get(id) ?? 0 : undefined }));
+  choices.sort((left, right) => collator.compare(left.label, right.label));
+  const all = facets ? facets.channel.reduce((sum, channel) => sum + channel.count, 0) : undefined;
+  return [{ value: "", label: "All channels", count: all }, ...choices];
+}
+
+/** The server's registered searches, narrowed to the picked channel. Searches of one text in two channels show their channel. */
+function searchChoices(scope: ScopeFilter): Choice<string>[] {
+  const named = scope.searches.filter((search) => !scope.channelId || search.channel_id === scope.channelId);
+  const choices = named.map((search): Choice<string> => ({ value: search.id,
+    label: scope.channelId ? search.search_query : `${search.search_query} · ${channelLabel(search.channel_id, search.channel_name)}` }));
+  // A search picked before the list of searches arrived still shows as picked.
+  if (scope.alertId && !named.some((search) => search.id === scope.alertId)) {
+    choices.push({ value: scope.alertId, label: "Selected search" });
+  }
+  choices.sort((left, right) => collator.compare(left.label, right.label));
+  return [{ value: "", label: "All searches" }, ...choices];
+}
+
+/** Moving to another channel drops a picked search that is not in it. */
+function pickChannel(scope: ScopeFilter, channelId: string) {
+  const search = scope.searches.find((item) => item.id === scope.alertId);
+  scope.onChange({ alertId: !channelId || search?.channel_id === channelId ? scope.alertId : "", channelId });
 }
 
 interface SheetProps<T extends string> {
@@ -113,17 +166,31 @@ function ChipLabel({ children }: { children: ReactNode }) {
 }
 
 /** Phones: the search on its own row, then the filters as chips in a row that scrolls sideways. */
-function PhoneFilters({ filters, onFilters, facets, searchField }: Omit<Props, "searchRef"> & { searchField: ReactNode }) {
-  const [sheet, setSheet] = useState<"source" | "verdict" | null>(null);
+function PhoneFilters({ filters, onFilters, facets, scope, searchField }: Omit<Props, "searchRef"> & { searchField: ReactNode }) {
+  const [sheet, setSheet] = useState<"source" | "verdict" | "search" | "channel" | null>(null);
   const set = (changes: Partial<ListingFilters>) => onFilters({ ...filters, ...changes });
   const verdicts = verdictChoices(facets);
   const verdict = verdicts.find((choice) => choice.value === filters.verdict)!;
   const source = filters.source ? SOURCES[filters.source] : "All marketplaces";
+  const searches = scope ? searchChoices(scope) : [];
+  const channels = scope ? channelChoices(scope, facets) : [];
+  const search = searches.find((choice) => choice.value === scope?.alertId);
+  const channel = channels.find((choice) => choice.value === scope?.channelId);
   return (
     <Box sx={{ display: "grid", gap: 0.5 }}>
       {searchField}
       <Box role="group" aria-label="Filters" sx={{ display: "flex", gap: 1, overflowX: "auto", mx: -2, px: 2, py: 0.5,
         scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
+        {scope && search && channel && (
+          <>
+            <Chip variant={scope.alertId ? "filled" : "outlined"} color={scope.alertId ? "primary" : "default"} sx={chip}
+              label={<ChipLabel><Box component="span" sx={{ display: "inline-block", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{search.label}</Box></ChipLabel>}
+              aria-label={`Search: ${search.label}`} aria-haspopup="dialog" onClick={() => setSheet("search")} />
+            <Chip variant={scope.channelId ? "filled" : "outlined"} color={scope.channelId ? "primary" : "default"} sx={chip}
+              label={<ChipLabel>{channel.label}</ChipLabel>} aria-label={`Channel: ${channel.label}`} aria-haspopup="dialog"
+              onClick={() => setSheet("channel")} />
+          </>
+        )}
         <Chip variant={filters.source ? "filled" : "outlined"} color={filters.source ? "primary" : "default"} sx={chip}
           label={<ChipLabel>{source}</ChipLabel>} aria-label={`Marketplace: ${source}`} aria-haspopup="dialog"
           onClick={() => setSheet("source")} />
@@ -146,11 +213,19 @@ function PhoneFilters({ filters, onFilters, facets, searchField }: Omit<Props, "
         value={filters.source} onPick={(value) => set({ source: value })} />
       <ChoiceSheet open={sheet === "verdict"} onClose={() => setSheet(null)} title="Decision" choices={verdicts}
         value={filters.verdict} onPick={(value) => set({ verdict: value })} />
+      {scope && (
+        <>
+          <ChoiceSheet open={sheet === "search"} onClose={() => setSheet(null)} title="Search" choices={searches}
+            value={scope.alertId} onPick={(alertId) => scope.onChange({ alertId, channelId: scope.channelId })} />
+          <ChoiceSheet open={sheet === "channel"} onClose={() => setSheet(null)} title="Channel" choices={channels}
+            value={scope.channelId} onPick={(channelId) => pickChannel(scope, channelId)} />
+        </>
+      )}
     </Box>
   );
 }
 
-export function FilterBar({ filters, onFilters, facets, searchRef }: Props) {
+export function FilterBar({ filters, onFilters, facets, searchRef, scope }: Props) {
   const phone = usePhone();
   const set = (changes: Partial<ListingFilters>) => onFilters({ ...filters, ...changes });
   const searchField = (
@@ -177,10 +252,30 @@ export function FilterBar({ filters, onFilters, facets, searchRef }: Props) {
       }}
     />
   );
-  if (phone) return <PhoneFilters filters={filters} onFilters={onFilters} facets={facets} searchField={searchField} />;
+  if (phone) return <PhoneFilters filters={filters} onFilters={onFilters} facets={facets} scope={scope} searchField={searchField} />;
+  const channels = scope ? channelChoices(scope, facets) : [];
   return (
     <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.5, alignItems: "center" }}>
       {searchField}
+      {scope && (
+        <>
+          <TextField select label="Search" value={scope.alertId} sx={{ minWidth: 168, maxWidth: 280 }} slotProps={selectSlots}
+            onChange={(event) => scope.onChange({ alertId: event.target.value, channelId: scope.channelId })}>
+            {searchChoices(scope).map((choice) => <MenuItem key={choice.value} value={choice.value}>{choice.label}</MenuItem>)}
+          </TextField>
+          <TextField select label="Channel" value={scope.channelId} sx={{ minWidth: 168, maxWidth: 280 }}
+            slotProps={{ inputLabel: { shrink: true }, select: { displayEmpty: true,
+              renderValue: (value) => channels.find((choice) => choice.value === value)?.label } }}
+            onChange={(event) => pickChannel(scope, event.target.value)}>
+            {channels.map((choice) => (
+              <MenuItem key={choice.value} value={choice.value} sx={{ gap: 2, justifyContent: "space-between" }}>
+                {choice.label}
+                {choice.count !== undefined && <Box component="span" sx={{ color: "text.secondary", ...figures }}>{formatCount(choice.count)}</Box>}
+              </MenuItem>
+            ))}
+          </TextField>
+        </>
+      )}
       <TextField select label="Marketplace" value={filters.source} sx={{ minWidth: 168 }} slotProps={selectSlots}
         onChange={(event) => set({ source: event.target.value as Source | "" })}>
         {sourceChoices().map((choice) => <MenuItem key={choice.value} value={choice.value}>{choice.label}</MenuItem>)}
@@ -222,7 +317,7 @@ interface ViewProps {
 export function ViewOptions({ latest, onLatest, view, onView }: ViewProps) {
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-      <Tooltip title="When a listing's decision changes, the earlier decision stays in history. Turn this on to list those too.">
+      <Tooltip title="When a listing's decision changes, the earlier decision stays in history. Turn this on to list those too; the count then counts decisions, so one listing can appear more than once.">
         <FormControlLabel
           control={<Switch size="small" checked={!latest} onChange={(event) => onLatest(!event.target.checked)} />}
           label="Earlier decisions"

@@ -7,6 +7,7 @@ import Typography from "@mui/material/Typography";
 import { memo, type MouseEvent } from "react";
 
 import type { Candidate } from "../../api/types";
+import { channelLabel } from "../../lib/channels";
 import { formatDateTime, formatPrice, formatRelative, safeUrl } from "../../lib/format";
 import { longPressable, useLongPress } from "../../lib/gestures";
 import { listingTitle, surprisingNormalization } from "../../lib/listing";
@@ -26,10 +27,34 @@ interface Props {
   compact: boolean;
   /** Touch screens: a tap anywhere on the listing shows its details, so a stray tap does not leave the dashboard. */
   touch: boolean;
+  /** Name the search and channel the listing belongs to; not needed where every listing is one search's. */
+  owner: boolean;
   onActivate: (index: number) => void;
   onOpen: (index: number) => void;
   /** A long press: the listing's actions. */
   onMenu: (index: number) => void;
+}
+
+/** Where a listing was saved: its search, which may have been unregistered since, and its channel. */
+function ownership(candidate: Candidate) {
+  const channel = channelLabel(candidate.channel_id, candidate.channel_name);
+  const registered = candidate.alert_id !== null;
+  return {
+    search: `Search: ${candidate.search_query}`,
+    channel: registered ? channel : `Unregistered search · ${channel}`,
+    spoken: `Search ${candidate.search_query}${registered ? "" : " (unregistered)"} in ${channel}.`,
+  };
+}
+
+/** The search on one line and the channel under it, so a long search text never hides the channel. */
+function Owner({ candidate }: { candidate: Candidate }) {
+  const { search, channel } = ownership(candidate);
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Typography variant="caption" color="textSecondary" component="p" noWrap title={search}>{search}</Typography>
+      <Typography variant="caption" color="textSecondary" component="p" noWrap title={channel}>{channel}</Typography>
+    </Box>
+  );
 }
 
 function Seen({ candidate }: { candidate: Candidate }) {
@@ -52,12 +77,12 @@ function inside(event: MouseEvent): boolean {
 const clamp = { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" } as const;
 
 export const ListingFrame = memo(function ListingFrame(props: Props) {
-  const { candidate, index, layout, active, compact, touch, onActivate, onOpen, onMenu } = props;
+  const { candidate, index, layout, active, compact, touch, owner, onActivate, onOpen, onMenu } = props;
   const title = listingTitle(candidate);
   const url = safeUrl(candidate.payload.url);
   const normalized = surprisingNormalization(candidate);
   const tab = active ? 0 : -1;
-  const summary = `${title}. ${VERDICTS[candidate.verdict]}.`;
+  const summary = `${title}. ${VERDICTS[candidate.verdict]}.${owner ? ` ${ownership(candidate).spoken}` : ""}`;
   const press = useLongPress(() => onMenu(index));
 
   const titleText = url && !touch ? (
@@ -103,6 +128,7 @@ export const ListingFrame = memo(function ListingFrame(props: Props) {
               {` · ${sourceName(candidate.source)} · ${formatRelative(candidate.observed_at)}`}
             </Typography>
           </Box>
+          {owner && <Owner candidate={candidate} />}
         </Box>
       </Box>
     );
@@ -120,6 +146,7 @@ export const ListingFrame = memo(function ListingFrame(props: Props) {
           <Typography variant="caption" color="textSecondary" component="p" sx={figures}>
             {sourceName(candidate.source)} {candidate.external_id}
           </Typography>
+          {owner && <Owner candidate={candidate} />}
         </Box>
         <Box><DecisionButton decision={candidate.decision} tabIndex={tab} /></Box>
         <Typography variant="body2" sx={{ fontWeight: 650, ...figures }}>{formatPrice(candidate.payload.price)}</Typography>
@@ -144,6 +171,7 @@ export const ListingFrame = memo(function ListingFrame(props: Props) {
         {normalized && (
           <Typography variant="caption" color="textSecondary" noWrap title={`Compared title: ${normalized}`}>{normalized}</Typography>
         )}
+        {owner && <Owner candidate={candidate} />}
         {/* Frames in a row share a height; pinning the price down lines it up across the row. */}
         <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "baseline", mt: "auto" }}>
           <Typography variant="body2" sx={{ fontWeight: 650, ...figures }}>{formatPrice(candidate.payload.price)}</Typography>

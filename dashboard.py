@@ -806,6 +806,7 @@ class DashboardServer:
         query = request.query
         alert_id = identifier(query["alert_id"], "alert_id") if query.get("alert_id") else None
         guild_id = identifier(query["guild_id"], "guild_id") if query.get("guild_id") else None
+        channel_id = identifier(query["channel_id"], "channel_id") if query.get("channel_id") else None
         search = query.get("search", "")
         if len(search) > 256:
             raise ReviewValidation("Search must contain at most 256 characters")
@@ -816,7 +817,16 @@ class DashboardServer:
             limit=_whole_number(query, "limit", 50, 1, 100),
             offset=_whole_number(query, "offset", 0, 0, 10 ** 7),
             cursor=query.get("cursor") or None, latest=_flag(query, "latest"), facets=_flag(query, "facets"),
-            guilds=self.guilds(request), guild_id=guild_id)
+            guilds=self.guilds(request), guild_id=guild_id, channel_id=channel_id)
+        # Channel names, where Discord's cache has them, for each listing and for the channel filter's choices.
+        facet_channels = result.get("facets", {}).get("channel", [])
+        names = await self.channel_names(
+            [{"channel_id": row["id"], "guild_id": guild_id} for row in facet_channels]
+            + [{"channel_id": item["channel_id"], "guild_id": item["guild_id"]} for item in result["items"]])
+        for row in facet_channels:
+            row["name"] = names.get(row["id"])
+        for item in result["items"]:
+            item["channel_name"] = names.get(item["channel_id"])
         # The stored listing behind each candidate, so the page can offer 🔔 for it. Filtered
         # listings were never stored, so they have none.
         user = request[SESSION].user

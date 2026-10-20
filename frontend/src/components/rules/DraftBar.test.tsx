@@ -23,7 +23,7 @@ function draft(changes: Partial<Draft> = {}): Draft {
 }
 
 function show(current: Draft, canChange = true) {
-  const actions = { onPublish: vi.fn(), onTestTitle: vi.fn(), onReplay: vi.fn() };
+  const actions = { onPublish: vi.fn(), onReplay: vi.fn() };
   render(
     <ThemeProvider theme={theme}>
       <input aria-label="Group name" />
@@ -39,20 +39,34 @@ afterEach(() => {
 });
 
 describe("DraftBar", () => {
-  it("shows the status and every action on desktop", () => {
+  it("shows the status and every action on desktop, with title tests left to the top bar", () => {
     show(draft());
     const bar = screen.getByRole("region", { name: "Draft" });
     expect(within(bar).getByText("Unpublished changes to version 4")).toBeInTheDocument();
-    for (const name of ["Discard changes", "Test a title", "Replay draft", "Publish"]) {
+    for (const name of ["Discard changes", "Replay draft", "Publish"]) {
       expect(within(bar).getByRole("button", { name })).toBeInTheDocument();
     }
+    expect(within(bar).queryByRole("button", { name: "Test a title" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the one place to keep or discard an outdated draft in the bar, with Publish off", async () => {
+    const user = userEvent.setup();
+    const current = draft({ outdated: true });
+    show(current);
+    const bar = screen.getByRole("region", { name: "Draft" });
+    expect(within(bar).getByText("Version 4 was published after you started this draft.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Keep my draft" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Discard it" })).toHaveLength(1);
+    expect(within(bar).getByRole("button", { name: "Publish" })).toBeDisabled();
+    await user.click(within(bar).getByRole("button", { name: "Keep my draft" }));
+    expect(current.rebase).toHaveBeenCalled();
   });
 
   it("is one row on phones, with the other actions in a sheet and the whole status for screen readers", async () => {
     setScreen(390);
     const user = userEvent.setup();
     const current = draft();
-    const { onTestTitle } = show(current);
+    const { onReplay } = show(current);
     const bar = screen.getByRole("region", { name: "Draft" });
     expect(within(bar).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent))
       .toEqual(["More draft actions", "Publish"]);
@@ -63,8 +77,8 @@ describe("DraftBar", () => {
     await user.click(within(bar).getByRole("button", { name: "More draft actions" }));
     const sheet = screen.getByRole("dialog", { name: "Unpublished changes to version 4" });
     expect(within(sheet).getByText("Valid. Not replayed yet.")).toBeInTheDocument();
-    await user.click(within(sheet).getByRole("button", { name: "Test a title" }));
-    expect(onTestTitle).toHaveBeenCalled();
+    await user.click(within(sheet).getByRole("button", { name: "Replay draft" }));
+    expect(onReplay).toHaveBeenCalled();
     // The page behind a sheet is hidden from screen readers until the sheet has slid away.
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
@@ -80,7 +94,7 @@ describe("DraftBar", () => {
     show(current);
     await user.click(screen.getByRole("button", { name: "More draft actions" }));
     expect(screen.getAllByRole("menuitem").map((item) => item.textContent))
-      .toEqual(["Keep my draft", "Discard it", "Replay draft", "Test a title"]);
+      .toEqual(["Keep my draft", "Discard it", "Replay draft"]);
     await user.click(screen.getByRole("menuitem", { name: "Keep my draft" }));
     expect(current.rebase).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();

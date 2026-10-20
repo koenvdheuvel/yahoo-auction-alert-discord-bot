@@ -508,10 +508,48 @@ class ReviewRepositoryTests(unittest.IsolatedAsyncioTestCase):
         await self.repository.archive_candidate(self.alert, facts("c", source="surugaya"), decision("review"))
         page = await self.repository.list_candidates(verdict="filtered", facets=True)
         self.assertEqual(page["total"], 1)
-        self.assertEqual(page["facets"], {"verdict": {"accepted": 1, "filtered": 1, "review": 1}})
+        self.assertEqual(page["facets"], {"verdict": {"accepted": 1, "filtered": 1, "review": 1},
+                                     "channel": [{"id": str(self.channel), "count": 1}]})
         mercari = await self.repository.list_candidates(source="mercari", facets=True)
-        self.assertEqual(mercari["facets"], {"verdict": {"accepted": 1, "filtered": 1, "review": 0}})
+        self.assertEqual(mercari["facets"], {"verdict": {"accepted": 1, "filtered": 1, "review": 0},
+                                       "channel": [{"id": str(self.channel), "count": 2}]})
         self.assertNotIn("facets", await self.repository.list_candidates())
+
+    async def test_identical_listings_of_two_searches_and_channels_keep_their_own_decisions_and_filters(self):
+        other_channel = 345678901234567890
+        await self.repository.register_alert(other_channel, "BABYMETAL", self.guild)
+        await self.repository.register_alert(self.channel, "second search", self.guild)
+        alerts = {(alert["channel_id"], alert["search_query"]): alert for alert in await self.repository.list_alerts()}
+        first, elsewhere, second = (alerts[(self.channel, "BABYMETAL")], alerts[(other_channel, "BABYMETAL")],
+                                    alerts[(self.channel, "second search")])
+        await self.repository.archive_candidate(first, facts("same"), decision("accepted"))
+        await self.repository.archive_candidate(elsewhere, facts("same"), decision("filtered"))
+        await self.repository.archive_candidate(second, facts("same"), decision("review"))
+        await self.repository.archive_candidate(second, facts("same"), decision("accepted"))
+
+        latest = await self.repository.list_candidates(latest=True, guild_id=self.guild)
+        self.assertEqual(sorted((row["alert_id"], row["verdict"]) for row in latest["items"]), sorted([
+            (str(first["id"]), "accepted"), (str(elsewhere["id"]), "filtered"), (str(second["id"]), "accepted")]))
+        # Earlier decisions are still there, per search.
+        self.assertEqual((await self.repository.list_candidates(latest=False, guild_id=self.guild))["total"], 4)
+        in_channel = await self.repository.list_candidates(latest=True, guild_id=self.guild, channel_id=self.channel,
+                                                           facets=True)
+        self.assertEqual(in_channel["total"], 2)
+        self.assertEqual({row["channel_id"] for row in in_channel["items"]}, {str(self.channel)})
+        # The channel facet ignores the channel filter, so every channel stays choosable; verdicts follow it.
+        self.assertEqual(in_channel["facets"]["channel"], [{"id": str(self.channel), "count": 2},
+                                                           {"id": str(other_channel), "count": 1}])
+        self.assertEqual(in_channel["facets"]["verdict"], {"accepted": 2, "filtered": 0, "review": 0})
+        one_search = await self.repository.list_candidates(first["id"], latest=True, guild_id=self.guild,
+                                                           channel_id=self.channel)
+        self.assertEqual([row["alert_id"] for row in one_search["items"]], [str(first["id"])])
+        # Filters only intersect: a search of another channel, or of another server, matches nothing or is refused.
+        self.assertEqual((await self.repository.list_candidates(first["id"], channel_id=other_channel))["total"], 0)
+        with self.assertRaises(ReviewNotFound):
+            await self.repository.list_candidates(first["id"], guild_id=self.guild + 1)
+        self.assertEqual((await self.repository.list_candidates(guild_id=self.guild + 1, channel_id=self.channel))["total"], 0)
+        with self.assertRaises(ReviewValidation):
+            await self.repository.list_candidates(channel_id="not a channel")
 
     async def test_replay_sample_is_the_latest_decisions_of_the_most_recently_seen_listings(self):
         await self.archive("accepted", "old")

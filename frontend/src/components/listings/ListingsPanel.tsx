@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 
 import type { CandidateQuery } from "../../api/client";
 import { useCandidates } from "../../api/hooks";
-import type { Candidate, Source } from "../../api/types";
+import type { AlertSummary, Candidate, Source } from "../../api/types";
 import { formatCount, safeUrl } from "../../lib/format";
 import { isTyping, useDebounced } from "../../lib/hooks";
 import { useCompact, usePhone, useTouch } from "../../lib/responsive";
@@ -15,9 +15,9 @@ import { useSearchRead } from "../../lib/searchReads";
 import { SOURCES } from "../../lib/vocabulary";
 import { figures } from "../../theme";
 import type { TitleSeed } from "../TitleTestDialog";
-import type { ListingFilters } from "../views/SearchView";
+import type { ListingFilters } from "../../lib/listingFilters";
 import { EmptyState, LoadError } from "../common/Feedback";
-import { FilterBar, LayoutToggle, ViewOptions, type View } from "./FilterBar";
+import { FilterBar, LayoutToggle, ViewOptions, type ScopeFilter, type View } from "./FilterBar";
 import { ListingActions } from "./ListingActions";
 import { ListingDrawer } from "./ListingDrawer";
 import { ListingFrame } from "./ListingFrame";
@@ -38,29 +38,47 @@ function scrollParent(node: HTMLElement): HTMLElement | null {
 
 function seedFrom(candidate: Candidate): TitleSeed {
   const source = candidate.source in SOURCES ? candidate.source as Source : undefined;
-  return { title: candidate.title, source, price: candidate.payload.price ?? null };
+  // The title is tested in the search the listing belongs to; null when that search is gone.
+  return { title: candidate.title, source, price: candidate.payload.price ?? null, alertId: candidate.alert_id };
 }
 
 interface Props {
+  /** One search's listings. Without it the panel shows a whole server, with search and channel filters. */
   alertId: string | null;
   /** With no alert selected, the Discord server whose listings to show; null for every server. */
   guildId: string | null;
   filters: ListingFilters;
   onFilters: (next: ListingFilters) => void;
   onTestTitle: (seed: TitleSeed) => void;
+  /** A server's registered searches, for its search filter; undefined while they load. */
+  searches?: AlertSummary[];
+  /** Opens a listing's registered search. Omitted where that is not offered. */
+  onOpenSearch?: (alertId: string) => void;
+  /** Opens a listing's channel. Omitted where that is not offered. */
+  onOpenChannel?: (channelId: string) => void;
 }
 
-export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitle }: Props) {
+export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitle, searches, onOpenSearch, onOpenChannel }: Props) {
   const [view, setView] = useState<View>(() => (localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid"));
   const [held, setHeld] = useState(() => localStorage.getItem(HELD_KEY) !== null);
   const touch = useTouch();
   const phone = usePhone();
   const compact = useCompact();
   const search = useDebounced(filters.search.trim(), 300);
+  // A server's search and channel filters hold only in the server they were chosen in, and a search
+  // that is no longer registered no longer filters; one search's own listings have neither.
+  const serverWide = alertId === null;
+  const chosen = serverWide && filters.scope?.guildId === guildId ? filters.scope : null;
+  const chosenAlert = chosen && (!searches || searches.some((item) => item.id === chosen.alertId)) ? chosen.alertId : "";
+  const chosenChannel = chosen?.channelId ?? "";
   const query = useMemo<CandidateQuery>(() => ({
-    alertId, guildId: alertId ? null : guildId, search, source: filters.source, verdict: filters.verdict,
-    latest: filters.latest,
-  }), [alertId, guildId, search, filters.source, filters.verdict, filters.latest]);
+    alertId: alertId ?? (chosenAlert || null), guildId: alertId ? null : guildId, channelId: chosenChannel || null,
+    search, source: filters.source, verdict: filters.verdict, latest: filters.latest,
+  }), [alertId, guildId, chosenAlert, chosenChannel, search, filters.source, filters.verdict, filters.latest]);
+  const scope: ScopeFilter | undefined = serverWide ? {
+    searches: searches ?? [], alertId: chosenAlert, channelId: chosenChannel,
+    onChange: (next) => onFilters({ ...filters, scope: { guildId, ...next } }),
+  } : undefined;
   const candidates = useCandidates(query);
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = candidates;
   const items = useMemo(() => candidates.data?.pages.flatMap((page) => page.items) ?? [], [candidates.data]);
@@ -196,12 +214,12 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
   };
 
   const total = first?.total ?? 0;
-  const filtered = Boolean(filters.search.trim() || filters.source || filters.verdict);
+  const filtered = Boolean(filters.search.trim() || filters.source || filters.verdict || chosenAlert || chosenChannel);
   const drawerItem = drawer === null ? null : items[drawer] ?? null;
 
   return (
     <Box>
-      <FilterBar filters={filters} onFilters={onFilters} facets={first?.facets} searchRef={searchRef} />
+      <FilterBar filters={filters} onFilters={onFilters} facets={first?.facets} searchRef={searchRef} scope={scope} />
       <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 2, rowGap: 1, mt: { xs: 0.5, sm: 1.5 },
         mb: { xs: 1, sm: 1.5 }, minHeight: 40, position: "relative" }}>
         {/* Phones put the hint under the count, so both share the line with the layout buttons. */}
@@ -209,7 +227,8 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
           flex: { xs: "1 1 0", sm: "0 1 auto" }, minWidth: 0 }}>
           <Typography variant="body2" color="textSecondary" aria-live="polite" sx={figures}>
             {candidates.isSuccess && (total
-              ? `${formatCount(items.length)} of ${formatCount(total)} ${total === 1 ? "listing" : "listings"}`
+              // Earlier decisions count as decisions: a listing whose decision changed is in the list once for each.
+              ? `${formatCount(items.length)} of ${formatCount(total)} ${filters.latest ? "listing" : "decision"}${total === 1 ? "" : "s"}`
               : "")}
           </Typography>
           {items.length > 0 && !touch && (
@@ -245,7 +264,8 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
       )}
       {candidates.isSuccess && !items.length && (filtered ? (
         <EmptyState title="Nothing matches these filters" action={
-          <Button variant="outlined" color="inherit" onClick={() => onFilters({ ...filters, search: "", source: "", verdict: "" })}>
+          <Button variant="outlined" color="inherit"
+            onClick={() => onFilters({ ...filters, search: "", source: "", verdict: "", scope: null })}>
             Clear filters
           </Button>}>
           Try another search, or clear the filters to see every listing.
@@ -253,7 +273,7 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
       ) : (
         <EmptyState title="No listings yet">
           The bot saves each listing a check finds, with the decision it made. They appear here after the next check.
-          To add older posts, use Import saved history in the menu.
+          Import saved history in the menu adds older posts here as history. It does not send anything to Discord.
         </EmptyState>
       ))}
 
@@ -266,7 +286,7 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
               opacity: candidates.isPlaceholderData ? 0.55 : 1,
               "& > li": { scrollMarginTop: 120, scrollMarginBottom: 96 }, "& > li:last-of-type": { borderBottom: 0 } }}>
           {items.map((candidate, index) => (
-            <ListingFrame key={candidate.id} candidate={candidate} index={index} layout={view} compact={compact} touch={touch}
+            <ListingFrame key={candidate.id} candidate={candidate} index={index} layout={view} compact={compact} touch={touch} owner={serverWide}
               active={index === Math.min(active, items.length - 1)} onActivate={onActivate} onOpen={onOpen} onMenu={onMenu} />
           ))}
         </Box>
@@ -300,9 +320,11 @@ export function ListingsPanel({ alertId, guildId, filters, onFilters, onTestTitl
           setDrawer(null);
         }}
         onTestTitle={(candidate) => onTestTitle(seedFrom(candidate))}
+        onOpenSearch={onOpenSearch} onOpenChannel={onOpenChannel}
       />
       <ListingActions candidate={menu === null ? null : items[menu] ?? null} onClose={() => setMenu(null)}
-        onDetails={() => setDrawer(menu)} onTestTitle={(candidate) => onTestTitle(seedFrom(candidate))} />
+        onDetails={() => setDrawer(menu)} onTestTitle={(candidate) => onTestTitle(seedFrom(candidate))}
+        onOpenSearch={onOpenSearch} onOpenChannel={onOpenChannel} />
     </Box>
   );
 }

@@ -1,3 +1,7 @@
+import ExpandMore from "@mui/icons-material/ExpandMore";
+import Accordion from "@mui/material/Accordion";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import AccordionSummary from "@mui/material/AccordionSummary";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -12,7 +16,7 @@ import { useState, type ReactNode } from "react";
 
 import { api } from "../../api/client";
 import { keys, useHistoryScan } from "../../api/hooks";
-import type { AlertSummary, HistoryScan, Posting, RemovalDays } from "../../api/types";
+import type { AlertSummary, HistoryScan, Posting, RemovalDays, ScanAction } from "../../api/types";
 import { errorMessage } from "../../lib/errors";
 import { formatCount, formatPrice, formatRelative, plural } from "../../lib/format";
 import { REMOVAL_RANGES } from "../../lib/removal";
@@ -69,6 +73,7 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
   const [days, setDays] = useState<RemovalDays>(30);
   const [alertId, setAlertId] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [scanConfirmation, setScanConfirmation] = useState<number | null>(null);
   const [count, setCount] = useState("10");
   const preview = useQuery({
     queryKey: ["cleanup-preview", channelId, days, alertId],
@@ -89,9 +94,12 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
   });
   const scan = useHistoryScan(channelId);
   const startScan = useMutation({
-    mutationFn: (action: "delete_bot_posts" | "add_reactions") =>
-      api.startScan(channelId, action, action === "delete_bot_posts" ? Number(count) : undefined),
-    onSuccess: () => void client.invalidateQueries({ queryKey: keys.scan(channelId) }),
+    mutationFn: ({ action, count: confirmedCount }: { action: ScanAction; count?: number }) =>
+      api.startScan(channelId, action, confirmedCount),
+    onSuccess: () => {
+      setScanConfirmation(null);
+      void client.invalidateQueries({ queryKey: keys.scan(channelId) });
+    },
     onError: (error) => notify(errorMessage(error), "error"),
   });
 
@@ -174,9 +182,8 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
         )}
       </Section>
       <Section title="Scan recent messages" hint={<>
-        Like /cleanup and /reacttocleanup in Discord: these read the channel's latest 1,000 messages, so they also reach
-        the bot's posts that it does not track, such as posts from before the database was converted. Command answers
-        are left alone.
+        Read the channel's latest 1,000 messages to add cleanup reactions to tracked posts.
+        Deleting directly from channel history is a separate advanced operation below.
       </>}>
         {!scanAvailable && (
           <Alert severity="info" sx={{ mb: 1.5 }}>These need the bot running and connected to Discord, and it is not running with this dashboard.</Alert>
@@ -184,19 +191,31 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
         {posting && !posting.read_history && scanAvailable && (
           <Alert severity="warning" sx={{ mb: 1.5 }}>The bot needs Read Message History here to read the messages.</Alert>
         )}
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { sm: "flex-start" }, mb: 1.5 }}>
-          <TextField label="How many" value={count} onChange={(event) => setCount(event.target.value)} sx={{ width: { xs: "100%", sm: 120 } }}
-            error={!countValid} helperText={countValid ? "1 to 100" : "Enter 1 to 100"}
-            slotProps={{ htmlInput: { inputMode: "numeric" } }} />
-          <Button variant="outlined" color="error" disabled={!canManage || !scanAvailable || running || !countValid || startScan.isPending}
-            onClick={() => startScan.mutate("delete_bot_posts")} sx={{ mt: { sm: 0.25 } }}>
-            Delete the latest bot posts
-          </Button>
-          <Button variant="outlined" color="inherit" disabled={!canManage || !scanAvailable || running || startScan.isPending}
-            onClick={() => startScan.mutate("add_reactions")} sx={{ mt: { sm: 0.25 } }}>
-            Add 🗑️ to tracked posts
-          </Button>
-        </Stack>
+        <Button variant="outlined" color="inherit" disabled={!canManage || !scanAvailable || running || startScan.isPending}
+          onClick={() => startScan.mutate({ action: "add_reactions" })} sx={{ mb: 2 }}>
+          Add 🗑️ to tracked posts
+        </Button>
+        <Accordion disableGutters variant="outlined" sx={{ mb: 1.5, borderRadius: 1, "&::before": { display: "none" } }}>
+          <AccordionSummary expandIcon={<ExpandMore />}>
+            <Typography variant="subtitle2" component="span">Advanced: delete recent bot posts</Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Deletes tracked and untracked bot posts, including posts with followers. There is no preview or
+              follower protection. This ignores the search and date filters above; command responses are left alone.
+            </Alert>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { sm: "flex-start" } }}>
+              <TextField label="Maximum posts to delete" value={count} onChange={(event) => setCount(event.target.value)}
+                sx={{ width: { xs: "100%", sm: 220 } }} error={!countValid}
+                helperText={countValid ? "1 to 100, among the latest 1,000 messages" : "Enter 1 to 100"}
+                slotProps={{ htmlInput: { inputMode: "numeric" } }} />
+              <Button variant="outlined" color="error" disabled={!canManage || !scanAvailable || running || !countValid || startScan.isPending}
+                onClick={() => setScanConfirmation(countValue)} sx={{ mt: { sm: 0.25 } }}>
+                Delete the latest bot posts
+              </Button>
+            </Stack>
+          </AccordionDetails>
+        </Accordion>
         {scan.data?.scan && <ScanResult scan={scan.data.scan} />}
       </Section>
       <ConfirmDialog open={confirming} title={`Remove ${plural(Math.min(data?.posts.length ?? 0, data?.limit ?? 0), "post")}?`}
@@ -206,6 +225,26 @@ export function CleanupPanel({ channelId, channelName, searches, canManage, post
           The posts are deleted from #{channelName} and cannot be brought back. The listings stay saved, and a later
           change of one is posted again.
         </Typography>
+      </ConfirmDialog>
+      <ConfirmDialog open={scanConfirmation !== null}
+        title={`Delete up to ${plural(scanConfirmation ?? 0, "bot post")} from #${channelName}?`}
+        confirm="Delete bot posts" busy={startScan.isPending} danger
+        confirmDisabled={!canManage || !scanAvailable || running}
+        onClose={() => setScanConfirmation(null)}
+        onConfirm={() => {
+          if (scanConfirmation !== null && canManage && scanAvailable && !running) {
+            startScan.mutate({ action: "delete_bot_posts", count: scanConfirmation });
+          }
+        }}>
+        <Typography variant="body2" sx={{ mb: 1.5 }}>
+          This scans the latest 1,000 messages in #{channelName} and permanently deletes up to {scanConfirmation} of
+          the bot's posts. It includes untracked posts and posts with followers, regardless of the search and date
+          filters above. Command responses are kept.
+        </Typography>
+        <Alert severity="warning">
+          There is no preview, follower protection, or undo. Saved listings and subscriptions stay, and later
+          listing changes can be posted again.
+        </Alert>
       </ConfirmDialog>
     </Box>
   );

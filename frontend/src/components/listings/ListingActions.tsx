@@ -1,5 +1,7 @@
 import InfoOutlined from "@mui/icons-material/InfoOutlined";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
+import SearchOutlined from "@mui/icons-material/SearchOutlined";
+import Tag from "@mui/icons-material/Tag";
 import NotificationsActive from "@mui/icons-material/NotificationsActive";
 import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
 import OpenInNew from "@mui/icons-material/OpenInNew";
@@ -10,6 +12,7 @@ import { useState } from "react";
 
 import { useSession } from "../../api/hooks";
 import type { Candidate } from "../../api/types";
+import { channelLabel } from "../../lib/channels";
 import { formatPrice, safeUrl } from "../../lib/format";
 import { listingTitle } from "../../lib/listing";
 import { sourceName } from "../../lib/vocabulary";
@@ -26,10 +29,14 @@ interface Props {
   onClose: () => void;
   onDetails: () => void;
   onTestTitle: (candidate: Candidate) => void;
+  /** Opens the registered search the listing belongs to. */
+  onOpenSearch?: (alertId: string) => void;
+  /** Opens the channel the listing was saved in. */
+  onOpenChannel?: (channelId: string) => void;
 }
 
 /** A listing's actions as a sheet, for a long press on the listing. */
-export function ListingActions({ candidate, onClose, onDetails, onTestTitle }: Props) {
+export function ListingActions({ candidate, onClose, onDetails, onTestTitle, onOpenSearch, onOpenChannel }: Props) {
   const notify = useNotify();
   const follow = useFollow();
   // 🔔 follows a stored listing; listings the bot filtered were never stored.
@@ -45,6 +52,12 @@ export function ListingActions({ candidate, onClose, onDetails, onTestTitle }: P
   const actions: SheetAction[] = [{ label: "Show details", icon: <InfoOutlined />, onSelect: onDetails }];
   if (url) actions.push({ label: `Open on ${sourceName(shown.source)}`, icon: <OpenInNew />, href: url });
   actions.push({ label: "Test with the draft", icon: <ScienceOutlined />, onSelect: () => onTestTitle(shown) });
+  const channel = channelLabel(shown.channel_id, shown.channel_name);
+  if (shown.alert_id !== null && onOpenSearch) {
+    const alertId = shown.alert_id;
+    actions.push({ label: `Open search ${shown.search_query}`, icon: <SearchOutlined />, onSelect: () => onOpenSearch(alertId) });
+  }
+  if (onOpenChannel) actions.push({ label: `Open ${channel}`, icon: <Tag />, onSelect: () => onOpenChannel(shown.channel_id) });
   if (itemId) {
     actions.push({ label: followLabel(following), icon: following ? <NotificationsActive /> : <NotificationsOutlined />,
       onSelect: () => follow.toggle(itemId, following), disabled: follow.pending === itemId });
@@ -67,6 +80,9 @@ export function ListingActions({ candidate, onClose, onDetails, onTestTitle }: P
           <Typography variant="body2" color="textSecondary" noWrap sx={figures}>
             <Box component="span" sx={{ color: "text.primary", fontWeight: 650 }}>{formatPrice(shown.payload.price)}</Box>
             {` · ${sourceName(shown.source)}`}
+          </Typography>
+          <Typography variant="caption" color="textSecondary" noWrap>
+            {`${shown.search_query} · ${channel}${shown.alert_id === null ? " · unregistered search" : ""}`}
           </Typography>
         </Box>
       </Box>

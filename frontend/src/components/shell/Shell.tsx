@@ -44,7 +44,8 @@ import { SearchUnreadProvider } from "../searches/SearchUnreadProvider";
 import { UnregisterDialog } from "../searches/UnregisterDialog";
 import { ChannelView } from "../views/ChannelView";
 import { NotificationsView } from "../views/NotificationsView";
-import { SearchView, ServerListingsView, type ListingFilters, type StoredReplay } from "../views/SearchView";
+import { DEFAULT_LISTING_FILTERS, type ListingFilters } from "../../lib/listingFilters";
+import { SearchView, ServerListingsView, type StoredReplay } from "../views/SearchView";
 import { EverySearchView, SearchesView } from "../views/SearchesView";
 import { StatusView } from "../views/StatusView";
 import { ChannelIcon } from "./ChannelIcon";
@@ -89,7 +90,7 @@ export function Shell() {
   const [replays, setReplays] = useState<Record<string, StoredReplay>>({});
   // "Replay draft" in the Rules tab opens Replay and starts it in one step.
   const [replayRequested, setReplayRequested] = useState(false);
-  const [filters, setFilters] = useState<ListingFilters>({ search: "", source: "", verdict: "", latest: true });
+  const [filters, setFilters] = useState<ListingFilters>(DEFAULT_LISTING_FILTERS);
 
   const notifications = session?.features?.notifications ?? false;
   // The access key opens everything; the server checks channels only for Discord users.
@@ -152,10 +153,10 @@ export function Shell() {
         return { icon: <NotificationsOutlined />, title: "Your notifications", detail: guildName };
       case "search":
         return { icon: <SearchOutlined />, title: alert?.search_query ?? "Search",
-          detail: alert ? channelLabel(alert.channel_id, alert.channel_name) : null };
+          detail: alert ? [guildName, channelLabel(alert.channel_id, alert.channel_name)].filter(Boolean).join(" · ") : guildName };
       case "channel":
         return { icon: <ChannelIcon kind={channel?.kind ?? "text"} />, title: channel?.name ?? `Channel ${place.channelId}`,
-          detail: channel?.archived ? "Archived thread" : guildName };
+          detail: [guildName, channel?.archived ? "Archived thread" : null].filter(Boolean).join(" · ") || null };
       case "searches":
         return { icon: <SearchOutlined />, title: "Searches", detail: guildName };
       case "listings":
@@ -174,7 +175,7 @@ export function Shell() {
     <Tooltip title={changeable ? "" : "You need Manage Channels in its channel"}>
       <span style={{ display: "inline-flex", gap: 8 }}>
         <Button size="small" variant="outlined" startIcon={<StorefrontOutlined />} disabled={!changeable}
-          onClick={() => { setInfoOpen(false); setMarketplaces(alert); }}>Marketplaces</Button>
+          onClick={() => { setInfoOpen(false); setMarketplaces(alert); }}>Marketplaces to check</Button>
         <Button size="small" color="error" variant="outlined" startIcon={<DeleteOutlined />} disabled={!changeable}
           onClick={() => { setInfoOpen(false); setUnregistering(alert); }}>Unregister</Button>
       </span>
@@ -213,16 +214,20 @@ export function Shell() {
         onUnregister={setUnregistering} />;
     }
     if (view === "searches") {
-      return <SearchesView searches={serverSearches} channels={channels.data} onAdd={() => setAdding({ channelId: null })}
+      return <SearchesView guildId={guildId} searches={serverSearches} channels={channels.data}
+        filter={place.searchFilter} onFilterChange={(searchFilter) => navigate({ searchFilter })}
+        onAdd={() => setAdding({ channelId: null })}
         onOpen={(item) => go({ alertId: item.id })} onOpenChannel={(channelId) => go({ channelId, alertId: null })}
         onUnregister={setUnregistering} />;
     }
     if (view === "listings") {
       return <ServerListingsView guildId={guildId} guildName={guildName} totals={listingTotals} draft={draft} filters={filters}
-        onFilters={setFilters} onTestTitle={openTitleTest} />;
+        onFilters={setFilters} onTestTitle={openTitleTest} searches={alerts.isSuccess ? serverSearches : undefined}
+        onOpenSearch={(alertId) => go({ alertId })} onOpenChannel={(channelId) => go({ channelId, alertId: null })} />;
     }
     return <StatusView guildId={guildId} tab={place.statusTab} onTab={(statusTab) => { navigate({ statusTab }); toTop(); }}
-      onOpenSearch={(alertId) => go({ alertId })} onOpenChannel={(channelId) => go({ channelId, alertId: null })} />;
+      onOpenSearch={(alertId) => go({ alertId })}
+      onOpenSearches={(searchFilter) => go({ view: "searches", searchFilter, alertId: null, channelId: null, me: false })} />;
   })();
 
   const unknownChannel = channels.data?.unknown.find((item) => item.id === place.channelId) ?? null;
@@ -315,7 +320,8 @@ export function Shell() {
           setUnregistering(null);
           if (gone && place.alertId === gone.id) go({ alertId: null, channelId: gone.channel_id });
         }} />
-      <TitleTestDialog test={titleTest} alert={alert} draft={draft} onClose={() => setTitleTest((current) => current && { ...current, open: false })} />
+      <TitleTestDialog test={titleTest} alert={alert} alerts={home ? alerts.data?.alerts ?? [] : serverSearches}
+        onClose={() => setTitleTest((current) => current && { ...current, open: false })} />
       <ShortcutsDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
     </Box>
   );

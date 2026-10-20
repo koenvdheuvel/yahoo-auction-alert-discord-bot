@@ -42,6 +42,7 @@ class ReviewValidation(ValueError):
 
 
 MAX_UNREAD_SEARCHES = 200
+MAX_CHANNEL_FACETS = 200
 
 
 def _identifier(value, name, nullable=False):
@@ -558,7 +559,8 @@ class ReviewRepositoryMixin:
                                 alert_data, listing_payload, decision_payload, ruleset_version_id, origin)
 
     def _review_candidates_query(self, alert_id=None, search="", source="", verdict="", latest=False,
-                                 guilds=None, guild_id=None):
+                                 guilds=None, guild_id=None, channel_id=None):
+        """Rows within the person's servers, narrowed by every filter given: filters only ever intersect."""
         query = CandidateObservation.select()
         if guilds is not None:
             query = query.where(_in_guilds(guilds))
@@ -567,9 +569,13 @@ class ReviewRepositoryMixin:
             if guilds is not None and guild_id not in guilds:
                 raise ReviewNotFound("Server not found")
             query = query.where(_in_guilds([guild_id]))
+        if channel_id is not None:
+            query = query.where(CandidateObservation.channel_id == _identifier(channel_id, "channel_id"))
         alert = None
         if alert_id is not None:
             alert = self._review_alert(alert_id, guilds)
+            if guild_id is not None and alert.guild_id != guild_id:
+                raise ReviewNotFound("Alert no longer exists")
             query = query.where(CandidateObservation.alert == alert,
                                 CandidateObservation.channel_id == alert.channel_id,
                                 CandidateObservation.search_query == alert.search_query)
@@ -593,7 +599,8 @@ class ReviewRepositoryMixin:
         return query
 
     async def list_candidates(self, alert_id=None, search="", source="", verdict="", limit=50,
-                              offset=0, cursor=None, latest=False, facets=False, guilds=None, guild_id=None):
+                              offset=0, cursor=None, latest=False, facets=False, guilds=None, guild_id=None,
+                              channel_id=None):
         """Newest first. A cursor continues after the last row of the previous page, so new
         polls between pages neither skip nor repeat rows; offset remains available."""
         _bounded_integer(limit, "limit", 1, 500)
@@ -602,7 +609,7 @@ class ReviewRepositoryMixin:
 
         def select():
             def scoped(**changes):
-                filters = {"search": search, "source": source, "verdict": verdict}
+                filters = {"search": search, "source": source, "verdict": verdict, "channel_id": channel_id}
                 return self._review_candidates_query(alert_id, latest=latest, guilds=guilds, guild_id=guild_id,
                                                      **{**filters, **changes})
 
@@ -622,8 +629,14 @@ class ReviewRepositoryMixin:
                       "next_cursor": _encode_cursor(rows[limit - 1]) if more else None}
             if facets:
                 # Each facet counts what selecting one of its values would show.
+                channels = (scoped(channel_id=None)
+                            .select(CandidateObservation.channel_id, fn.COUNT(CandidateObservation.id).alias("count"))
+                            .group_by(CandidateObservation.channel_id)
+                            .order_by(fn.COUNT(CandidateObservation.id).desc(), CandidateObservation.channel_id)
+                            .limit(MAX_CHANNEL_FACETS))
                 result["facets"] = {
-                    "verdict": _counts(scoped(verdict=""), CandidateObservation.verdict, VERDICTS)}
+                    "verdict": _counts(scoped(verdict=""), CandidateObservation.verdict, VERDICTS),
+                    "channel": [{"id": str(channel), "count": count} for channel, count in channels.tuples()]}
             return result
         return await self._call("review_candidates", select)
 

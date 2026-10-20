@@ -17,6 +17,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 
 import { useSession } from "../../api/hooks";
 import type { Candidate } from "../../api/types";
+import { channelLabel } from "../../lib/channels";
 import { formatDateTime, formatPrice, safeUrl } from "../../lib/format";
 import { useSwipe, type Direction } from "../../lib/gestures";
 import { isTyping } from "../../lib/hooks";
@@ -37,6 +38,10 @@ interface Props {
   onNext: () => void;
   onClose: () => void;
   onTestTitle: (candidate: Candidate) => void;
+  /** Opens the registered search the listing belongs to. */
+  onOpenSearch?: (alertId: string) => void;
+  /** Opens the channel the listing was saved in. */
+  onOpenChannel?: (channelId: string) => void;
 }
 
 type Shown = Pick<Props, "candidate" | "position" | "hasPrevious" | "hasNext">;
@@ -64,7 +69,7 @@ const SLIDE_MS = 160;
  * the whole screen: a swipe sideways moves to the next or previous listing, a drag down closes it.
  */
 export function ListingDrawer(props: Props) {
-  const { onPrevious, onNext, onClose, onTestTitle } = props;
+  const { onPrevious, onNext, onClose, onTestTitle, onOpenSearch, onOpenChannel } = props;
   const phone = usePhone();
   const still = useMediaQuery("(prefers-reduced-motion: reduce)");
   const root = useRef<HTMLDivElement>(null);
@@ -207,7 +212,23 @@ export function ListingDrawer(props: Props) {
                   <Fact name="Listing ID">{candidate.external_id || "Not saved"}</Fact>
                   {typeof candidate.payload.stock === "number" && <Fact name="Stock">{candidate.payload.stock}</Fact>}
                   {candidate.payload.end_time && <Fact name="Ends">{formatDateTime(candidate.payload.end_time)}</Fact>}
-                  <Fact name="Search">{candidate.search_query}</Fact>
+                  <Fact name="Search">
+                    {candidate.alert_id !== null && onOpenSearch ? (
+                      <Link component="button" type="button" variant="body2" onClick={() => onOpenSearch(candidate.alert_id!)}
+                        sx={{ textAlign: "left", overflowWrap: "anywhere" }}>{candidate.search_query}</Link>
+                    ) : candidate.search_query}
+                    {candidate.alert_id === null && (
+                      <Typography variant="caption" color="textSecondary" component="p">
+                        This search is no longer registered. Its saved listings are kept.
+                      </Typography>
+                    )}
+                  </Fact>
+                  <Fact name="Channel">
+                    {onOpenChannel ? (
+                      <Link component="button" type="button" variant="body2" onClick={() => onOpenChannel(candidate.channel_id)}
+                        sx={{ textAlign: "left" }}>{channelLabel(candidate.channel_id, candidate.channel_name)}</Link>
+                    ) : channelLabel(candidate.channel_id, candidate.channel_name)}
+                  </Fact>
                   <Fact name="First seen">{formatDateTime(candidate.observed_at)}</Fact>
                   <Fact name="Last seen">{formatDateTime(candidate.last_seen_at)}</Fact>
                   <Fact name="Saved by">{ORIGINS[candidate.origin]}</Fact>

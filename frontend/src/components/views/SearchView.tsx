@@ -4,10 +4,10 @@ import Tabs from "@mui/material/Tabs";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 
-import type { CandidateQuery } from "../../api/client";
 import type { AlertSummary, ArchiveTotals, ReplayResult, RulesResponse } from "../../api/types";
 import { visuallyHidden } from "../../lib/a11y";
 import type { Place, Tab as TabName } from "../../lib/hooks";
+import type { ListingFilters } from "../../lib/listingFilters";
 import { useCompact } from "../../lib/responsive";
 import type { Draft } from "../../lib/useDraft";
 import { SEARCH_TABS } from "../../lib/vocabulary";
@@ -19,7 +19,6 @@ import { ReplayPanel } from "../replay/ReplayPanel";
 import { RulesPanel } from "../rules/RulesPanel";
 import { VersionsPanel } from "../versions/VersionsPanel";
 
-export type ListingFilters = Omit<CandidateQuery, "alertId" | "guildId">;
 
 export interface StoredReplay {
   alertId: string;
@@ -56,7 +55,7 @@ export function SearchView(props: Props) {
     switch (place.tab) {
       case "rules":
         return <RulesPanel alert={alert} rules={rules} draft={draft} replay={replays[alert.id] ?? null} canChange={canChange}
-          onTestTitle={() => onTestTitle()} onReplay={() => {
+          onReplay={() => {
             setReplayRequested(true);
             navigate({ tab: "replay" });
           }} />;
@@ -114,16 +113,22 @@ interface ListingsProps {
   filters: ListingFilters;
   onFilters: Dispatch<SetStateAction<ListingFilters>>;
   onTestTitle: (seed?: TitleSeed) => void;
+  /** This server's registered searches, once loaded; undefined until then. */
+  searches: AlertSummary[] | undefined;
+  onOpenSearch: (alertId: string) => void;
+  onOpenChannel: (channelId: string) => void;
 }
 
-/** Every saved listing of the server's searches. */
-export function ServerListingsView({ guildId, guildName, totals, draft, filters, onFilters, onTestTitle }: ListingsProps) {
+/** Every saved listing of the server's searches, including those of searches since unregistered. */
+export function ServerListingsView({ guildId, guildName, totals, draft, filters, onFilters, onTestTitle, searches,
+  onOpenSearch, onOpenChannel }: ListingsProps) {
   const compact = useCompact();
   return (
     <>
       {!compact && <AlertHeader alert={null} totals={totals} guildName={guildName} draft={draft} />}
       <Box sx={{ px: { xs: 2, md: 3 }, py: { xs: 2, md: 2.5 } }}>
-        <ListingsPanel alertId={null} guildId={guildId} filters={filters} onFilters={onFilters} onTestTitle={onTestTitle} />
+        <ListingsPanel alertId={null} guildId={guildId} filters={filters} onFilters={onFilters} onTestTitle={onTestTitle}
+          searches={searches} onOpenSearch={onOpenSearch} onOpenChannel={onOpenChannel} />
       </Box>
     </>
   );

@@ -8,7 +8,7 @@ import { ListingDrawer } from "./ListingDrawer";
 import { drag, setPhone } from "../../test/screen";
 
 const LISTING: Candidate = {
-  id: "1", alert_id: "5", channel_id: "20", search_query: "BABYMETAL towel", source: "mercari", external_id: "m1",
+  id: "1", alert_id: "5", channel_id: "20", guild_id: "9", channel_name: "posters", search_query: "BABYMETAL towel", source: "mercari", external_id: "m1",
   title: "BABYMETAL towel", normalized_title: "babymetal towel", payload: { url: "https://jp.mercari.com/item/m1", price: 1500 },
   decision: { verdict: "accepted", normalized_title: "babymetal towel", reasons: [] }, verdict: "accepted",
   ruleset_version_id: "4", observation_kind: "listing", origin: "live", incomplete: false,
@@ -108,5 +108,26 @@ describe("ListingDrawer on a desktop", () => {
     fireEvent.keyDown(paper, { key: "k" });
     expect(onNext).toHaveBeenCalledTimes(1);
     expect(onPrevious).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ListingDrawer ownership", () => {
+  it("opens the search and channel the listing belongs to", () => {
+    const onOpenSearch = vi.fn();
+    const onOpenChannel = vi.fn();
+    show({ onOpenSearch, onOpenChannel });
+
+    fireEvent.click(screen.getByRole("button", { name: "BABYMETAL towel" }));
+    fireEvent.click(screen.getByRole("button", { name: "#posters" }));
+    expect(onOpenSearch).toHaveBeenCalledWith("5");
+    expect(onOpenChannel).toHaveBeenCalledWith("20");
+  });
+
+  it("says when the search is no longer registered, and offers no link to it", () => {
+    show({ candidate: { ...LISTING, alert_id: null, channel_name: null }, onOpenSearch: vi.fn(), onOpenChannel: vi.fn() });
+
+    expect(screen.getByText(/no longer registered/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "BABYMETAL towel" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Channel …20" })).toBeInTheDocument();
   });
 });
