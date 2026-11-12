@@ -1,6 +1,6 @@
 # Yahoo Auction, Mercari, Surugaya, Rakuma Discord Bot
 
-A Discord bot that searches Yahoo Auction, Mercari and Rakuma through FromJapan and Surugaya on suruga-ya.jp itself, posts new listings and qualifying changes, and sends subscribed users update DMs.
+A Discord bot that searches Yahoo Auction, Mercari, Surugaya, and Rakuma through FromJapan, posts new listings and qualifying changes, and sends subscribed users update DMs.
 
 The implementation separates marketplace adapters, notification policy, SQLite persistence, durable Discord delivery, and runtime supervision. See the [architecture reference](docs/architecture.md) and [monitoring guide](docs/monitoring.md).
 
@@ -17,7 +17,7 @@ cp .env.example .env
 python main.py
 ```
 
-Configuration is validated before startup. `.env.example` lists the polling, concurrency, timeout, retry, and monitoring settings. `DATABASE_URL` is a SQLite filename, not a connection URL. The default interval is 1,800 seconds and up to four checks run concurrently. `ENABLE_YAHOO_AUCTION`, `ENABLE_MERCARI`, `ENABLE_SURUGAYA` and `ENABLE_RAKUMA` (default `true`) turn a marketplace off for the whole bot. `SURUGAYA_REQUEST_INTERVAL` (default 3) is the number of seconds between two requests to suruga-ya.jp, shared by all checks, so a Surugaya search takes at least that long per page of 24 results.
+Configuration is validated before startup. `.env.example` lists the polling, concurrency, timeout, retry, and monitoring settings. `DATABASE_URL` is a SQLite filename, not a connection URL. The default interval is 1,800 seconds and up to four checks run concurrently. `ENABLE_YAHOO_AUCTION`, `ENABLE_MERCARI`, `ENABLE_SURUGAYA` and `ENABLE_RAKUMA` (default `true`) turn a marketplace off for the whole bot.
 
 Slash commands register and remove channel-scoped queries, choose the marketplaces each query checks, manage title filters, list alerts, and clean up bot messages. Mutating commands require Manage Channels. Trash reactions blacklist a listing in that channel; bell reactions subscribe the user to listing changes, and removing the bell unsubscribes. Historical tracked messages remain valid reaction targets.
 

@@ -109,8 +109,6 @@ class Settings:
     request_timeout: int = 30
     request_retries: int = 2
     max_pages: int = 100
-    # Seconds between two requests to suruga-ya.jp, across all checks.
-    surugaya_request_interval: int = 3
     delivery_attempts: int = 8
     monitoring_enabled: bool = True
     monitoring_host: str = "127.0.0.1"
@@ -185,7 +183,6 @@ class Settings:
             check_timeout=timeout, request_timeout=positive("REQUEST_TIMEOUT", 30),
             request_retries=positive("REQUEST_RETRIES", 2, minimum=0, maximum=5),
             max_pages=positive("MAX_SEARCH_PAGES", 100),
-            surugaya_request_interval=positive("SURUGAYA_REQUEST_INTERVAL", 3, maximum=60),
             delivery_attempts=positive("DELIVERY_MAX_ATTEMPTS", 8),
             monitoring_enabled=boolean("MONITORING_ENABLED"),
             monitoring_host=os.getenv("MONITORING_HOST", "127.0.0.1"),

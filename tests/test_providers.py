@@ -1,7 +1,6 @@
 import asyncio
 from builtins import anext
 from dataclasses import replace
-import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock
@@ -12,39 +11,12 @@ from prometheus_client import generate_latest
 
 from config import Settings
 from observability import Metrics
-from providers import (HttpClient, MercariAdapter, ProviderError, RakumaAdapter, SurugayaAdapter,
-                       YahooAuctionsAdapter, parse_surugaya_search)
-
-
-def surugaya_card(link, title, price_html, image="https://www.suruga-ya.jp/database/photo.php?shinaban=1&size=m"):
-    """A product card as suruga-ya.jp's search page renders it (November 2026)."""
-    return f"""
-    <div class="item">
-      <p class="condition"><span class="new_arrival red">新入荷</span></p>
-      <div class="photo_box"><p class="thum"><a href="{link}"><img src="{image}" loading="lazy"></a></p></div>
-      <div class="item_detail">
-        <div class="title"><a href="{link}"><h3 class="product-name">{title}</h3></a></div>
-        <p class="brand">[アミューズ] </p>
-      </div>
-      <div class="item_price padT12">
-        {price_html}
-        <div class="panel_buy"><p>1,500円以上は送料無料</p></div>
-        <p>定価：￥9,900</p>
-      </div>
-    </div>"""
-
-
-def surugaya_page(total, *cards):
-    return f"""<html><body>
-    <div class="item"><p>関連キーワード</p></div>
-    <div class="hit">該当件数:{total}件中&nbsp;1-24件</div>
-    {"".join(cards)}
-    </body></html>"""
+from providers import HttpClient, MercariAdapter, ProviderError, RakumaAdapter, SurugayaAdapter, YahooAuctionsAdapter
 
 
 class HttpClientTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.calls, self.stamps = [], []
+        self.calls = []
         self.responses = []
         app = web.Application()
         app.router.add_get("/search", self.serve)
@@ -60,27 +32,10 @@ class HttpClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def serve(self, request):
         self.calls.append(dict(request.query))
-        self.stamps.append(time.monotonic())
         return self.responses.pop(0)
 
     async def fetch(self, query="test"):
         return await self.client.get_json("yahooauction", "search", self.server.make_url("/search"), {"keyword": query})
-
-    async def test_text_pages_accept_listed_error_statuses_and_keep_requests_apart(self):
-        # Surugaya's page for a search without results comes with a 404.
-        self.responses = [web.Response(status=404, text="該当件数：0件"),
-                          web.Response(status=503, headers={"Retry-After": "0"}), web.Response(text="ok")]
-        url = self.server.make_url("/search")
-        self.assertEqual(await self.client.get_text("surugaya", "search", url, accept={404}, interval=0.2),
-                         "該当件数：0件")
-        # The retry after the 503 waits its turn as well.
-        self.assertEqual(await self.client.get_text("surugaya", "search", url, interval=0.2), "ok")
-        self.assertEqual(len(self.stamps), 3)
-        gaps = [later - earlier for earlier, later in zip(self.stamps, self.stamps[1:])]
-        self.assertTrue(all(gap >= 0.19 for gap in gaps), gaps)
-        self.responses = [web.Response(status=404, text="gone")]
-        with self.assertRaisesRegex(ProviderError, "http_status"):
-            await self.client.get_text("surugaya", "search", url)
 
     def counter(self, outcome):
         return self.metrics.registry.get_sample_value("auction_bot_provider_requests_total", {
@@ -269,7 +224,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(adapter.normalize({"id": "a", "price": 1, "stock": 0}).stock, 0)
         self.assertEqual(self.adapter().normalize({"id": "a", "price": 1}).stock, 1)
 
-    def test_surugaya_keeps_canonical_product_url(self):
+    def test_surugaya_uses_fromjapan_title_and_canonical_product_url(self):
         adapter = self.adapter(SurugayaAdapter)
         listing = adapter.normalize({"id": "120165069", "price": 1760, "stock": 1, "title": "Japanese title",
                                      "url": "https://www.suruga-ya.jp/product/other/120165069"})
@@ -279,65 +234,6 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(url=url):
                 listing = adapter.normalize({"id": "a1", "price": 1, "stock": 0, "url": url})
                 self.assertEqual(listing.url, "https://www.suruga-ya.jp/product/detail/a1")
-
-    def test_surugaya_search_page_gives_the_ids_prices_and_links_fromjapan_gave(self):
-        # Expected values are what FromJapan returned for the same cards on 2026-11-12.
-        page = parse_surugaya_search(surugaya_page(
-            "1,234",
-            surugaya_card("/product/detail/220305177?branch_number=0003",
-                          "BABYMETAL / METAL FORTH &amp; more（箱不備）",
-                          '<p class="price_teika">中古：<span class="text-red"><strong>￥3,850 ～ ￥4,100 '
-                          '</strong></span>&nbsp;<span class="tax">税込</span></p>'
-                          '<a href="/product/other/220305177?tab=wakeari">(その他の状態)</a>'),
-            surugaya_card("/product/detail/438012276?tenpo_cd=201267", "LIVE AT INTUIT DOME",
-                          '<p class="price_teika"><span class="text-red">品切れ</span></p>'
-                          '<p>以下からもご購入頂けます</p><a href="/product/other/438012276">マケプレ ￥6,900</a>'
-                          '(1点の中古品)'),
-            surugaya_card("https://www.suruga-ya.jp/product/detail/BO5012961", "Book",
-                          '<p>新品：<strong>￥2,200</strong></p><p>中古：<strong>￥1,500</strong></p>'
-                          '<p>以下からもご購入頂けます</p><a>マケプレ ￥900</a>'),
-            surugaya_card("/product/other/120165069", "Sold out everywhere", "<p>品切れ</p>"),
-            surugaya_card("/cart", "No product link", "<p>中古：￥100</p>"),
-        ))
-        self.assertEqual(page["count"], 1234)
-        first, market, both, sold_out, broken = page["items"]
-        self.assertEqual(first, {
-            "id": "220305177?branch_number=0003", "title": "BABYMETAL / METAL FORTH & more（箱不備）",
-            "price": 3850, "stock": 1,
-            "url": "https://www.suruga-ya.jp/product/detail/220305177?branch_number=0003",
-            "imageUrl": "https://www.suruga-ya.jp/database/photo.php?shinaban=1&size=m"})
-        self.assertEqual((market["id"], market["price"], market["stock"], market["url"]),
-                         ("438012276?tenpo_cd=201267", 6900, 1,
-                          "https://www.suruga-ya.jp/product/other/438012276?tenpo_cd=201267"))
-        # The shop's lowest price wins over the marketplace, even when the marketplace is cheaper.
-        self.assertEqual((both["id"], both["price"]), ("BO5012961", 1500))
-        adapter = self.adapter(SurugayaAdapter)
-        self.assertEqual(adapter.normalize(first).image_url, "https://cdn.suruga-ya.jp/pics/boxart_m/1m.jpg")
-        # Without a price or a product link a card fails as an invalid listing instead of posting.
-        for item, reason in ((sold_out, "invalid_price"), (broken, "invalid_id")):
-            with self.subTest(item=item), self.assertRaisesRegex(ProviderError, reason):
-                adapter.normalize(item)
-
-    def test_surugaya_pages_without_a_result_total_fail(self):
-        self.assertEqual(parse_surugaya_search("<p>該当件数：0件中&nbsp;0-0件</p><p>検索結果は０件です。</p>"),
-                         {"items": [], "count": 0})
-        for html in ("", "<title>Just a moment...</title>", surugaya_page("x")):
-            with self.subTest(html=html), self.assertRaisesRegex(ProviderError, "unexpected_page"):
-                parse_surugaya_search(html)
-
-    async def test_surugaya_scan_reads_every_page_with_one_request_each(self):
-        adapter = self.adapter(SurugayaAdapter, surugaya_request_interval=7)
-        adapter.items_per_page = 2
-        adapter.http.get_text = AsyncMock(side_effect=[
-            surugaya_page(3, *(surugaya_card(f"/product/detail/{n}", n, "<p>中古：￥100</p>") for n in "ab")),
-            surugaya_page(3, surugaya_card("/product/detail/c", "c", "<p>中古：￥100</p>")),
-        ])
-        self.assertEqual([item["id"] async for item in adapter.iter_items("a b&c")], ["a", "b", "c"])
-        first, second = adapter.http.get_text.call_args_list
-        # page=1 and "+" for spaces both make the site answer with a redirect.
-        self.assertEqual(str(first.args[2]), "https://www.suruga-ya.jp/search?category=&search_word=a%20b%26c")
-        self.assertEqual(str(second.args[2]), "https://www.suruga-ya.jp/search?category=&search_word=a%20b%26c&page=2")
-        self.assertEqual((first.kwargs["accept"], first.kwargs["interval"]), ({404}, 7))
 
     def test_surugaya_images_link_the_cdn_instead_of_cloudflare_photo_page(self):
         adapter = self.adapter(SurugayaAdapter)
